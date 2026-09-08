@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.arcanebrigade</groupId>
+    <artifactId>arcane-brigade</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>core</artifactId>
+  <name>Arcane Brigade :: Core</name>
+  <description>纯 Java 模拟层，禁止引入任何 JavaFX / AWT 依赖，必须能在 headless 下运行</description>
+
+  <dependencies>
+    <!-- 有意为零依赖。core 层的唯一约束就是"无 UI 依赖"，将来主机端与回放测试都靠它。 -->
+  </dependencies>
+</project>

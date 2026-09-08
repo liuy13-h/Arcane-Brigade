@@ -1,0 +1,37 @@
+# ---- Maven 构建产物 ----
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# ---- 手动 javac 的临时输出 ----
+out/
+client-build/
+*.class
+
+# ---- IDE ----
+.idea/
+*.iws
+*.iml
+*.ipr
+.vscode/
+.settings/
+.project
+.classpath
+.factorypath
+
+# ---- 系统 ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- 日志 ----
+*.log
+hs_err_pid*
+replay_pid*
