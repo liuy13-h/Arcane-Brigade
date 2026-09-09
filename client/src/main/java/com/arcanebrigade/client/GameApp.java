@@ -80,6 +80,8 @@ public final class GameApp extends Application {
                     beginGame(HeroClass.WARRIOR);
                 } else if (e.getCode() == KeyCode.DIGIT3 || e.getCode() == KeyCode.NUMPAD3) {
                     beginGame(HeroClass.ARCHER);
+                } else if (e.getCode() == KeyCode.DIGIT4 || e.getCode() == KeyCode.NUMPAD4) {
+                    beginGame(HeroClass.SUMMONER);
                 }
                 return;
             }
@@ -143,7 +145,7 @@ public final class GameApp extends Application {
             }
             if (selecting) {
                 double[][] r = classCardRects(canvas.getWidth(), canvas.getHeight());
-                for (int i = 0; i < 3; i++) {
+                for (int i = 0; i < r.length; i++) {
                     if (e.getX() >= r[i][0] && e.getX() <= r[i][0] + r[i][2]
                             && e.getY() >= r[i][1] && e.getY() <= r[i][1] + r[i][3]) {
                         beginGame(cardClass(i));
@@ -162,9 +164,28 @@ public final class GameApp extends Application {
 
         renderer = new Renderer(canvas);
 
-        // 冒烟模式：自动选巫师，直接跑真实模拟+渲染路径做稳定性验证
+        // 冒烟模式：自动开局，直接跑真实模拟+渲染路径做稳定性验证。
+        // -Dab.class=N 可指定职业（默认巫师），用来覆盖各职业专属的渲染分支。
         if (smokeFrames > 0) {
-            beginGame(HeroClass.WIZARD);
+            int pick = HeroClass.WIZARD;
+            String cls = System.getProperty("ab.class");
+            if (cls != null && !cls.isBlank()) {
+                int v = Integer.parseInt(cls);
+                if (v > 0 && v < HeroClass.COUNT) {
+                    pick = v;
+                }
+            }
+            beginGame(pick);
+        }
+        // 冒烟模式：-Dab.boss=N 直接刷第 N 只 Boss，用来覆盖 Boss 立绘 / 阶段技能渲染路径
+        if (smokeFrames > 0) {
+            String bt = System.getProperty("ab.boss");
+            if (bt != null && !bt.isBlank()) {
+                int tier = Integer.parseInt(bt);
+                if (tier >= 0 && tier < 4) {
+                    world.spawnBoss(tier);
+                }
+            }
         }
 
         final long[] last = { System.nanoTime() };
@@ -286,6 +307,7 @@ public final class GameApp extends Application {
         return switch (i) {
             case 1 -> HeroClass.WARRIOR;
             case 2 -> HeroClass.ARCHER;
+            case 3 -> HeroClass.SUMMONER;
             default -> HeroClass.WIZARD;
         };
     }
@@ -309,16 +331,17 @@ public final class GameApp extends Application {
         manualPause = false;
     }
 
-    /** 三张职业卡片的矩形 [x, y, w, h]，命中判定与 Renderer 必须一致 */
+    /** 职业卡片的矩形 [x, y, w, h]，命中判定与 Renderer 必须一致 */
     private static double[][] classCardRects(double vw, double vh) {
-        double cardW = Math.min(300, (vw - 80) / 3);
+        int n = HeroClass.COUNT - 1;          // 4 个职业（索引 0 不用）
+        double cardW = Math.min(270, (vw - 80) / n);
         double cardH = 360;
-        double gap = 24;
-        double total = 3 * cardW + 2 * gap;
+        double gap = 20;
+        double total = n * cardW + (n - 1) * gap;
         double x0 = (vw - total) / 2;
         double y0 = vh * 0.28;
-        double[][] r = new double[3][4];
-        for (int i = 0; i < 3; i++) {
+        double[][] r = new double[n][4];
+        for (int i = 0; i < n; i++) {
             r[i][0] = x0 + i * (cardW + gap);
             r[i][1] = y0;
             r[i][2] = cardW;
@@ -348,6 +371,10 @@ public final class GameApp extends Application {
         input.buttons = 0;
         if (!world.isAutoFire() && mouseDown) {
             input.buttons |= InputCommand.BUTTON_FIRE;
+        }
+        // 指挥：按住鼠标左键就是给宠物下令（与开火模式无关，自动开火时也能指挥）
+        if (mouseDown) {
+            input.buttons |= InputCommand.BUTTON_ORDER;
         }
         double camX = renderer.getCamX();
         double camY = renderer.getCamY();

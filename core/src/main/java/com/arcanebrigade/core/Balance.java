@@ -19,11 +19,15 @@ public final class Balance {
     /** 战士无敌帧：明显削弱。战士有 15% 减伤 + 击杀回血，无需长时间无敌保护 */
     public static final float WARRIOR_IFRAME = 0.12f;
 
-    // ---- 战士 / 弓箭手（职业基础属性，设计文档第 2 节）----
+    // ---- 战士 / 弓箭手 / 召唤师（职业基础属性，设计文档第 2 节）----
     public static final float WARRIOR_HP    = 140f;
     public static final float WARRIOR_SPEED = 180f;
     public static final float ARCHER_HP     = 85f;
     public static final float ARCHER_SPEED  = 205f;
+    /** 召唤师：本体偏脆——他有 4 只宠物替他挨打，本体再厚就没弱点了 */
+    public static final float SUMMONER_HP    = 90f;
+    public static final float SUMMONER_SPEED = 185f;
+    public static final float SUMMONER_IFRAME = 0.32f;
 
     // ---- 职业特性（集中在这里，不在逻辑里散落）----
     /** 战士：受伤减免 15% */
@@ -34,6 +38,35 @@ public final class Balance {
     public static final float ARCHER_CRIT       = 0.10f;
     /** 巫师：法术伤害 +10% */
     public static final float WIZARD_SPELL_DMG  = 0.10f;
+
+    // ---- 召唤物（召唤师的宠物）----
+    /** 召唤间隔（秒）与每次召唤的数量。到点重新召唤一批，旧的被替换 */
+    public static final float SUMMON_INTERVAL = 10f;
+    public static final int   SUMMON_COUNT    = 4;
+    /** 宠物血 = 当前时间点的普通小怪血 × 该系数（用户要求 2 倍） */
+    public static final float MINION_HP_MUL       = 2f;
+    public static final float MINION_RADIUS       = 10f;
+    public static final float MINION_SPEED        = 215f;
+    public static final float MINION_DAMAGE       = 16f;
+    public static final float MINION_ATTACK_CD    = 0.6f;
+    /** 宠物受击无敌帧：比玩家短，但足以避免在怪堆里被同一帧打光 */
+    public static final float MINION_IFRAME       = 0.18f;
+    /** 活动范围：离召唤师超过这个距离就被强制拉回（用户要求"只能在身边一定范围活动"） */
+    public static final float MINION_LEASH        = 330f;
+    /** 护主：主人在这么近的范围内有敌人时，优先扑上去 */
+    public static final float MINION_GUARD_RANGE  = 260f;
+    /** 指挥：鼠标点击后，在点击点这么大范围内找敌人扑过去 */
+    public static final float MINION_ORDER_RANGE  = 460f;
+    /** 指挥有效期（秒）。按住鼠标会持续刷新，松手后还能生效这么久 */
+    public static final float MINION_ORDER_TIME   = 4f;
+    /** 无敌人时跟随主人保持的距离 */
+    public static final float MINION_FOLLOW_DIST  = 62f;
+    /**
+     * 敌人索敌时对宠物的距离偏置（>1）。
+     * 宠物要能"护主"拦住怪，但不能把仇恨全抢走——
+     * 否则玩家站在后面看戏，召唤师就变成挂机职业了。
+     */
+    public static final float MINION_THREAT_BIAS  = 1.35f;
 
     // ---- 元素状态 ----
     // 具体数值（DoT 强度、减速、时长）写在 Spells 表里的每个法术上，

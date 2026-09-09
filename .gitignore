@@ -39,3 +39,9 @@ replay_pid*
 # ---- 运行/预览产物 ----
 preview/
 build.log
+
+# ---- WorkBuddy 项目数据（勿删，勿提交） ----
+.workbuddy/
+
+# ---- 原始素材 dump（规范命名后的副本在 client/src/main/resources/sprites/） ----
+image1/

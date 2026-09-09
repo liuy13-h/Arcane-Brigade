@@ -14,6 +14,7 @@ import javafx.scene.paint.CycleMethod;
 import javafx.scene.paint.RadialGradient;
 import javafx.scene.paint.Stop;
 
+import java.io.InputStream;
 import java.util.function.Consumer;
 
 /**
@@ -23,11 +24,19 @@ import java.util.function.Consumer;
  */
 public final class Sprites {
 
-    /** 按职业索引的英雄形象（索引 1=巫师 / 2=战士 / 3=弓箭手，见 HeroClass） */
-    public static Image[] heroes = new Image[4];
+    /** 按职业索引的英雄静态形象（索引见 HeroClass：1 巫师 / 2 战士 / 3 弓箭手 / 4 召唤师） */
+    public static Image[] heroes = new Image[5];
+    /** 按职业索引的走动动画帧（GIF 解码结果）。null 表示没有动画，退化为静态形象 */
+    public static GifDecoder.Animation[] heroWalk = new GifDecoder.Animation[5];
+    /** 按 Boss 档位索引的 Boss 形象（BOSS_NAMES 的顺序） */
+    public static Image[] bosses = new Image[4];
+    /** 召唤师的宠物形象（程序化：没给美术素材，自己画一只秘能仆从） */
+    public static Image minion;
     public static Image[] enemies = new Image[3];
     /** 按元素索引的弹体颜色，见 Element。运行时只查表，不做任何变换 */
     public static Image[] bolts = new Image[Element.COUNT];
+    /** 敌方弹幕（统一的"敌意红"），与玩家元素弹做明显区分 */
+    public static Image enemyBolt;
     public static Image gem;
 
     /** 快照需要节点挂在 Scene 下才可靠，用一个离屏容器兜着 */
@@ -37,9 +46,17 @@ public final class Sprites {
     private Sprites() {}
 
     public static void load() {
-        heroes[HeroClass.WIZARD]  = bake(44, 44, Sprites::paintWizard);
-        heroes[HeroClass.WARRIOR] = bake(44, 44, Sprites::paintWarrior);
-        heroes[HeroClass.ARCHER]  = bake(44, 44, Sprites::paintArcher);
+        // 职业形象：优先读 resources/sprites 下的真实素材，读不到才回退到程序化绘制。
+        // 回退很关键——build.bat 的 javac 兜底路径不会复制 resources，
+        // 没有兜底就是一片空白。
+        loadHero(HeroClass.WIZARD, "wizard", Sprites::paintWizard);
+        loadHero(HeroClass.WARRIOR, "warrior", Sprites::paintWarrior);
+        loadHero(HeroClass.ARCHER, "archer", Sprites::paintArcher);
+        loadHero(HeroClass.SUMMONER, "summoner", Sprites::paintSummoner);
+        for (int t = 0; t < bosses.length; t++) {
+            bosses[t] = loadBoss(t);
+        }
+        minion = bake(28, 28, Sprites::paintMinion);
         enemies[0] = bake(32, 32, g -> paintSlime(g, Color.rgb(96, 200, 120), Color.rgb(40, 120, 70)));
         enemies[1] = bake(32, 32, g -> paintBat(g, Color.rgb(178, 130, 235), Color.rgb(96, 62, 150)));
         enemies[2] = bake(32, 32, g -> paintBrute(g, Color.rgb(240, 150, 80), Color.rgb(150, 74, 30)));
@@ -53,6 +70,9 @@ public final class Sprites {
                 Color.rgb(255, 255, 215), Color.rgb(195, 235, 120), Color.rgb(125, 90, 240)));
         bolts[Element.ARCANE] = bake(22, 22, g -> paintBolt(g,
                 Color.rgb(250, 235, 255), Color.rgb(205, 145, 255), Color.rgb(120, 60, 220)));
+        // 敌方弹幕统一用"敌意红"：亮心 + 血红中圈 + 近黑外圈，一眼就能和玩家元素弹区分。
+        enemyBolt = bake(22, 22, g -> paintBolt(g,
+                Color.rgb(255, 225, 225), Color.rgb(255, 80, 70), Color.rgb(140, 8, 18)));
         gem = bake(14, 14, Sprites::paintGem);
     }
 
@@ -67,6 +87,53 @@ public final class Sprites {
         } finally {
             OFFSCREEN.getChildren().remove(c);
         }
+    }
+
+    /** 职业形象 + 走动动画。任一缺失都用程序化绘制兜底 */
+    private static void loadHero(int classKind, String base, Consumer<GraphicsContext> fallback) {
+        Image idle = loadImage(base + ".png");
+        heroes[classKind] = (idle != null) ? idle : bake(44, 44, fallback);
+        try (InputStream in = res(base + "_walk.gif")) {
+            heroWalk[classKind] = GifDecoder.decode(in);
+        } catch (Exception e) {
+            heroWalk[classKind] = null;
+        }
+    }
+
+    /**
+     * Boss 形象。原图是上千像素的 jpg，直接按原尺寸加载既占内存又慢，
+     * 这里请求 192×192 的缩略图——显示尺寸只有 ~110px，缩放后看不出差别。
+     */
+    private static Image loadBoss(int tier) {
+        String url = Sprites.class.getResource("/sprites/boss_" + tier + ".jpg") != null
+                ? Sprites.class.getResource("/sprites/boss_" + tier + ".jpg").toExternalForm()
+                : null;
+        if (url == null) {
+            return null;
+        }
+        try {
+            return new Image(url, 192, 192, true, true);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static Image loadImage(String name) {
+        String url = Sprites.class.getResource("/sprites/" + name) != null
+                ? Sprites.class.getResource("/sprites/" + name).toExternalForm()
+                : null;
+        if (url == null) {
+            return null;
+        }
+        try {
+            return new Image(url);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static InputStream res(String name) {
+        return Sprites.class.getResourceAsStream("/sprites/" + name);
     }
 
     /**
@@ -220,6 +287,83 @@ public final class Sprites {
         g.setFill(Color.rgb(30, 32, 48));
         g.fillOval(cx - 3.5, cy + 0.5, 2.4, 2.4);
         g.fillOval(cx + 1.1, cy + 0.5, 2.4, 2.4);
+    }
+
+    /** 召唤师兜底形象：紫金法袍 + 悬浮的召唤法阵 */
+    private static void paintSummoner(GraphicsContext g) {
+        double cx = 22, cy = 24;
+        // 脚下召唤法阵（紫色）
+        g.setFill(new RadialGradient(0, 0, cx, cy, 20, false, CycleMethod.NO_CYCLE,
+                new Stop(0, Color.rgb(200, 140, 255, 0.55)),
+                new Stop(1, Color.rgb(120, 60, 200, 0))));
+        g.fillOval(2, 4, 40, 40);
+        g.setStroke(Color.rgb(215, 170, 255, 0.8));
+        g.setLineWidth(1.2);
+        g.strokeOval(cx - 14, cy + 12, 28, 9);
+
+        // 身体（紫袍 + 金边）
+        g.setFill(Color.rgb(112, 74, 168));
+        g.fillOval(cx - 10, cy - 6, 20, 22);
+        g.setFill(Color.rgb(86, 54, 136));
+        g.fillOval(cx - 10, cy + 8, 20, 10);
+        g.setFill(Color.rgb(240, 210, 120));
+        g.fillRect(cx - 10, cy - 1, 20, 3);
+
+        // 兜帽
+        g.setFill(Color.rgb(96, 62, 150));
+        g.fillArc(cx - 10, cy - 14, 20, 18, 0, 180, ArcType.ROUND);
+
+        // 脸与眼睛（秘能色）
+        g.setFill(Color.rgb(238, 220, 190));
+        g.fillOval(cx - 6, cy - 4, 12, 11);
+        g.setFill(Color.rgb(180, 120, 240));
+        g.fillOval(cx - 3.5, cy + 0.5, 2.6, 2.6);
+        g.fillOval(cx + 0.9, cy + 0.5, 2.6, 2.6);
+
+        // 悬浮的召唤宝珠
+        g.setFill(new RadialGradient(0, 0, cx - 14, cy - 12, 6, false, CycleMethod.NO_CYCLE,
+                new Stop(0, Color.rgb(235, 210, 255)),
+                new Stop(1, Color.rgb(150, 90, 240, 0))));
+        g.fillOval(cx - 19, cy - 17, 10, 10);
+    }
+
+    /** 召唤物（宠物）：一只小型秘能仆从。没给美术素材，程序化画一个 */
+    private static void paintMinion(GraphicsContext g) {
+        double cx = 14, cy = 15;
+        // 光晕
+        g.setFill(new RadialGradient(0, 0, cx, cy, 13, false, CycleMethod.NO_CYCLE,
+                new Stop(0, Color.rgb(190, 140, 255, 0.5)),
+                new Stop(1, Color.rgb(120, 70, 210, 0))));
+        g.fillOval(1, 2, 26, 26);
+
+        // 身体（水滴形）
+        g.setFill(Color.rgb(138, 92, 208));
+        g.fillOval(cx - 8, cy - 7, 16, 17);
+        g.setFill(Color.rgb(108, 68, 176));
+        g.fillOval(cx - 8, cy + 4, 16, 8);
+
+        // 尖耳（左右各一只）
+        g.setFill(Color.rgb(112, 72, 182));
+        g.beginPath();
+        g.moveTo(cx - 7, cy - 5);
+        g.lineTo(cx - 12, cy - 12);
+        g.lineTo(cx - 3, cy - 8);
+        g.closePath();
+        g.fill();
+        g.beginPath();
+        g.moveTo(cx + 7, cy - 5);
+        g.lineTo(cx + 12, cy - 12);
+        g.lineTo(cx + 3, cy - 8);
+        g.closePath();
+        g.fill();
+
+        // 眼睛（发光）
+        g.setFill(Color.rgb(245, 235, 255));
+        g.fillOval(cx - 4.5, cy - 2, 3.4, 3.4);
+        g.fillOval(cx + 1.1, cy - 2, 3.4, 3.4);
+        g.setFill(Color.rgb(60, 40, 90));
+        g.fillOval(cx - 3.6, cy - 1.4, 1.8, 1.8);
+        g.fillOval(cx + 2.0, cy - 1.4, 1.8, 1.8);
     }
 
     private static void paintSlime(GraphicsContext g, Color body, Color dark) {

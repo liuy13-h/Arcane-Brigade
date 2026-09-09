@@ -23,6 +23,8 @@ public final class InputCommand {
 
     /** 手动开火按钮位 */
     public static final int BUTTON_FIRE = 1;
+    /** 指挥按钮位：鼠标点击/按住，给召唤师的宠物下令"朝这里进攻" */
+    public static final int BUTTON_ORDER = 2;
 
     public void reset() {
         dx = 0f;

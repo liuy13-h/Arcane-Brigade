@@ -415,13 +415,31 @@ public final class Renderer {
                 case World.KIND_WIZARD -> {
                     Loadout wlo = w.loadout(i);
                     int ck = (wlo != null) ? wlo.classKind : HeroClass.WIZARD;
-                    Image hero = Sprites.heroes[ck];
-                    if (hero != null) {
-                        gc.drawImage(hero, sx - 22, sy - 30);
+                    // 走动时用 GIF 动画帧，站住时切回静态形象。
+                    // 动画相位用世界时间驱动——同一个时间所有单位看到的是同一帧，不各播各的。
+                    double mvx = w.x[i] - w.px[i];
+                    double mvy = w.y[i] - w.py[i];
+                    boolean moving = mvx * mvx + mvy * mvy > 1e-3;
+                    Image img = null;
+                    if (moving && ck < Sprites.heroWalk.length) {
+                        GifDecoder.Animation anim = Sprites.heroWalk[ck];
+                        if (anim != null) {
+                            img = anim.frameAt(w.time());
+                        }
+                    }
+                    if (img == null && ck < Sprites.heroes.length) {
+                        img = Sprites.heroes[ck];
+                    }
+                    if (img != null) {
+                        gc.drawImage(img, sx - 22, sy - 30, 44, 44);
                     }
                 }
                 case World.KIND_ENEMY -> {
-                    gc.drawImage(Sprites.enemies[w.meta[i] % Sprites.enemies.length], sx - 16, sy - 16);
+                    if (w.variant[i] == World.V_BOSS) {
+                        drawBossSprite(w, i, sx, sy);
+                    } else {
+                        gc.drawImage(Sprites.enemies[w.meta[i] % Sprites.enemies.length], sx - 16, sy - 16);
+                    }
                     drawEnemyStatus(w, i, sx, sy);
                     if (w.hp[i] < w.maxHp[i]) {
                         float f = Math.max(0f, w.hp[i] / w.maxHp[i]);
@@ -431,9 +449,23 @@ public final class Renderer {
                         gc.fillRect(sx - 12, sy - rr - 9, 24 * f, 2);
                     }
                 }
+                case World.KIND_MINION -> {
+                    // 宠物：秘能仆从，带一条细血条（血是普通小怪的 2 倍，值得看）
+                    if (Sprites.minion != null) {
+                        gc.drawImage(Sprites.minion, sx - 14, sy - 18, 28, 28);
+                    }
+                    float mf = Math.max(0f, w.hp[i] / Math.max(1f, w.maxHp[i]));
+                    gc.setFill(Color.rgb(30, 12, 16, 0.85));
+                    gc.fillRect(sx - 12, sy - rr - 9, 24, 4);
+                    gc.setFill(Color.rgb(150, 215, 255));
+                    gc.fillRect(sx - 11, sy - rr - 8, 22 * mf, 2);
+                }
                 case World.KIND_PROJECTILE -> {
-                    SpellDef def = Spells.get(w.meta[i]);
-                    Image img = Sprites.bolts[def != null ? def.element : Element.NONE];
+                    // 敌人弹幕用统一的"敌意红"，玩家弹幕按元素上色——两者不能混成一种颜色，
+                    // 否则弹幕海里根本分不清哪颗是要躲的、哪颗是自己打的。
+                    Image img = (w.team[i] == World.TEAM_ENEMY)
+                            ? Sprites.enemyBolt
+                            : Sprites.bolts[defElem(w, i)];
                     gc.drawImage(img, sx - img.getWidth() / 2, sy - img.getHeight() / 2);
                 }
                 case World.KIND_PICKUP -> {
@@ -452,6 +484,34 @@ public final class Renderer {
                 case World.KIND_ZONE -> drawZone(w, i, sx, sy);
                 default -> { }
             }
+        }
+    }
+
+    /**
+     * Boss 形象：用 resources 里的立绘（jpg），圆形裁剪后画出来。
+     * 立绘是方形照片素材，不裁圆就会在沙漠地图上贴一个突兀的方块；
+     * 找不到素材时退回程序化画法（史莱姆放大版），保证不会白屏。
+     */
+    private void drawBossSprite(World w, int i, double sx, double sy) {
+        int tier = w.bossTier();
+        Image img = (tier >= 0 && tier < Sprites.bosses.length) ? Sprites.bosses[tier] : null;
+        double size = w.r[i] * 2.7;
+        if (img != null) {
+            double cy = sy - size * 0.06;
+            gc.save();
+            gc.beginPath();
+            gc.arc(sx, cy, size * 0.5, size * 0.5, 0, 360);
+            gc.closePath();
+            gc.clip();
+            gc.drawImage(img, sx - size * 0.5, cy - size * 0.5, size, size);
+            gc.restore();
+            // 裁剪边缘描一圈，把方图切圆的接缝藏起来
+            gc.setStroke(Color.rgb(20, 14, 22, 0.85));
+            gc.setLineWidth(2);
+            gc.strokeOval(sx - size * 0.5, cy - size * 0.5, size, size);
+        } else {
+            gc.setFill(Color.rgb(150, 60, 70));
+            gc.fillOval(sx - w.r[i], sy - w.r[i], w.r[i] * 2, w.r[i] * 2);
         }
     }
 
@@ -577,6 +637,15 @@ public final class Renderer {
         gc.setFont(hudFont);
         gc.setFill(paused ? Color.rgb(255, 210, 140) : Color.rgb(210, 210, 225));
         gc.fillText(paused ? "继续" : "暂停", pb[0] + 10, pb[1] + 21);
+
+        // 召唤师 HUD：宠物数量 + 下次召唤倒计时（放在两个按钮下方）
+        if (lo.classKind == HeroClass.SUMMONER) {
+            gc.setFont(hudFont);
+            gc.setFill(Color.rgb(215, 185, 255));
+            gc.fillText(String.format("宠物 %d/%d   下次召唤 %.1fs",
+                    w.minionCount(w.wizard(0)), Balance.SUMMON_COUNT,
+                    Math.max(0f, w.summonTimer(w.wizard(0)))), 16, 152);
+        }
 
         // 血条 + 护盾
         int id = w.wizard(0);
@@ -773,6 +842,12 @@ public final class Renderer {
         };
     }
 
+    /** 弹体的元素（玩家弹按技能定义查，敌人弹恒为 NONE——反正会走敌意红分支） */
+    private static int defElem(World w, int i) {
+        SpellDef def = Spells.get(w.meta[i]);
+        return def != null ? def.element : Element.NONE;
+    }
+
     private void drawZone(World w, int i, double sx, double sy) {
         // t 从 1 淡到 0
         float t = w.speed[i] > 0f ? Math.max(0f, Math.min(1f, w.life[i] / w.speed[i])) : 0f;
@@ -872,17 +947,18 @@ public final class Renderer {
 
         gc.setFont(Font.font("Consolas", 13));
         gc.setFill(Color.rgb(180, 180, 200));
-        gc.fillText("点击卡片或按 1 / 2 / 3 选择", vw / 2 - 95, vh * 0.16 + 26);
+        gc.fillText("点击卡片或按 1 / 2 / 3 / 4 选择", vw / 2 - 105, vh * 0.16 + 26);
 
         Color[] accent = {
                 Color.rgb(200, 140, 255),  // 巫师 紫
                 Color.rgb(255, 140, 90),   // 战士 橙红
-                Color.rgb(140, 230, 150)   // 弓箭手 绿
+                Color.rgb(140, 230, 150),  // 弓箭手 绿
+                Color.rgb(240, 205, 130)   // 召唤师 秘金
         };
-        int[] classes = { HeroClass.WIZARD, HeroClass.WARRIOR, HeroClass.ARCHER };
+        int[] classes = { HeroClass.WIZARD, HeroClass.WARRIOR, HeroClass.ARCHER, HeroClass.SUMMONER };
 
         gc.setFont(Font.font("Microsoft YaHei", 14));
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < classes.length && i < rects.length; i++) {
             double bx = rects[i][0], by = rects[i][1], bw = rects[i][2], bh = rects[i][3];
             int ck = classes[i];
             boolean hover = mx >= bx && mx <= bx + bw && my >= by && my <= by + bh;
@@ -916,15 +992,22 @@ public final class Renderer {
                     HeroClass.baseHp(ck), HeroClass.baseSpeed(ck)), x, y);
             y += 26;
 
-            // 特性
-            gc.setFont(Font.font("Microsoft YaHei", 12.5));
+            // 特性。四张卡比三张窄，文字放不下就自动缩字号，别让字飞出卡片
+            String traitText = "特性：" + HeroClass.trait(ck);
+            double maxW = bw - 34;
+            double tsize = 12.5;
+            while (tsize > 9.5 && measureWidth(Font.font("Microsoft YaHei", tsize), traitText) > maxW) {
+                tsize -= 0.5;
+            }
+            gc.setFont(Font.font("Microsoft YaHei", tsize));
             gc.setFill(Color.rgb(255, 220, 150));
-            gc.fillText("特性：" + HeroClass.trait(ck), x, y);
+            gc.fillText(traitText, x, y);
             y += 24;
 
             // 起手武器
             int sid = HeroClass.startSpell(ck);
             SpellDef sd = Spells.get(sid);
+            gc.setFont(Font.font("Microsoft YaHei", 12.5));
             gc.setFill(Color.rgb(200, 200, 220));
             gc.fillText("起手：" + (sd != null ? sd.name : "?"), x, y);
             y += 26;
@@ -941,6 +1024,12 @@ public final class Renderer {
                     gc.fillText("· " + psd.name, x, y);
                     y += 18;
                 }
+            }
+            if (ck == HeroClass.SUMMONER) {
+                y += 8;
+                gc.setFont(Font.font("Microsoft YaHei", 11.5));
+                gc.setFill(Color.rgb(200, 170, 255));
+                gc.fillText("宠物：血=小怪×2 · 点击鼠标指挥", x, y);
             }
         }
     }

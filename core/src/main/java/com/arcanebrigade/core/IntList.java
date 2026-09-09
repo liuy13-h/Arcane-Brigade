@@ -39,6 +39,11 @@ public final class IntList {
         data[i] = v;
     }
 
+    /** 删除指定下标，用末尾元素补位。调用方保证 i 在 [0, size) 内 */
+    public void removeAt(int i) {
+        data[i] = data[--size];
+    }
+
     public void clear() {
         size = 0;
     }
