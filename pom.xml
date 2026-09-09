@@ -17,22 +17,45 @@
   </modules>
 
   <properties>
-    <maven.compiler.release>21</maven.compiler.release>
+    <!-- 编译基线定为 17：生成的 class 版本是 61，与 JavaFX 21.0.12 的 -win 平台 jar
+         (class 61) 一致，凡是装有 JDK 17 及以上(含 21/26)的机器都能直接跑。 -->
+    <maven.compiler.release>17</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <javafx.version>21.0.12</javafx.version>
+    <!--
+      平台分类器：javafx 的无后缀主 jar 在中央仓库里是空壳，
+      真正的类在 -win / -mac / -linux 分类器 jar 里。
+      默认 win；下方 profiles 会根据构建所在系统覆盖成 mac / linux，
+      保证同一份工程在任何电脑上都能编译、运行。
+    -->
+    <javafx.platform>win</javafx.platform>
   </properties>
 
   <dependencyManagement>
     <dependencies>
       <dependency>
         <groupId>org.openjfx</groupId>
+        <artifactId>javafx-base</artifactId>
+        <version>${javafx.version}</version>
+        <classifier>${javafx.platform}</classifier>
+      </dependency>
+      <dependency>
+        <groupId>org.openjfx</groupId>
         <artifactId>javafx-controls</artifactId>
         <version>${javafx.version}</version>
+        <classifier>${javafx.platform}</classifier>
       </dependency>
       <dependency>
         <groupId>org.openjfx</groupId>
         <artifactId>javafx-graphics</artifactId>
         <version>${javafx.version}</version>
+        <classifier>${javafx.platform}</classifier>
+      </dependency>
+      <dependency>
+        <groupId>org.openjfx</groupId>
+        <artifactId>javafx-media</artifactId>
+        <version>${javafx.version}</version>
+        <classifier>${javafx.platform}</classifier>
       </dependency>
     </dependencies>
   </dependencyManagement>
@@ -48,4 +71,42 @@
       </plugins>
     </pluginManagement>
   </build>
+
+  <!-- 按运行所在系统自动选择 javafx 平台分类器（win / mac / linux） -->
+  <profiles>
+    <profile>
+      <id>javafx-platform-win</id>
+      <activation>
+        <os>
+          <family>windows</family>
+        </os>
+      </activation>
+      <properties>
+        <javafx.platform>win</javafx.platform>
+      </properties>
+    </profile>
+    <profile>
+      <id>javafx-platform-mac</id>
+      <activation>
+        <os>
+          <family>mac</family>
+        </os>
+      </activation>
+      <properties>
+        <javafx.platform>mac</javafx.platform>
+      </properties>
+    </profile>
+    <profile>
+      <id>javafx-platform-linux</id>
+      <!-- 用系统名精确匹配 Linux，避免 macOS 同时命中 family=unix -->
+      <activation>
+        <os>
+          <name>Linux</name>
+        </os>
+      </activation>
+      <properties>
+        <javafx.platform>linux</javafx.platform>
+      </properties>
+    </profile>
+  </profiles>
 </project>
