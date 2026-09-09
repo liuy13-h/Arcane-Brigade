@@ -623,7 +623,7 @@ public final class World {
         float cx = (w >= 0) ? x[w] : 0f;
         float cy = (w >= 0) ? y[w] : 0f;
         obstacleHash.beginFrame();
-        float lim = Balance.WORLD_HALF - 90f;   // 城墙内侧留出走位空间
+        float lim = Balance.PLAY_HALF - 34f;   // 城墙内侧再留出走位空间，岩石不贴墙
         int n = Balance.OBSTACLE_COUNT_MIN
                 + rng.nextInt(Balance.OBSTACLE_COUNT_MAX - Balance.OBSTACLE_COUNT_MIN + 1);
         for (int k = 0; k < n; k++) {
@@ -737,6 +737,7 @@ public final class World {
             x[id] += in.dx * baseSpeed * moveMul * dt;
             y[id] += in.dy * baseSpeed * moveMul * dt;
             resolveObstacles(id);
+            clampToWorld(id);   // 玩家也被棕色城墙（边界）挡在内侧
             if (iframe[id] > 0f) {
                 iframe[id] -= dt;
             }
@@ -820,6 +821,7 @@ public final class World {
             x[i] += (vx[i] + sepX * moveSpeed * Balance.ENEMY_SEPARATION + kx[i]) * dt;
             y[i] += (vy[i] + sepY * moveSpeed * Balance.ENEMY_SEPARATION + ky[i]) * dt;
             resolveObstacles(i);   // 障碍碰撞推出（敌人也绕不过去）
+            clampToWorld(i);       // 敌人同样被棕色城墙挡在内侧，不会被挤飞出去
 
             // 接触伤害
             float ndx = x[target] - x[i];
@@ -916,6 +918,7 @@ public final class World {
             x[id] += vx[id] * dt;
             y[id] += vy[id] * dt;
             resolveObstacles(id);
+            clampToWorld(id);   // 远程怪同样被边界挡住
             cd[id] -= dt;
             if (cd[id] <= 0f && len <= Balance.RANGED_RANGE) {
                 spawnProjectileEnemy(id, x[target], y[target]);
@@ -1013,9 +1016,9 @@ public final class World {
         }
     }
 
-    /** 把实体钳制在世界边界内（玩家 / 敌人共用） */
+    /** 把实体钳制在可玩区内（城墙内侧边缘，玩家 / 敌人共用） */
     private void clampToWorld(int id) {
-        float h = Balance.WORLD_HALF;
+        float h = Balance.PLAY_HALF;
         if (x[id] < -h) {
             x[id] = -h;
         } else if (x[id] > h) {
@@ -1036,9 +1039,9 @@ public final class World {
         return HeroClass.baseIframe(ck) + add;
     }
 
-    /** 把单个坐标钳制到世界边界内（生成点用，避免怪刷在边界外再被 clamp 瞬移） */
+    /** 把单个坐标钳制到可玩区内（生成点用，避免怪刷进棕色城墙再被 clamp 瞬移） */
     private static float clampCoord(float v) {
-        return Math.max(-Balance.WORLD_HALF, Math.min(Balance.WORLD_HALF, v));
+        return Math.max(-Balance.PLAY_HALF, Math.min(Balance.PLAY_HALF, v));
     }
 
     /** 最近的经验宝石（小偷用） */

@@ -50,6 +50,8 @@ public final class GameApp extends Application {
     private double mouseX, mouseY;
     /** 鼠标左键是否按下（手动开火模式用） */
     private boolean mouseDown;
+    /** 手动暂停（ESC 或暂停按钮切换），暂停时冻结模拟但仍渲染 */
+    private boolean manualPause;
 
     @Override
     public void start(Stage stage) {
@@ -78,6 +80,13 @@ public final class GameApp extends Application {
                     beginGame(HeroClass.WARRIOR);
                 } else if (e.getCode() == KeyCode.DIGIT3 || e.getCode() == KeyCode.NUMPAD3) {
                     beginGame(HeroClass.ARCHER);
+                }
+                return;
+            }
+            // ESC 键：切换手动暂停（对局中有效，胜利画面不响应）
+            if (e.getCode() == KeyCode.ESCAPE) {
+                if (!world.victory()) {
+                    manualPause = !manualPause;
                 }
                 return;
             }
@@ -112,6 +121,13 @@ public final class GameApp extends Application {
             if (e.getX() >= fb[0] && e.getX() <= fb[0] + fb[2]
                     && e.getY() >= fb[1] && e.getY() <= fb[1] + fb[3]) {
                 world.setAutoFire(!world.isAutoFire());
+                return;
+            }
+            // 点暂停按钮：切换手动暂停
+            double[] pb = Renderer.pauseButtonRect(canvas.getWidth(), canvas.getHeight());
+            if (e.getX() >= pb[0] && e.getX() <= pb[0] + pb[2]
+                    && e.getY() >= pb[1] && e.getY() <= pb[1] + pb[3]) {
+                manualPause = !manualPause;
             }
         });
 
@@ -187,8 +203,9 @@ public final class GameApp extends Application {
                     return;
                 }
 
-                boolean paused = world.wizardCount() > 0
+                boolean upgradePaused = world.wizardCount() > 0
                         && world.pendingChoices(world.wizard(0)) > 0;
+                boolean paused = manualPause || upgradePaused;
                 if (!paused) {
                     acc[0] += dt;
                     int steps = 0;
@@ -205,11 +222,12 @@ public final class GameApp extends Application {
                     acc[0] = 0.0;   // 暂停时不累积
                 }
 
+                renderer.setPaused(manualPause);
                 renderer.setFps(fps[0]);
                 renderer.draw(world, (float) (acc[0] / STEP));
 
                 // 升级面板始终叠加在画面最上层
-                if (paused) {
+                if (upgradePaused) {
                     int wid = world.wizard(0);
                     Loadout lo = world.loadout(wid);
                     if (lo != null) {
@@ -217,6 +235,8 @@ public final class GameApp extends Application {
                         renderer.drawUpgradePanel(cs, lo.rerolls,
                                 canvas.getWidth(), canvas.getHeight());
                     }
+                } else if (manualPause) {
+                    renderer.drawPauseOverlay(canvas.getWidth(), canvas.getHeight());
                 }
 
                 if (smokeFrames > 0 && ++renderedFrames >= smokeFrames) {
@@ -286,6 +306,7 @@ public final class GameApp extends Application {
         selecting = true;
         pressed.clear();
         renderedFrames = 0;
+        manualPause = false;
     }
 
     /** 三张职业卡片的矩形 [x, y, w, h]，命中判定与 Renderer 必须一致 */

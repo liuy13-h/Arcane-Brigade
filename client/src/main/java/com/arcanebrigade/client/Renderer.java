@@ -46,9 +46,16 @@ public final class Renderer {
     /** 当前鼠标屏幕坐标，手动开火模式的准星用 */
     private double mouseX, mouseY;
 
+    /** 手动暂停状态，暂停按钮文字 + 暂停罩层用 */
+    private boolean paused;
+
     public Renderer(Canvas canvas) {
         this.canvas = canvas;
         this.gc = canvas.getGraphicsContext2D();
+    }
+
+    public void setPaused(boolean p) {
+        this.paused = p;
     }
 
     public void setFps(double v) {
@@ -79,6 +86,11 @@ public final class Renderer {
     /** 开火切换按钮矩形 [x, y, w, h]。GameApp 命中判定与 drawHud 严格共用同一位置 */
     public static double[] fireButtonRect(double vw, double vh) {
         return new double[] { 16, 64, 150, 30 };
+    }
+
+    /** 暂停按钮矩形 [x, y, w, h]。GameApp 命中判定与 drawHud 严格共用同一位置 */
+    public static double[] pauseButtonRect(double vw, double vh) {
+        return new double[] { 16, 104, 110, 30 };
     }
 
     public void draw(World w, float alpha) {
@@ -239,8 +251,9 @@ public final class Renderer {
     }
 
     /**
-     * 环形城墙：沿世界边界 ±24px 铺石块，块长 / 厚度 / 色调由哈希抖动，
-     * 复现模板图那种"残破但连续"的遗迹围墙。只画视口内的部分。
+     * 环形城墙（棕色部分 = 地图边界）：铺在可玩区最外缘，从城墙内侧边缘（PLAY_HALF）
+     * 一直延伸到世界外缘（WORLD_HALF）。玩家/敌人被钳制在城墙内侧，碰不到棕色墙体。
+     * 块长 / 色调由哈希抖动，复现模板图那种"残破但连续"的遗迹围墙，只画视口内的部分。
      */
     private void drawBoundary(double vw, double vh, Color[] pal) {
         double left = camX - vw / 2;
@@ -248,10 +261,11 @@ public final class Renderer {
         double right = left + vw;
         double bottom = top + vh;
         float H = Balance.WORLD_HALF;
+        float T = Balance.WALL_THICKNESS;
+        float inner = Balance.PLAY_HALF;    // 城墙内侧边缘 = 可玩区边界
         final double BLOCK = 46.0;
         for (int side = 0; side < 4; side++) {
             boolean horiz = side < 2;
-            double fixed = (side == 0 || side == 2) ? -H : H;
             double a0 = horiz ? left : top;
             double a1 = horiz ? right : bottom;
             int i0 = (int) Math.floor(a0 / BLOCK) - 1;
@@ -261,20 +275,19 @@ public final class Renderer {
                 double jitter = ((h >>> 8) % 7) - 3;
                 double blockLen = BLOCK - 5 + jitter * 1.6;
                 double pa = i * BLOCK + jitter * 1.8;
-                double thick = 46.0;
                 double x;
                 double y;
                 double w;
                 double hgt;
                 if (horiz) {
                     x = pa;
-                    y = fixed - thick / 2;
+                    y = (side == 0) ? -H : inner;   // 顶墙 -H..-inner，底墙 inner..H
                     w = blockLen;
-                    hgt = thick;
+                    hgt = T;
                 } else {
-                    x = fixed - thick / 2;
+                    x = (side == 2) ? -H : inner;   // 左墙 -H..-inner，右墙 inner..H
                     y = pa;
-                    w = thick;
+                    w = T;
                     hgt = blockLen;
                 }
                 if (x + w < left || x > right || y + hgt < top || y > bottom) {
@@ -285,17 +298,17 @@ public final class Renderer {
                 int tone = (int) ((h >>> 20) % 5);
                 gc.setFill(tone < 2 ? pal[4] : (tone < 4 ? pal[5] : pal[6]));
                 gc.fillRect(sx, sy, w, hgt);
-                gc.setFill(pal[5]);   // 内侧受光边
+                gc.setFill(pal[5]);   // 内侧受光边（面向可玩区）
                 if (horiz) {
                     gc.fillRect(sx, side == 0 ? sy + hgt - 5 : sy, w, 5);
                 } else {
                     gc.fillRect(side == 2 ? sx + w - 5 : sx, sy, 5, hgt);
                 }
-                gc.setFill(pal[6]);   // 外侧落影
+                gc.setFill(pal[6]);   // 外侧落影（面向世界边缘）
                 if (horiz) {
                     gc.fillRect(sx, side == 0 ? sy : sy + hgt - 4, w, 4);
                 } else {
-                    gc.fillRect(sx, side == 2 ? sy : sy + hgt - 4, w, 4);
+                    gc.fillRect(side == 2 ? sx : sx + w - 4, sy, 4, hgt);
                 }
             }
         }
@@ -554,6 +567,17 @@ public final class Renderer {
         gc.setFill(auto ? Color.rgb(160, 220, 255) : Color.rgb(255, 200, 120));
         gc.fillText(auto ? "自动开火：开" : "自动开火：关", fb[0] + 10, fb[1] + 21);
 
+        // 暂停按钮（点击或按 ESC 切换）
+        double[] pb = pauseButtonRect(vw, vh);
+        gc.setFill(Color.rgb(18, 16, 30, 0.85));
+        gc.fillRect(pb[0], pb[1], pb[2], pb[3]);
+        gc.setStroke(paused ? Color.rgb(255, 200, 120) : Color.rgb(150, 150, 170));
+        gc.setLineWidth(1.5);
+        gc.strokeRect(pb[0], pb[1], pb[2], pb[3]);
+        gc.setFont(hudFont);
+        gc.setFill(paused ? Color.rgb(255, 210, 140) : Color.rgb(210, 210, 225));
+        gc.fillText(paused ? "继续" : "暂停", pb[0] + 10, pb[1] + 21);
+
         // 血条 + 护盾
         int id = w.wizard(0);
         double bw = 340;
@@ -786,6 +810,22 @@ public final class Renderer {
      * 三张卡片展示各职业的基础属性、特性、起手武器与技能池预览。
      * 卡片矩形必须与 GameApp.classCardRects 完全一致，否则点不到。
      */
+    /** 手动暂停罩层：半透明蒙版 + "已暂停"提示。由 GameApp 在手动暂停时调用 */
+    public void drawPauseOverlay(double vw, double vh) {
+        gc.setFill(Color.rgb(10, 8, 18, 0.55));
+        gc.fillRect(0, 0, vw, vh);
+
+        gc.setFont(Font.font("Microsoft YaHei", 42));
+        gc.setFill(Color.rgb(235, 232, 245));
+        double tw = measurerLayout("已 暂 停", Font.font("Microsoft YaHei", 42));
+        gc.fillText("已 暂 停", vw / 2 - tw / 2, vh * 0.42);
+
+        gc.setFont(Font.font("Microsoft YaHei", 15));
+        gc.setFill(Color.rgb(170, 170, 190));
+        tw = measurerLayout("按 ESC 或点击左上角按钮继续", Font.font("Microsoft YaHei", 15));
+        gc.fillText("按 ESC 或点击左上角按钮继续", vw / 2 - tw / 2, vh * 0.42 + 40);
+    }
+
     /** 胜利结算画面：半透明罩层 + 战报。由 GameApp 在 world.victory() 时调用 */
     public void drawVictory(World w, double vw, double vh) {
         gc.setFill(Color.rgb(8, 6, 14, 0.8));
