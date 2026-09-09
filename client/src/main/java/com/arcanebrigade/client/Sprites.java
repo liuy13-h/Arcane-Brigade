@@ -9,22 +9,30 @@ import javafx.scene.SnapshotParameters;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.image.Image;
+import javafx.scene.image.PixelFormat;
+import javafx.scene.image.PixelReader;
+import javafx.scene.image.WritableImage;
 import javafx.scene.paint.Color;
 import javafx.scene.paint.CycleMethod;
 import javafx.scene.paint.RadialGradient;
 import javafx.scene.paint.Stop;
 
+import java.io.File;
 import java.io.InputStream;
 import java.util.function.Consumer;
 
 /**
- * 程序化生成的精灵图。零美术资源依赖，全部代码画出来。
+ * 程序化生成的精灵图 + 仓库现成美术的加载与预处理。
  *
  * 所有 Image 在启动时一次性烘焙好，运行时只做 drawImage，绝不临时生成。
  */
 public final class Sprites {
 
-    /** 按职业索引的英雄静态形象（索引见 HeroClass：1 巫师 / 2 战士 / 3 弓箭手 / 4 召唤师） */
+    /**
+     * 按索引的形象。
+     * 0 = 国王（大厅初始操控对象）；1..4 = 巫师 / 战士 / 弓箭手 / 召唤师（HeroClass）。
+     * 职业形象统一走「裁透明边 + ×2 最近邻放大」，渲染时 1:1 绘制即是清晰像素风。
+     */
     public static Image[] heroes = new Image[5];
     /** 按职业索引的走动动画帧（GIF 解码结果）。null 表示没有动画，退化为静态形象 */
     public static GifDecoder.Animation[] heroWalk = new GifDecoder.Animation[5];
@@ -32,6 +40,19 @@ public final class Sprites {
     public static Image[] bosses = new Image[4];
     /** 召唤师的宠物形象（程序化：没给美术素材，自己画一只秘能仆从） */
     public static Image minion;
+    /** 王座大厅背景（启动后的准备大厅整屏底图） */
+    public static Image lobbyBg;
+    /**
+     * 主菜单标题画面（整幅美术，底部内嵌五个菜单按钮：开始游戏 / 多人联机 / 设置 / 操作说明 / 退出游戏）。
+     * 这是程序启动后第一个画面，按钮命中区坐标见 Renderer 的菜单常量。
+     */
+    public static Image titleScreen;
+    /**
+     * 各职业的细节立绘（选人大厅右侧滑出的大图）。
+     * 下标 = 职业 id（1..4 = 巫师 / 战士 / 弓箭手 / 召唤师）。
+     * 这是美术给的大尺寸全身立绘，与上方 32px 行走小立绘 heroes[] 相互独立。
+     */
+    public static Image[] heroPortraits = new Image[5];
     public static Image[] enemies = new Image[3];
     /** 按元素索引的弹体颜色，见 Element。运行时只查表，不做任何变换 */
     public static Image[] bolts = new Image[Element.COUNT];
@@ -46,9 +67,14 @@ public final class Sprites {
     private Sprites() {}
 
     public static void load() {
+        // 国王（大厅初始操控对象）：美术 32×32 小立绘，裁透明边再 ×2 最近邻放大。
+        // 缺图时退回程序生成的中性旅行者，保证仍能跑。
+        heroes[0] = pixelScale(trimOpaque(loadArt("Sprite-00017.png")), 2);
+        if (heroes[0] == null) {
+            heroes[0] = bake(44, 44, Sprites::paintAdventurer);
+        }
         // 职业形象：优先读 resources/sprites 下的真实素材，读不到才回退到程序化绘制。
-        // 回退很关键——build.bat 的 javac 兜底路径不会复制 resources，
-        // 没有兜底就是一片空白。
+        // 回退很关键——build.bat 的 javac 兜底路径不会复制 resources，没有兜底就是一片空白。
         loadHero(HeroClass.WIZARD, "wizard", Sprites::paintWizard);
         loadHero(HeroClass.WARRIOR, "warrior", Sprites::paintWarrior);
         loadHero(HeroClass.ARCHER, "archer", Sprites::paintArcher);
@@ -57,6 +83,18 @@ public final class Sprites {
             bosses[t] = loadBoss(t);
         }
         minion = bake(28, 28, Sprites::paintMinion);
+
+        // 大厅背景与标题画面：从仓库根 image/ 读现成美术
+        lobbyBg = loadArt("皇宫王座大厅背景.jpg");
+        titleScreen = loadArt("title_final_v3_covered_2x.png");
+        // 细节立绘（右侧角色卡大图），按下标对齐职业。
+        // 美术给的多是带纯色底（黑/白）的整幅图，叠到王座厅上会出现一块黑底/白底，
+        // 这里把环绕角色、与图边相连的背景色抠成透明（见 knockoutBackground）。
+        heroPortraits[HeroClass.WARRIOR] = knockoutBackground(loadArt("Edit_this_pixel_art_character__2026-09-09T01-59-50.png")); // 战士
+        heroPortraits[HeroClass.WIZARD]  = knockoutBackground(loadArt("Edit_this_pixel_art_character__2026-09-09T02-00-45.png")); // 巫师
+        heroPortraits[HeroClass.ARCHER]  = knockoutBackground(loadArt("弓箭手角色-尖角额甲版.jpg"));                                // 弓箭手
+        heroPortraits[HeroClass.SUMMONER] = knockoutBackground(loadArt("summoner_transparent.png"));                               // 召唤师
+
         enemies[0] = bake(32, 32, g -> paintSlime(g, Color.rgb(96, 200, 120), Color.rgb(40, 120, 70)));
         enemies[1] = bake(32, 32, g -> paintBat(g, Color.rgb(178, 130, 235), Color.rgb(96, 62, 150)));
         enemies[2] = bake(32, 32, g -> paintBrute(g, Color.rgb(240, 150, 80), Color.rgb(150, 74, 30)));
@@ -76,23 +114,10 @@ public final class Sprites {
         gem = bake(14, 14, Sprites::paintGem);
     }
 
-    private static Image bake(int w, int h, Consumer<GraphicsContext> painter) {
-        Canvas c = new Canvas(w, h);
-        OFFSCREEN.getChildren().add(c);
-        try {
-            painter.accept(c.getGraphicsContext2D());
-            SnapshotParameters sp = new SnapshotParameters();
-            sp.setFill(Color.TRANSPARENT);
-            return c.snapshot(sp, null);
-        } finally {
-            OFFSCREEN.getChildren().remove(c);
-        }
-    }
-
-    /** 职业形象 + 走动动画。任一缺失都用程序化绘制兜底 */
+    /** 职业形象 + 走动动画。形象裁边 ×2 放大，任一缺失都用程序化绘制兜底 */
     private static void loadHero(int classKind, String base, Consumer<GraphicsContext> fallback) {
         Image idle = loadImage(base + ".png");
-        heroes[classKind] = (idle != null) ? idle : bake(44, 44, fallback);
+        heroes[classKind] = (idle != null) ? pixelScale(trimOpaque(idle), 2) : bake(44, 44, fallback);
         try (InputStream in = res(base + "_walk.gif")) {
             heroWalk[classKind] = GifDecoder.decode(in);
         } catch (Exception e) {
@@ -134,6 +159,158 @@ public final class Sprites {
 
     private static InputStream res(String name) {
         return Sprites.class.getResourceAsStream("/sprites/" + name);
+    }
+
+    /**
+     * 裁掉四周全透明的边，只留不透明内容。32×32 精灵内容通常居中、四周留白，
+     * 不裁掉的话按"底边贴地"缩放会整张图悬空。返回内容紧贴边框的新图（原图不动）。
+     */
+    private static Image trimOpaque(Image src) {
+        if (src == null) {
+            return null;
+        }
+        PixelReader pr = src.getPixelReader();
+        int w = (int) src.getWidth();
+        int h = (int) src.getHeight();
+        int x0 = w, y0 = h, x1 = -1, y1 = -1;
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                if (((pr.getArgb(x, y) >>> 24) & 0xFF) != 0) {
+                    if (x < x0) x0 = x;
+                    if (x > x1) x1 = x;
+                    if (y < y0) y0 = y;
+                    if (y > y1) y1 = y;
+                }
+            }
+        }
+        if (x1 < 0 || y1 < 0) {
+            return src;                        // 整张全透明：原样返回
+        }
+        final int fx0 = x0, fy0 = y0, fw = x1 - x0 + 1, fh = y1 - y0 + 1;
+        return bake(fw, fh, g -> g.drawImage(src, fx0, fy0, fw, fh, 0, 0, fw, fh));
+    }
+
+    /**
+     * 最近邻整数倍放大（关闭平滑插值），得到清晰的像素立绘。
+     * k 必须是非负整数：k=2 即每个源像素占 2×2 目标像素，边角保持锐利。
+     */
+    private static Image pixelScale(Image src, int k) {
+        if (src == null || k <= 1) {
+            return src;
+        }
+        int w = (int) src.getWidth();
+        int h = (int) src.getHeight();
+        return bake(w * k, h * k, g -> {
+            g.setImageSmoothing(false);
+            g.drawImage(src, 0, 0, w * k, h * k);
+        });
+    }
+
+    /**
+     * 抠掉环绕角色的背景：只把「与图片边缘四连通的近似纯色背景」变透明，
+     * 角色主体内部的同色细节（描边、高光、瞳孔等）因不与边相连而完整保留。
+     * 黑底、白底、已透明的边都会被清除，四种立绘统一得到干净透明背景。
+     */
+    private static Image knockoutBackground(Image src) {
+        if (src == null) {
+            return null;
+        }
+        PixelReader pr = src.getPixelReader();
+        int w = (int) src.getWidth();
+        int h = (int) src.getHeight();
+        int[] argb = new int[w * h];
+        pr.getPixels(0, 0, w, h, PixelFormat.getIntArgbInstance(), argb, 0, w);
+        boolean[] key = new boolean[w * h];
+        for (int i = 0; i < w * h; i++) {
+            int a = (argb[i] >>> 24) & 0xFF;
+            if (a < 40) {
+                key[i] = true;                       // 原本透明：放行洪泛
+                continue;
+            }
+            int r = (argb[i] >>> 16) & 0xFF;
+            int g = (argb[i] >>> 8) & 0xFF;
+            int b = argb[i] & 0xFF;
+            key[i] = Math.max(r, Math.max(g, b)) < 48      // 近黑底
+                    || Math.min(r, Math.min(g, b)) > 207;   // 近白底
+        }
+        boolean[] rm = new boolean[w * h];
+        int[] stack = new int[w * h];
+        int sp = 0;
+        // 种子：顶/底/左/右四条边上的背景像素
+        for (int x = 0; x < w; x++) {
+            if (key[x] && !rm[x]) { rm[x] = true; stack[sp++] = x; }
+            int b = (h - 1) * w + x;
+            if (key[b] && !rm[b]) { rm[b] = true; stack[sp++] = b; }
+        }
+        for (int y = 0; y < h; y++) {
+            int l = y * w;
+            if (key[l] && !rm[l]) { rm[l] = true; stack[sp++] = l; }
+            int rr = y * w + (w - 1);
+            if (key[rr] && !rm[rr]) { rm[rr] = true; stack[sp++] = rr; }
+        }
+        while (sp > 0) {
+            int idx = stack[--sp];
+            if (idx % w > 0) {
+                int n = idx - 1;
+                if (key[n] && !rm[n]) { rm[n] = true; stack[sp++] = n; }
+            }
+            if (idx % w < w - 1) {
+                int n = idx + 1;
+                if (key[n] && !rm[n]) { rm[n] = true; stack[sp++] = n; }
+            }
+            int u = idx - w;
+            if (u >= 0 && key[u] && !rm[u]) { rm[u] = true; stack[sp++] = u; }
+            int d = idx + w;
+            if (d < w * h && key[d] && !rm[d]) { rm[d] = true; stack[sp++] = d; }
+        }
+        int removed = 0;
+        for (int i = 0; i < w * h; i++) {
+            if (rm[i]) {
+                argb[i] &= 0x00FFFFFF;               // 清掉 alpha
+                removed++;
+            }
+        }
+        if (removed == 0) {
+            return src;                              // 本来就没有背景块
+        }
+        WritableImage out = new WritableImage(w, h);
+        out.getPixelWriter().setPixels(0, 0, w, h, PixelFormat.getIntArgbInstance(), argb, 0, w);
+        return out;
+    }
+
+    private static Image bake(int w, int h, Consumer<GraphicsContext> painter) {
+        Canvas c = new Canvas(w, h);
+        OFFSCREEN.getChildren().add(c);
+        try {
+            painter.accept(c.getGraphicsContext2D());
+            SnapshotParameters sp = new SnapshotParameters();
+            sp.setFill(Color.TRANSPARENT);
+            return c.snapshot(sp, null);
+        } finally {
+            OFFSCREEN.getChildren().remove(c);
+        }
+    }
+
+    /**
+     * 从仓库根目录 image/ 载入现成美术。从当前工作目录往上逐级找 image 目录，
+     * 兼容 run.bat（项目根）与 IntelliJ（可能是模块目录）两种工作目录。
+     * 找不到时打印警告并返回 null，调用方需容忍缺图。
+     */
+    private static Image loadArt(String fileName) {
+        File dir = null;
+        for (File d = new File(System.getProperty("user.dir")); d != null; d = d.getParentFile()) {
+            File cand = new File(d, "image");
+            if (cand.isDirectory()) {
+                dir = cand;
+                break;
+            }
+        }
+        File f = (dir != null) ? new File(dir, fileName) : new File(fileName);
+        if (!f.isFile()) {
+            System.err.println("[Sprites] 缺少美术资源: " + f.getAbsolutePath());
+            return null;
+        }
+        return new Image(f.toURI().toString(), false);
     }
 
     /**
@@ -364,6 +541,35 @@ public final class Sprites {
         g.setFill(Color.rgb(60, 40, 90));
         g.fillOval(cx - 3.6, cy - 1.4, 1.8, 1.8);
         g.fillOval(cx + 2.0, cy - 1.4, 1.8, 1.8);
+    }
+
+    /** 大厅初始操控对象（国王）兜底：中性灰斗篷旅行者 */
+    private static void paintAdventurer(GraphicsContext g) {
+        double cx = 22, cy = 24;
+        // 脚下灰雾
+        g.setFill(new RadialGradient(0, 0, cx, cy, 20, false, CycleMethod.NO_CYCLE,
+                new Stop(0, Color.rgb(210, 214, 224, 0.40)),
+                new Stop(1, Color.rgb(210, 214, 224, 0))));
+        g.fillOval(2, 4, 40, 40);
+
+        // 灰斗篷
+        g.setFill(Color.rgb(104, 108, 122));
+        g.fillOval(cx - 10, cy - 6, 20, 22);
+        g.setFill(Color.rgb(78, 82, 96));
+        g.fillOval(cx - 10, cy + 8, 20, 10);
+
+        // 兜帽(比斗篷浅一点,翻起的帽沿)
+        g.setFill(Color.rgb(122, 126, 140));
+        g.fillArc(cx - 10, cy - 15, 20, 19, 0, 180, ArcType.ROUND);
+        g.setFill(Color.rgb(90, 93, 108));
+        g.fillRect(cx - 12, cy - 6, 24, 3);
+
+        // 脸与眼睛
+        g.setFill(Color.rgb(226, 222, 214));
+        g.fillOval(cx - 6, cy - 4, 12, 11);
+        g.setFill(Color.rgb(30, 32, 48));
+        g.fillOval(cx - 3.5, cy + 0.5, 2.4, 2.4);
+        g.fillOval(cx + 1.1, cy + 0.5, 2.4, 2.4);
     }
 
     private static void paintSlime(GraphicsContext g, Color body, Color dark) {
