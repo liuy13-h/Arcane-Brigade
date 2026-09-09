@@ -9,11 +9,15 @@ import javafx.scene.SnapshotParameters;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.image.Image;
+import javafx.scene.image.PixelFormat;
+import javafx.scene.image.PixelReader;
+import javafx.scene.image.WritableImage;
 import javafx.scene.paint.Color;
 import javafx.scene.paint.CycleMethod;
 import javafx.scene.paint.RadialGradient;
 import javafx.scene.paint.Stop;
 
+import java.io.File;
 import java.util.function.Consumer;
 
 /**
@@ -23,8 +27,20 @@ import java.util.function.Consumer;
  */
 public final class Sprites {
 
-    /** 按职业索引的英雄形象（索引 1=巫师 / 2=战士 / 3=弓箭手，见 HeroClass） */
-    public static Image[] heroes = new Image[4];
+    /**
+     * 按索引的形象。
+     * 0 = 国王（大厅初始操控对象）；1/2/3 = 巫师/战士/弓箭手（HeroClass）；
+     * 4 = 召唤师（LobbyClass.SUMMONER，仅大厅展示，无战斗逻辑）。
+     */
+    public static Image[] heroes = new Image[5];
+    /** 王座大厅背景（启动后的准备大厅整屏底图） */
+    public static Image lobbyBg;
+    /**
+     * 各职业的细节立绘（选人大厅右侧滑出的大图）。
+     * 下标 = 职业 id（1..4 = 巫师/战士/弓箭手/召唤师）。
+     * 这是美术给的大尺寸全身立绘，与上方 32px 行走小立绘 heroes[] 相互独立。
+     */
+    public static Image[] heroPortraits = new Image[5];
     public static Image[] enemies = new Image[3];
     /** 按元素索引的弹体颜色，见 Element。运行时只查表，不做任何变换 */
     public static Image[] bolts = new Image[Element.COUNT];
@@ -37,9 +53,28 @@ public final class Sprites {
     private Sprites() {}
 
     public static void load() {
-        heroes[HeroClass.WIZARD]  = bake(44, 44, Sprites::paintWizard);
-        heroes[HeroClass.WARRIOR] = bake(44, 44, Sprites::paintWarrior);
-        heroes[HeroClass.ARCHER]  = bake(44, 44, Sprites::paintArcher);
+        // 国王（大厅初始操控对象）：美术 32×32 小立绘，裁透明边再 ×2 最近邻放大。
+        // 缺图时退回程序生成的中性旅行者，保证仍能跑。
+        heroes[0] = pixelScale(trimOpaque(loadArt("Sprite-00017.png")), 2);
+        if (heroes[0] == null) {
+            heroes[0] = bake(44, 44, Sprites::paintAdventurer);
+        }
+        // 职业立绘与王座背景：从仓库根 image/ 读现成美术
+        // 32x32 原图内容居中、四周留白，先裁掉透明边，再按整数倍(×2)最近邻放大。
+        // 这样渲染时 1:1 绘制即是清晰像素风；直接放大到非整数尺寸会让 JavaFX
+        // 用平滑插值把像素抹糊（用户反馈"有点糊"的根源）。
+        heroes[HeroClass.ARCHER]  = pixelScale(trimOpaque(loadArt("Sprite-0001.png")), 2);   // 0001 射手
+        heroes[HeroClass.WIZARD]  = pixelScale(trimOpaque(loadArt("Sprite-0002.png")), 2);   // 0002 法师
+        heroes[HeroClass.WARRIOR] = pixelScale(trimOpaque(loadArt("Sprite-0003.png")), 2);   // 0003 战士
+        heroes[LobbyClass.SUMMONER] = pixelScale(trimOpaque(loadArt("图片10.png")), 2);      // 召唤师
+        lobbyBg = loadArt("皇宫王座大厅背景.jpg");
+        // 细节立绘（右侧角色卡大图），按下标对齐职业。
+        // 美术给的多是带纯色底（黑/白）的整幅图，叠到王座厅上会出现一块黑底/白底，
+        // 这里把环绕角色、与图边相连的背景色抠成透明（见 knockoutBackground）。
+        heroPortraits[HeroClass.WARRIOR] = knockoutBackground(loadArt("Edit_this_pixel_art_character__2026-09-09T01-59-50.png")); // 战士
+        heroPortraits[HeroClass.WIZARD]  = knockoutBackground(loadArt("Edit_this_pixel_art_character__2026-09-09T02-00-45.png")); // 法师/巫师
+        heroPortraits[HeroClass.ARCHER]  = knockoutBackground(loadArt("弓箭手角色-尖角额甲版.jpg"));                                // 射手
+        heroPortraits[LobbyClass.SUMMONER] = knockoutBackground(loadArt("summoner_transparent.png"));                               // 召唤师
         enemies[0] = bake(32, 32, g -> paintSlime(g, Color.rgb(96, 200, 120), Color.rgb(40, 120, 70)));
         enemies[1] = bake(32, 32, g -> paintBat(g, Color.rgb(178, 130, 235), Color.rgb(96, 62, 150)));
         enemies[2] = bake(32, 32, g -> paintBrute(g, Color.rgb(240, 150, 80), Color.rgb(150, 74, 30)));
@@ -56,6 +91,123 @@ public final class Sprites {
         gem = bake(14, 14, Sprites::paintGem);
     }
 
+    /**
+     * 裁掉四周全透明的边，只留不透明内容。32×32 精灵内容通常居中、四周留白，
+     * 不裁掉的话按"底边贴地"缩放会整张图悬空。返回内容紧贴边框的新图（原图不动）。
+     */
+    private static Image trimOpaque(Image src) {
+        if (src == null) {
+            return null;
+        }
+        PixelReader pr = src.getPixelReader();
+        int w = (int) src.getWidth();
+        int h = (int) src.getHeight();
+        int x0 = w, y0 = h, x1 = -1, y1 = -1;
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                if (((pr.getArgb(x, y) >>> 24) & 0xFF) != 0) {
+                    if (x < x0) x0 = x;
+                    if (x > x1) x1 = x;
+                    if (y < y0) y0 = y;
+                    if (y > y1) y1 = y;
+                }
+            }
+        }
+        if (x1 < 0 || y1 < 0) {
+            return src;                        // 整张全透明：原样返回
+        }
+        final int fx0 = x0, fy0 = y0, fw = x1 - x0 + 1, fh = y1 - y0 + 1;
+        return bake(fw, fh, g -> g.drawImage(src, fx0, fy0, fw, fh, 0, 0, fw, fh));
+    }
+
+    /**
+     * 最近邻整数倍放大（关闭平滑插值），得到清晰的像素立绘。
+     * k 必须是非负整数：k=2 即每个源像素占 2×2 目标像素，边角保持锐利。
+     */
+    private static Image pixelScale(Image src, int k) {
+        if (src == null || k <= 1) {
+            return src;
+        }
+        int w = (int) src.getWidth();
+        int h = (int) src.getHeight();
+        return bake(w * k, h * k, g -> {
+            g.setImageSmoothing(false);
+            g.drawImage(src, 0, 0, w * k, h * k);
+        });
+    }
+
+    /**
+     * 抠掉环绕角色的背景：只把「与图片边缘四连通的近似纯色背景」变透明，
+     * 角色主体内部的同色细节（描边、高光、瞳孔等）因不与边相连而完整保留。
+     * 黑底、白底、已透明的边都会被清除，四种立绘统一得到干净透明背景。
+     */
+    private static Image knockoutBackground(Image src) {
+        if (src == null) {
+            return null;
+        }
+        PixelReader pr = src.getPixelReader();
+        int w = (int) src.getWidth();
+        int h = (int) src.getHeight();
+        int[] argb = new int[w * h];
+        pr.getPixels(0, 0, w, h, PixelFormat.getIntArgbInstance(), argb, 0, w);
+        boolean[] key = new boolean[w * h];
+        for (int i = 0; i < w * h; i++) {
+            int a = (argb[i] >>> 24) & 0xFF;
+            if (a < 40) {
+                key[i] = true;                       // 原本透明：放行洪泛
+                continue;
+            }
+            int r = (argb[i] >>> 16) & 0xFF;
+            int g = (argb[i] >>> 8) & 0xFF;
+            int b = argb[i] & 0xFF;
+            key[i] = Math.max(r, Math.max(g, b)) < 48      // 近黑底
+                    || Math.min(r, Math.min(g, b)) > 207;   // 近白底
+        }
+        boolean[] rm = new boolean[w * h];
+        int[] stack = new int[w * h];
+        int sp = 0;
+        // 种子：顶/底/左/右四条边上的背景像素
+        for (int x = 0; x < w; x++) {
+            if (key[x] && !rm[x]) { rm[x] = true; stack[sp++] = x; }
+            int b = (h - 1) * w + x;
+            if (key[b] && !rm[b]) { rm[b] = true; stack[sp++] = b; }
+        }
+        for (int y = 0; y < h; y++) {
+            int l = y * w;
+            if (key[l] && !rm[l]) { rm[l] = true; stack[sp++] = l; }
+            int rr = y * w + (w - 1);
+            if (key[rr] && !rm[rr]) { rm[rr] = true; stack[sp++] = rr; }
+        }
+        while (sp > 0) {
+            int idx = stack[--sp];
+            if (idx % w > 0) {
+                int n = idx - 1;
+                if (key[n] && !rm[n]) { rm[n] = true; stack[sp++] = n; }
+            }
+            if (idx % w < w - 1) {
+                int n = idx + 1;
+                if (key[n] && !rm[n]) { rm[n] = true; stack[sp++] = n; }
+            }
+            int u = idx - w;
+            if (u >= 0 && key[u] && !rm[u]) { rm[u] = true; stack[sp++] = u; }
+            int d = idx + w;
+            if (d < w * h && key[d] && !rm[d]) { rm[d] = true; stack[sp++] = d; }
+        }
+        int removed = 0;
+        for (int i = 0; i < w * h; i++) {
+            if (rm[i]) {
+                argb[i] &= 0x00FFFFFF;               // 清掉 alpha
+                removed++;
+            }
+        }
+        if (removed == 0) {
+            return src;                              // 本来就没有背景块
+        }
+        WritableImage out = new WritableImage(w, h);
+        out.getPixelWriter().setPixels(0, 0, w, h, PixelFormat.getIntArgbInstance(), argb, 0, w);
+        return out;
+    }
+
     private static Image bake(int w, int h, Consumer<GraphicsContext> painter) {
         Canvas c = new Canvas(w, h);
         OFFSCREEN.getChildren().add(c);
@@ -67,6 +219,28 @@ public final class Sprites {
         } finally {
             OFFSCREEN.getChildren().remove(c);
         }
+    }
+
+    /**
+     * 从仓库根目录 image/ 载入现成美术。从当前工作目录往上逐级找 image 目录，
+     * 兼容 run.bat（项目根）与 IntelliJ（可能是模块目录）两种工作目录。
+     * 找不到时打印警告并返回 null，调用方需容忍缺图。
+     */
+    private static Image loadArt(String fileName) {
+        File dir = null;
+        for (File d = new File(System.getProperty("user.dir")); d != null; d = d.getParentFile()) {
+            File cand = new File(d, "image");
+            if (cand.isDirectory()) {
+                dir = cand;
+                break;
+            }
+        }
+        File f = (dir != null) ? new File(dir, fileName) : new File(fileName);
+        if (!f.isFile()) {
+            System.err.println("[Sprites] 缺少美术资源: " + f.getAbsolutePath());
+            return null;
+        }
+        return new Image(f.toURI().toString(), false);
     }
 
     /**
@@ -94,128 +268,32 @@ public final class Sprites {
     // 画法
     // ------------------------------------------------------------------
 
-    private static void paintWizard(GraphicsContext g) {
+    /**
+     * 中性「旅行者」剪影：准备大厅里还没选职业时的化身。
+     * 刻意用灰色系，与三个职业的彩色光晕区分开。
+     */
+    private static void paintAdventurer(GraphicsContext g) {
         double cx = 22, cy = 24;
-        // 脚下光晕
+        // 脚下灰雾
         g.setFill(new RadialGradient(0, 0, cx, cy, 20, false, CycleMethod.NO_CYCLE,
-                new Stop(0, Color.rgb(140, 190, 255, 0.45)),
-                new Stop(1, Color.rgb(140, 190, 255, 0))));
+                new Stop(0, Color.rgb(210, 214, 224, 0.40)),
+                new Stop(1, Color.rgb(210, 214, 224, 0))));
         g.fillOval(2, 4, 40, 40);
 
-        // 袍子
-        g.setFill(Color.rgb(62, 84, 168));
-        g.fillOval(cx - 10, cy - 6, 20, 22);
-        g.setFill(Color.rgb(42, 58, 128));
-        g.fillOval(cx - 10, cy + 8, 20, 10);
-
-        // 帽子
-        g.setFill(Color.rgb(46, 64, 140));
-        g.beginPath();
-        g.moveTo(cx, cy - 26);
-        g.lineTo(cx + 12, cy - 4);
-        g.lineTo(cx - 12, cy - 4);
-        g.closePath();
-        g.fill();
-        g.setFill(Color.rgb(70, 96, 200));
-        g.fillRect(cx - 14, cy - 6, 28, 4);
-
-        // 法杖（右侧，顶部发光宝珠）
-        g.setStroke(Color.rgb(128, 90, 48));
-        g.setLineWidth(3);
-        g.strokeLine(cx + 11, cy + 9, cx + 16, cy - 11);
-        g.setFill(new RadialGradient(0, 0, cx + 16, cy - 13, 5, false, CycleMethod.NO_CYCLE,
-                new Stop(0, Color.rgb(190, 235, 255)),
-                new Stop(1, Color.rgb(120, 90, 230, 0))));
-        g.fillOval(cx + 12, cy - 17, 8, 8);
-
-        // 脸与眼睛
-        g.setFill(Color.rgb(238, 220, 190));
-        g.fillOval(cx - 6, cy - 4, 12, 11);
-        g.setFill(Color.rgb(30, 32, 48));
-        g.fillOval(cx - 3.5, cy + 0.5, 2.4, 2.4);
-        g.fillOval(cx + 1.1, cy + 0.5, 2.4, 2.4);
-    }
-
-    private static void paintWarrior(GraphicsContext g) {
-        double cx = 22, cy = 24;
-        // 脚下光晕（暖色）
-        g.setFill(new RadialGradient(0, 0, cx, cy, 20, false, CycleMethod.NO_CYCLE,
-                new Stop(0, Color.rgb(255, 170, 90, 0.45)),
-                new Stop(1, Color.rgb(255, 170, 90, 0))));
-        g.fillOval(2, 4, 40, 40);
-
-        // 剑（右侧，剑身朝上）
-        g.setFill(Color.rgb(214, 224, 238));
-        g.fillRect(cx + 9, cy - 13, 3, 15);
-        g.setFill(Color.rgb(170, 120, 50));
-        g.fillRect(cx + 7, cy + 2, 7, 2);
-        g.setFill(Color.rgb(110, 74, 36));
-        g.fillRect(cx + 10, cy + 4, 2, 6);
-
-        // 盾（左侧圆形）
-        g.setFill(Color.rgb(150, 70, 60));
-        g.fillOval(cx - 18, cy - 4, 13, 15);
-        g.setStroke(Color.rgb(235, 205, 140));
-        g.setLineWidth(1.5);
-        g.strokeOval(cx - 18, cy - 4, 13, 15);
-
-        // 身体铠甲（铁灰 + 红带）
-        g.setFill(Color.rgb(105, 110, 125));
+        // 灰斗篷
+        g.setFill(Color.rgb(104, 108, 122));
         g.fillOval(cx - 10, cy - 6, 20, 22);
         g.setFill(Color.rgb(78, 82, 96));
         g.fillOval(cx - 10, cy + 8, 20, 10);
-        g.setFill(Color.rgb(190, 60, 50));
-        g.fillRect(cx - 10, cy - 1, 20, 3);
 
-        // 头盔（带红缨）
-        g.setFill(Color.rgb(122, 128, 146));
-        g.fillArc(cx - 9, cy - 13, 18, 15, 0, 180, ArcType.ROUND);
-        g.setFill(Color.rgb(205, 70, 60));
-        g.beginPath();
-        g.moveTo(cx, cy - 14);
-        g.lineTo(cx - 3, cy - 21);
-        g.lineTo(cx + 3, cy - 14);
-        g.closePath();
-        g.fill();
-
-        // 脸与眼睛
-        g.setFill(Color.rgb(238, 220, 190));
-        g.fillOval(cx - 6, cy - 4, 12, 11);
-        g.setFill(Color.rgb(30, 32, 48));
-        g.fillOval(cx - 3.5, cy + 0.5, 2.4, 2.4);
-        g.fillOval(cx + 1.1, cy + 0.5, 2.4, 2.4);
-    }
-
-    private static void paintArcher(GraphicsContext g) {
-        double cx = 22, cy = 24;
-        // 脚下光晕（绿色）
-        g.setFill(new RadialGradient(0, 0, cx, cy, 20, false, CycleMethod.NO_CYCLE,
-                new Stop(0, Color.rgb(120, 220, 150, 0.45)),
-                new Stop(1, Color.rgb(120, 220, 150, 0))));
-        g.fillOval(2, 4, 40, 40);
-
-        // 弓（横在身前，弧形弓臂朝左 + 弓弦）
-        g.setStroke(Color.rgb(122, 82, 42));
-        g.setLineWidth(3);
-        g.strokeArc(cx - 17, cy - 7, 24, 20, 90, 180, ArcType.OPEN);
-        g.setStroke(Color.rgb(235, 235, 235));
-        g.setLineWidth(1);
-        g.strokeLine(cx - 17, cy + 3, cx + 7, cy - 3);
-
-        // 身体斗篷（绿色）
-        g.setFill(Color.rgb(66, 138, 88));
-        g.fillOval(cx - 10, cy - 6, 20, 22);
-        g.setFill(Color.rgb(46, 104, 66));
-        g.fillOval(cx - 10, cy + 8, 20, 10);
-
-        // 兜帽
-        g.setFill(Color.rgb(52, 120, 74));
-        g.fillArc(cx - 10, cy - 14, 20, 18, 0, 180, ArcType.ROUND);
-        g.setFill(Color.rgb(40, 96, 58));
+        // 兜帽(比斗篷浅一点,翻起的帽沿)
+        g.setFill(Color.rgb(122, 126, 140));
+        g.fillArc(cx - 10, cy - 15, 20, 19, 0, 180, ArcType.ROUND);
+        g.setFill(Color.rgb(90, 93, 108));
         g.fillRect(cx - 12, cy - 6, 24, 3);
 
         // 脸与眼睛
-        g.setFill(Color.rgb(238, 220, 190));
+        g.setFill(Color.rgb(226, 222, 214));
         g.fillOval(cx - 6, cy - 4, 12, 11);
         g.setFill(Color.rgb(30, 32, 48));
         g.fillOval(cx - 3.5, cy + 0.5, 2.4, 2.4);

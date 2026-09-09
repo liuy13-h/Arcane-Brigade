@@ -14,7 +14,11 @@ import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.image.Image;
 import javafx.scene.paint.Color;
+import javafx.scene.paint.CycleMethod;
+import javafx.scene.paint.LinearGradient;
+import javafx.scene.paint.Stop;
 import javafx.scene.text.Font;
+import javafx.scene.text.FontWeight;
 import javafx.scene.text.Text;
 
 /**
@@ -204,7 +208,10 @@ public final class Renderer {
                     int ck = (wlo != null) ? wlo.classKind : HeroClass.WIZARD;
                     Image hero = Sprites.heroes[ck];
                     if (hero != null) {
-                        gc.drawImage(hero, sx - 22, sy - 30);
+                        // 立绘已 ×2 预放大，按自然尺寸 1:1 绘制（清晰像素），底边贴角色位置
+                        double hw = hero.getWidth();
+                        double hh = hero.getHeight();
+                        gc.drawImage(hero, Math.round(sx - hw / 2), Math.round(sy + 4 - hh));
                     }
                 }
                 case World.KIND_ENEMY -> {
@@ -372,6 +379,53 @@ public final class Renderer {
         measurer.setFont(font);
         measurer.setText(text);
         return measurer.getLayoutBounds().getWidth();
+    }
+
+    /**
+     * 水平居中的文字，可带一层柔和暗影（制造"浮于画面"的层次感）。
+     * 一次调用负责设字体；调用方无需再 setFont。
+     */
+    private static void drawTextSoft(GraphicsContext gc, Font f, double cx, double baseY,
+            String text, Color fill, Color shadow) {
+        gc.setFont(f);
+        double x0 = cx - measureWidth(f, text) / 2;
+        if (shadow != null) {
+            gc.setFill(shadow);
+            gc.fillText(text, x0 + 1, baseY + 1.5);
+        }
+        gc.setFill(fill);
+        gc.fillText(text, x0, baseY);
+    }
+
+    /**
+     * 圆角小牌（状态徽章）。返回文本串内文字起点 x，便于接着追加角标文字。
+     * textFont/textFill 画主文字；suffixFont/suffixFill 可选画右侧小字（如"未开放"）。
+     * 主文字以 ctrX 水平居中；若带后缀，则整体视觉居中。
+     */
+    private static void drawPlate(GraphicsContext gc, double ctrX, double topY, double height,
+            String main, Font mainFont, Color mainFill,
+            String suffix, Font suffixFont, Color suffixFill,
+            Color bg, Color border) {
+        double mainW = measureWidth(mainFont, main);
+        double suffixW = (suffix == null || suffix.isEmpty()) ? 0 : 8 + measureWidth(suffixFont, suffix);
+        double total = mainW + suffixW;
+        double x0 = ctrX - total / 2;
+        gc.setFill(bg);
+        gc.fillRoundRect(x0 - 10, topY, total + 20, height, 9, 9);
+        if (border != null) {
+            gc.setStroke(border);
+            gc.setLineWidth(1.5);
+            gc.strokeRoundRect(x0 - 10, topY, total + 20, height, 9, 9);
+        }
+        double base = topY + height / 2 + mainFont.getSize() * 0.36;
+        gc.setFont(mainFont);
+        gc.setFill(mainFill);
+        gc.fillText(main, x0, base);
+        if (suffixW > 0) {
+            gc.setFont(suffixFont);
+            gc.setFill(suffixFill);
+            gc.fillText(suffix, x0 + mainW + 8, topY + height / 2 + suffixFont.getSize() * 0.36);
+        }
     }
 
     private void drawBossBar(World w, double vw) {
@@ -555,92 +609,502 @@ public final class Renderer {
         gc.strokeOval(sx - w.r[i], sy - w.r[i], w.r[i] * 2, w.r[i] * 2);
     }
 
+    // ------------------------------------------------------------------
+    // 准备大厅（LOBBY）
+    //
+    // 大厅是纯客户端轻量状态：正式开战前玩家在一个小房间里用 WASD 走动，
+    // 走上职业祭坛即选中职业，走进「出征」光门按 E 才真正 spawnWizard 开怪。
+    // 这里没有 core World，因此也绝不会有刷怪/模拟，渲染与移动判定都只依赖
+    // 下方 geom() 产出的一套只读几何（单一事实来源，GameApp 与 Renderer 共用）。
+    // ------------------------------------------------------------------
+
+    /** 大厅几何（屏幕像素坐标）。全部字段只读。 */
+    public record LobbyGeom(
+            double rx0, double ry0, double rx1, double ry1,    // 走动能到达的整块地面范围
+            double minX, double minY, double maxX, double maxY, // 化身圆心可走边界
+            double[][] altarC, double altarR,                  // 四个角色站位圆心（脚底）+ 选中判定半径
+            double gx, double gy, double gR,                   // 出征光门圆心 + 半径
+            double avatarR) {                                  // 化身半径（判定用）
+
+        /** 国王起步点：站在王座台阶正前方、四人一字排开的纵深上方 */
+        public double[] kingSpawn() {
+            double sx = (minX + maxX) / 2;
+            double sy = minY + (altarC[0][1] - minY) * 0.50;
+            return new double[] { sx, sy };
+        }
+    }
+
+    /** 大厅四人「脚底」占屏高的比例（0=顶，1=底）。整体上下微调时改这里。 */
+    private static final double LOBBY_FEET_FRAC = 0.56;
     /**
-     * 选职业界面。由 GameApp 在开局前叠加在最上层。
-     * 三张卡片展示各职业的基础属性、特性、起手武器与技能池预览。
-     * 卡片矩形必须与 GameApp.classCardRects 完全一致，否则点不到。
+     * 大厅立绘已由 Sprites 按整数倍预放大（内容 1:1 绘制，像素清晰）。
+     * 各人显示高度 = 其放大后的自然高度（约 42~50px）。此值仅在美术资源缺失时
+     * 当作排版占位高度。
      */
-    public void drawClassSelect(double vw, double vh, double[][] rects, double mx, double my) {
-        gc.setFill(Color.rgb(14, 12, 22));
+    private static final double LOBBY_HERO_FALLBACK_H = 44.0;
+    /** 走近站位即选中的判定半径（化身圆心到角色脚底的距离阈值） */
+    private static final double LOBBY_STATION_RADIUS = 46.0;
+
+    // ------------------------------------------------------------------
+    // 右侧角色细节卡：文案与数值。下标=职业 id（1..4 = 巫师/战士/弓箭手/召唤师）。
+    // ------------------------------------------------------------------
+    private static final String[] CARD_NAME = { "", "巫师", "战士", "弓箭手", "召唤师" };
+    private static final String[] CARD_EN = { "", "WIZARD", "VANGUARD", "ARCHER", "SUMMONER" };
+    private static final String[] CARD_ROLE = {
+            "", "远程 · 法系爆发", "近战 · 范围挥砍", "远程 · 穿透点射", "辅助 · 召唤协战" };
+    private static final String[][] CARD_FEATS = {
+            {},
+            { "法术伤害 +10%", "每 30 秒免费重抽", "远程弹幕 · 拉扯走位" },
+            { "生命 140 · 能扛能打", "受伤减免 15% · 击杀回血", "近战弧形 · 贴身压制" },
+            { "移速最快 · 游走风筝", "暴击 +10% · 箭箭穿心", "身板最脆 · 注意走位" },
+            { "召唤伙伴分担火力", "增益 / 控场 · 计划中", "暂未开放 · 敬请期待" } };
+    /** 数值条：0..1 的归一值（召唤师未开放，展示占位） */
+    private static final double[] CARD_LIFE = { 0, 100 / 150.0, 140 / 150.0, 85 / 150.0, 0.55 };
+    private static final double[] CARD_SPEED = { 0, 195 / 235.0, 180 / 235.0, 205 / 235.0, 0.55 };
+
+    /**
+     * 计算大厅布局：随窗口尺寸缩放。GameApp 移动/判定与绘制必须共用它。
+     * 四位角色均匀一字排开站在王座前（四人中间不留特殊大空位），化身可以满场走动，
+     * 出征光门嵌在画面下缘正中。altarC 存的是每人「脚底」坐标，视觉上立绘就立在那里。
+     */
+    public static LobbyGeom geom(double vw, double vh) {
+        double avatarR = 15;
+        double minX = 30, maxX = vw - 30;
+        double minY = 44, maxY = vh - 18;
+        double rx0 = minX, ry0 = minY, rx1 = maxX, ry1 = maxY;
+
+        // 四人均匀一字排开：占位等分整排，正中不预留大空位
+        int n = LobbyClass.CLASSES.length;                     // 4
+        double altarR = LOBBY_STATION_RADIUS;                  // 靠近脚底即选中
+        double feetY = vh * LOBBY_FEET_FRAC;
+        double[][] altarC = new double[n][2];
+        for (int i = 0; i < n; i++) {
+            double f = (i + 0.5) / n;                          // 12.5% / 37.5% / 62.5% / 87.5%
+            altarC[i][0] = minX + (maxX - minX) * f;
+            altarC[i][1] = feetY;
+        }
+
+        // 出征光门：画面下缘正中的一道传送门
+        double gR = 52;
+        double gx = (minX + maxX) / 2;
+        double gy = vh - 84;
+
+        return new LobbyGeom(rx0, ry0, rx1, ry1,
+                minX, minY, maxX, maxY, altarC, altarR, gx, gy, gR, avatarR);
+    }
+
+    /** 职业代表色：巫师 紫 / 战士 橙红 / 弓箭手 绿 / 召唤师 冰蓝 */
+    private static Color classAccent(int cls) {
+        return switch (cls) {
+            case HeroClass.WARRIOR   -> Color.rgb(255, 140, 90);
+            case HeroClass.ARCHER    -> Color.rgb(140, 230, 150);
+            case LobbyClass.SUMMONER -> Color.rgb(150, 235, 255);
+            default                  -> Color.rgb(200, 140, 255);   // 巫师
+        };
+    }
+
+    /**
+     * 画准备大厅（王座厅）。chosen=0 表示还未选职业，化身用中性剪影。
+     * 底图是美术提供的皇宫王座大厅背景（整屏铺满裁切）；四个角色站在同一
+     * 条脚底线上均匀一字排开。px/py 是化身圆心，与 geom 坐标同参考系。
+     */
+    public void drawLobby(LobbyGeom g, double px, double py, int chosen, double t,
+            int cardClass, double reveal) {
+        double vw = canvas.getWidth();
+        double vh = canvas.getHeight();
+        double pulse = 0.5 + 0.5 * Math.sin(t * 2.4);
+
+        // ---- 背景：王座大厅整图，等比放大铺满（裁掉多出来的边） ----
+        Image bg = Sprites.lobbyBg;
+        if (bg != null) {
+            double s = Math.max(vw / bg.getWidth(), vh / bg.getHeight());
+            double dw = bg.getWidth() * s;
+            double dh = bg.getHeight() * s;
+            gc.drawImage(bg, (vw - dw) / 2, (vh - dh) / 2, dw, dh);
+        } else {
+            // 缺图兜底：仍用深紫渐变，保证可跑
+            gc.setFill(new LinearGradient(0, 0, 0, vh, false, CycleMethod.NO_CYCLE,
+                    new Stop(0, Color.rgb(12, 10, 22)),
+                    new Stop(0.5, Color.rgb(24, 21, 38)),
+                    new Stop(1, Color.rgb(42, 37, 62))));
+            gc.fillRect(0, 0, vw, vh);
+        }
+        // 底部压一层暗色，让名字与光门更清晰，不遮王座主体
+        gc.setFill(new LinearGradient(0, vh * 0.62, 0, vh, false, CycleMethod.NO_CYCLE,
+                new Stop(0, Color.rgb(0, 0, 0, 0)),
+                new Stop(1, Color.rgb(0, 0, 0, 0.45))));
         gc.fillRect(0, 0, vw, vh);
 
-        gc.setFont(Font.font("Microsoft YaHei", 30));
-        gc.setFill(Color.rgb(245, 245, 250));
-        gc.fillText("选择你的职业", vw / 2 - 110, vh * 0.16);
+        // ---- 顶部标题区：柔和渐变幕布 + 「大标题 → 引导小字」两层主次 ----
+        gc.setFill(new LinearGradient(0, 0, 0, 96, false, CycleMethod.NO_CYCLE,
+                new Stop(0, Color.rgb(5, 4, 13, 0.62)),
+                new Stop(1, Color.rgb(5, 4, 13, 0.0))));
+        gc.fillRect(0, 0, vw, 96);
+        Font titleFont = Font.font("Microsoft YaHei", FontWeight.BOLD, 27);
+        drawTextSoft(gc, titleFont, vw / 2, 38, "奥 术 旅 团",
+                Color.rgb(255, 227, 168), Color.rgb(18, 10, 4));
+        Font hf = Font.font("Microsoft YaHei", 13.5);
+        String hint = "WASD 移动 · 靠近勇者空格确认同行 · 走进光门按 E 出征";
+        double hw = measureWidth(hf, hint);
+        gc.setFont(hf);
+        gc.setFill(Color.rgb(228, 225, 240, 0.92));
+        gc.fillText(hint, (vw - hw) / 2, 63);
+        gc.setFill(Color.rgb(255, 227, 168, 0.65));
+        gc.fillRoundRect(vw / 2 - 24, 73, 48, 2, 1, 1);
 
-        gc.setFont(Font.font("Consolas", 13));
-        gc.setFill(Color.rgb(180, 180, 200));
-        gc.fillText("点击卡片或按 1 / 2 / 3 选择", vw / 2 - 95, vh * 0.16 + 26);
+        // ---- 四个角色：均匀一字排开，站在同一脚底线上 ----
+        // 立绘已由 Sprites 按整数倍预放大(×2, 最近邻)，这里按自然尺寸 1:1 绘制、
+        // 坐标取整到像素，JavaFX 不会做任何缩放 => 像素风清晰不发糊。
+        int[] clsArr = LobbyClass.CLASSES;
+        for (int i = 0; i < clsArr.length; i++) {
+            int ck = clsArr[i];
+            boolean sel = chosen == ck;
+            double cx = g.altarC()[i][0];
+            double feetY = g.altarC()[i][1];
+            Color ac = classAccent(ck);
+            Image art = Sprites.heroes[ck];
+            double h = (art != null) ? art.getHeight() : LOBBY_HERO_FALLBACK_H;
+            boolean joined = chosen != 0 && chosen == ck;   // 已空格确认、随国王同行的勇者
 
-        Color[] accent = {
-                Color.rgb(200, 140, 255),  // 巫师 紫
-                Color.rgb(255, 140, 90),   // 战士 橙红
-                Color.rgb(140, 230, 150)   // 弓箭手 绿
-        };
-        int[] classes = { HeroClass.WIZARD, HeroClass.WARRIOR, HeroClass.ARCHER };
-
-        gc.setFont(Font.font("Microsoft YaHei", 14));
-        for (int i = 0; i < 3; i++) {
-            double bx = rects[i][0], by = rects[i][1], bw = rects[i][2], bh = rects[i][3];
-            int ck = classes[i];
-            boolean hover = mx >= bx && mx <= bx + bw && my >= by && my <= by + bh;
-
-            gc.setFill(Color.rgb(22, 20, 34, 0.96));
-            gc.fillRoundRect(bx, by, bw, bh, 12, 12);
-            gc.setStroke(hover ? accent[i] : Color.rgb(90, 90, 110));
-            gc.setLineWidth(hover ? 3 : 1.5);
-            gc.strokeRoundRect(bx, by, bw, bh, 12, 12);
-
-            // 职业形象预览（卡片右上角）
-            Image heroImg = Sprites.heroes[ck];
-            if (heroImg != null) {
-                double hw = 56, hh = 56;
-                gc.drawImage(heroImg, bx + bw - hw - 12, by + 12, hw, hh);
+            // 只给"已随行"者头顶打一道聚光
+            if (sel) {
+                drawSpotlight(gc, cx, feetY, h * 0.42, 0.9 + 0.1 * pulse);
             }
 
-            double x = bx + 18;
-            double y = by + 34;
-
-            // 职业名
-            gc.setFont(Font.font("Microsoft YaHei", 24));
-            gc.setFill(accent[i]);
-            gc.fillText(HeroClass.name(ck), x, y);
-            y += 36;
-
-            // 基础属性
-            gc.setFont(Font.font("Consolas", 14));
-            gc.setFill(Color.rgb(220, 220, 235));
-            gc.fillText(String.format("生命 %3.0f    移速 %3.0f",
-                    HeroClass.baseHp(ck), HeroClass.baseSpeed(ck)), x, y);
-            y += 26;
-
-            // 特性
-            gc.setFont(Font.font("Microsoft YaHei", 12.5));
-            gc.setFill(Color.rgb(255, 220, 150));
-            gc.fillText("特性：" + HeroClass.trait(ck), x, y);
-            y += 24;
-
-            // 起手武器
-            int sid = HeroClass.startSpell(ck);
-            SpellDef sd = Spells.get(sid);
-            gc.setFill(Color.rgb(200, 200, 220));
-            gc.fillText("起手：" + (sd != null ? sd.name : "?"), x, y);
-            y += 26;
-
-            // 技能池预览
-            gc.setFill(Color.rgb(170, 170, 195));
-            gc.fillText("技能池：", x, y);
-            y += 20;
-            int[] pool = HeroClass.pool(ck);
-            gc.setFont(Font.font("Microsoft YaHei", 12));
-            for (int s = 0; s < pool.length; s++) {
-                SpellDef psd = Spells.get(pool[s]);
-                if (psd != null) {
-                    gc.fillText("· " + psd.name, x, y);
-                    y += 18;
-                }
+            if (joined) {
+                // 已随行：该位置不再是 NPC，只留发光基座（控制对象此刻正跟在国王处）
+                gc.setStroke(Color.color(ac.getRed(), ac.getGreen(), ac.getBlue(), 0.55 + 0.2 * pulse));
+                gc.setLineWidth(2);
+                gc.strokeOval(cx - h * 0.30, feetY - h * 0.03, h * 0.60, h * 0.11);
+                gc.setFill(Color.color(ac.getRed(), ac.getGreen(), ac.getBlue(), 0.18 + 0.12 * pulse));
+                gc.fillOval(cx - h * 0.36, feetY - h * 0.05, h * 0.72, h * 0.14);
+            } else if (art != null) {
+                // 待招募的 NPC 勇者：脚底阴影 + 1:1 立绘贴脚底线
+                gc.setFill(Color.rgb(0, 0, 0, 0.30));
+                gc.fillOval(cx - h * 0.24, feetY - 4, h * 0.48, 8);
+                double w = art.getWidth();
+                gc.drawImage(art, Math.round(cx - w / 2), Math.round(feetY - h));
             }
+
+            // ---- 名牌：按状态分层（未选暗底 / 选中职业色描边+✓ / 召唤师琥珀"未开放"） ----
+            boolean locked = ck == LobbyClass.SUMMONER;
+            String nm = LobbyClass.name(ck);
+            String plateMain = (sel && !locked) ? "✓ " + nm : nm;
+            String plateSuffix = locked ? "未开放" : "";
+            Font pfM = Font.font("Microsoft YaHei", sel ? FontWeight.BOLD : FontWeight.NORMAL,
+                    sel ? 15 : 14);
+            Font pfS = Font.font("Microsoft YaHei", 11);
+            double plateH = sel ? 28 : 24;
+            double plateTop = feetY + 8;
+            Color plateBg;
+            Color plateEdge = null;
+            Color plateMainCol;
+            if (sel && !locked) {
+                plateBg = Color.color(ac.getRed(), ac.getGreen(), ac.getBlue(), 0.26);
+                plateEdge = Color.color(ac.getRed(), ac.getGreen(), ac.getBlue(), 0.95);
+                plateMainCol = Color.WHITE;
+            } else if (sel) {
+                plateBg = Color.rgb(96, 60, 20, 0.75);
+                plateEdge = Color.rgb(255, 198, 116, 0.95);
+                plateMainCol = Color.rgb(255, 240, 210);
+            } else if (locked) {
+                plateBg = Color.rgb(18, 12, 5, 0.55);
+                plateMainCol = Color.rgb(235, 195, 130);
+            } else {
+                plateBg = Color.rgb(6, 5, 14, 0.55);
+                plateMainCol = Color.rgb(204, 200, 218);
+            }
+            drawPlate(gc, cx, plateTop, plateH, plateMain, pfM, plateMainCol,
+                    plateSuffix, pfS, Color.rgb(255, 200, 122), plateBg, plateEdge);
         }
+
+        // ---- 出征光门：画面下缘正中的传送门 ----
+        boolean inside = (px - g.gx()) * (px - g.gx()) + (py - g.gy()) * (py - g.gy())
+                <= (g.gR() + g.avatarR()) * (g.gR() + g.avatarR());
+        double gr = g.gR();
+        // 站在门内的玩家，才能看到出发提示；未选/选了召唤师都被挡住
+        boolean canGo = chosen != 0 && chosen != LobbyClass.SUMMONER;
+        gc.setFill(Color.color(0.22, 0.70, 0.85,
+                inside ? (canGo ? 0.30 + 0.12 * pulse : 0.18 + 0.06 * pulse) : 0.06 + 0.05 * pulse));
+        gc.fillOval(g.gx() - gr - 18, g.gy() - gr - 18, (gr + 18) * 2, (gr + 18) * 2);
+        gc.setFill(Color.rgb(10, 24, 36));
+        gc.fillOval(g.gx() - gr, g.gy() - gr, gr * 2, gr * 2);
+        gc.setStroke(canGo ? Color.rgb(120, 235, 255) : Color.rgb(160, 160, 172));
+        gc.setLineWidth(inside ? 5 : 3);
+        gc.strokeOval(g.gx() - gr, g.gy() - gr, gr * 2, gr * 2);
+        gc.setStroke(Color.color(0.7, 0.92, 1.0, 0.4));
+        gc.setLineWidth(1);
+        gc.strokeOval(g.gx() - gr + 10, g.gy() - gr + 10, (gr - 10) * 2, (gr - 10) * 2);
+        Font gf = Font.font("Microsoft YaHei", FontWeight.BOLD, 20);
+        String go = "出 征";
+        double goW = measureWidth(gf, go);
+        gc.setFont(gf);
+        gc.setFill(Color.rgb(6, 8, 16, 0.65));
+        gc.fillText(go, g.gx() - goW / 2 + 1, g.gy() + 9);
+        gc.setFill(canGo ? Color.rgb(236, 253, 255) : Color.rgb(210, 210, 220));
+        gc.fillText(go, g.gx() - goW / 2, g.gy() + 8);
+        // 站在光门内时的提示（画在光门上方，带底卡，主次分明）
+        if (inside) {
+            Font pf = Font.font("Microsoft YaHei", FontWeight.BOLD, 15);
+            String msg;
+            Color mc;
+            if (chosen == 0) {
+                msg = "请先靠近一位勇者，空格确认同行";
+                mc = Color.rgb(255, 182, 110);
+            } else if (chosen == LobbyClass.SUMMONER) {
+                msg = "召唤师尚未开放 · 请另选一位";
+                mc = Color.rgb(255, 150, 120);
+            } else {
+                msg = "按 E（或空格）出发";
+                mc = Color.rgb(120, 240, 200);
+            }
+            double pw = measureWidth(pf, msg);
+            double pTop = g.gy() - gr - 50;
+            double pH = 30;
+            gc.setFill(Color.rgb(6, 6, 16, 0.78));
+            gc.fillRoundRect(g.gx() - pw / 2 - 15, pTop, pw + 30, pH, 9, 9);
+            gc.setStroke(Color.color(mc.getRed(), mc.getGreen(), mc.getBlue(), 0.8));
+            gc.setLineWidth(1.5);
+            gc.strokeRoundRect(g.gx() - pw / 2 - 15, pTop, pw + 30, pH, 9, 9);
+            gc.setFont(pf);
+            gc.setFill(mc);
+            gc.fillText(msg, g.gx() - pw / 2, pTop + pH / 2 + pf.getSize() * 0.36);
+        }
+
+        // ---- 化身：初始为国王(heroes[0])，空格确认后替换为随行的勇者精灵 ----
+        // 统一按自然尺寸 1:1、脚底贴化身中心下缘绘制
+        gc.setFill(Color.rgb(0, 0, 0, 0.35));
+        gc.fillOval(px - 20, py - 3, 40, 13);
+        Image av = Sprites.heroes[chosen];
+        if (av != null) {
+            double aw = av.getWidth();
+            double ah = av.getHeight();
+            gc.drawImage(av, Math.round(px - aw / 2), Math.round(py - 4 - ah));
+        }
+        if (chosen != 0) {
+            // 化身头顶的已选状态小卡（和名牌同一套"徽章"语言）
+            Color lac = classAccent(chosen);
+            boolean locked2 = chosen == LobbyClass.SUMMONER;
+            String label = locked2 ? "已选 · 召唤师" : "已选 · " + LobbyClass.name(chosen);
+            Font cf = Font.font("Microsoft YaHei", FontWeight.BOLD, 13);
+            double cw = measureWidth(cf, label);
+            double cTop = py - 60;
+            double cH = 24;
+            gc.setFill(locked2 ? Color.rgb(30, 20, 8, 0.8) : Color.rgb(6, 6, 16, 0.75));
+            gc.fillRoundRect(px - cw / 2 - 10, cTop, cw + 20, cH, 8, 8);
+            gc.setStroke(Color.color(lac.getRed(), lac.getGreen(), lac.getBlue(),
+                    locked2 ? 0.75 : 0.9));
+            gc.setLineWidth(1.5);
+            gc.strokeRoundRect(px - cw / 2 - 10, cTop, cw + 20, cH, 8, 8);
+            gc.setFont(cf);
+            gc.setFill(locked2 ? Color.rgb(255, 214, 150) : lac);
+            gc.fillText(label, px - cw / 2, cTop + cH / 2 + cf.getSize() * 0.36);
+        }
+
+        // ---- 右侧：站在角色面前时的细节立绘（透明，离开对应区域即滑出缩回） ----
+        if (cardClass != 0 && reveal > 0.001) {
+            drawClassCard(vw, vh, cardClass, reveal);
+        }
+        // ---- 屏幕下方的招募确认对话条：与右侧卡同步出现，已随行的不重复提问 ----
+        if (cardClass != 0 && cardClass != chosen && reveal > 0.03) {
+            drawRecruitBar(vw, vh, cardClass, chosen, reveal);
+        }
+    }
+
+    /**
+     * 屏幕下方的招募确认文字栏。target = 正在面对、待招募的勇者；chosen = 当前随行者
+     * （0 表示还控制国王）。锁定勇者只显示"尚未准备"，可空格改选/确认的才给提示。
+     * reveal 复用右侧立绘卡的进度，进出同步淡入淡出。
+     */
+    private void drawRecruitBar(double vw, double vh, int target, int chosen, double reveal) {
+        double r = Math.max(0, Math.min(1, reveal));
+        if (r < 0.03) {
+            return;
+        }
+        double fade = Math.pow(r, 1.6);
+        Color ac = classAccent(target);
+        boolean locked = target == LobbyClass.SUMMONER;
+
+        // 条占屏幕左下部，右侧避开立绘文字面板
+        double barH = 92;
+        double cardW = Math.min(430, vw * 0.34);
+        double x0 = 18;
+        double right = vw - cardW - 36;
+        double barW = Math.max(240, right - x0);
+        double y = vh - barH - 16;
+
+        gc.setFill(Color.rgb(8, 7, 18, 0.82 * fade));
+        gc.fillRoundRect(x0, y, barW, barH, 14, 14);
+        gc.setStroke(Color.color(ac.getRed(), ac.getGreen(), ac.getBlue(), 0.55 * fade));
+        gc.setLineWidth(1.2);
+        gc.strokeRoundRect(x0, y, barW, barH, 14, 14);
+        gc.setFill(Color.color(ac.getRed(), ac.getGreen(), ac.getBlue(), 0.95 * fade));
+        gc.fillRoundRect(x0 + 10, y + 14, 5, barH - 28, 2, 2);
+
+        Font qF = Font.font("Microsoft YaHei", FontWeight.BOLD, 16);
+        double baseY = y + barH / 2 + qF.getSize() * 0.36 - 1;
+        double tx = x0 + 28;
+        String prefix = locked ? "" : "「" + LobbyClass.name(target) + "」";
+        String q = locked ? "这位勇者尚未做好准备，无法随行…"
+                : (chosen != 0 ? "确定改选为这位勇者出征吗？" : "确定选择这位勇者出征吗？");
+        gc.setFont(qF);
+        if (!prefix.isEmpty()) {
+            gc.setFill(Color.color(ac.getRed(), ac.getGreen(), ac.getBlue(), 0.98 * fade));
+            gc.fillText(prefix, tx, baseY);
+            tx += measureWidth(qF, prefix) + 4;
+        }
+        if (locked) {
+            gc.setFill(Color.rgb(255, 205, 140, 0.97 * fade));
+        } else {
+            gc.setFill(Color.rgb(255, 255, 255, 0.97 * fade));
+        }
+        gc.fillText(q, tx, baseY);
+
+        // 右侧按键提示
+        String hint = locked ? "尚未开放" : "空格 确认";
+        Font hF = Font.font("Microsoft YaHei", FontWeight.BOLD, 14);
+        double hW = measureWidth(hF, hint);
+        double hx = x0 + barW - hW - 22;
+        gc.setFont(hF);
+        gc.setFill(Color.color(locked ? 1 : 0.66, locked ? 0.80 : 0.94, locked ? 0.55 : 0.90, 0.95 * fade));
+        gc.fillText(hint, hx, baseY);
+    }
+
+    /**
+     * 站在角色面前时从屏右滑入的细节立绘：不画任何底板/白底/描边，只有立绘与文字，
+     * 任其直接叠在王座厅场景上。reveal 0..1 = 展示进度（1 完全到位、0 缩回屏外），
+     * 进出共用同一根 ease-out 曲线，因此离开区域时立绘会原路滑出。
+     */
+    private void drawClassCard(double vw, double vh, int ck, double reveal) {
+        Image art = Sprites.heroPortraits[ck];
+        if (art == null) {
+            return;
+        }
+        double cardW = Math.min(430, vw * 0.34);
+        double targetX = vw - cardW - 12;
+        double r = Math.max(0, Math.min(1, reveal));
+        double p = 1 - Math.pow(1 - r, 3);          // ease-out cubic
+        double fromX = vw + 40;
+        double x = fromX + (targetX - fromX) * p;
+        Color ac = classAccent(ck);
+        boolean locked = ck == LobbyClass.SUMMONER;
+
+        double pad = 16;
+        double innerW = cardW - pad * 2;
+        double infoH = 244;
+        double infoTop = vh - 18 - infoH;
+        double artTop = 96;
+        double artAvailH = infoTop - artTop - 24;
+
+        // 立绘：透明背景图，contain 等比，底边贴近文字区上沿，避免整体悬空
+        double sc = Math.min(innerW / art.getWidth(), artAvailH / art.getHeight());
+        double aw = art.getWidth() * sc;
+        double ah = art.getHeight() * sc;
+        gc.drawImage(art, x + (cardW - aw) / 2, artTop + (artAvailH - ah) / 2, aw, ah);
+
+        // 锁定角标（召唤师）：一行琥珀小字，无底色
+        if (locked) {
+            shadowLeft(x + pad, artTop + 16,
+                    Font.font("Microsoft YaHei", FontWeight.BOLD, 12),
+                    "未开放 · 敬请期待", Color.rgb(255, 206, 132));
+        }
+
+        // ---- 文字信息底：职业色的半透明面板，只垫文字区（立绘保持无底悬浮不动） ----
+        double panelX = x + 8;
+        double panelTop = infoTop - 6;
+        double panelW = cardW - 16;
+        double panelBottom = vh - 14;
+        gc.setFill(Color.color(ac.getRed(), ac.getGreen(), ac.getBlue(), 0.20));
+        gc.fillRoundRect(panelX, panelTop, panelW, panelBottom - panelTop, 12, 12);
+        gc.setStroke(Color.color(ac.getRed(), ac.getGreen(), ac.getBlue(), 0.45));
+        gc.setLineWidth(1);
+        gc.strokeRoundRect(panelX, panelTop, panelW, panelBottom - panelTop, 12, 12);
+
+        // ---- 信息区（文字自带投影，保证在面板与明亮背景上仍清晰） ----
+        double iy = infoTop + 8;
+        double tx = x + pad;
+        shadowLeft(tx, iy + 13, Font.font("Microsoft YaHei", 11),
+                CARD_EN[ck], Color.rgb(200, 198, 224));
+        shadowLeft(tx, iy + 47, Font.font("Microsoft YaHei", FontWeight.BOLD, 26),
+                CARD_NAME[ck], Color.WHITE);
+        // 定位：左竖色条 + 文本
+        double roleY = iy + 78;
+        gc.setFill(ac);
+        gc.fillRoundRect(tx, roleY - 13, 4, 17, 2, 2);
+        shadowLeft(tx + 11, roleY, Font.font("Microsoft YaHei", 14.5),
+                CARD_ROLE[ck], Color.rgb(244, 242, 252));
+        // 特征：逐行菱形点
+        double fy = iy + 126;
+        Font featF = Font.font("Microsoft YaHei", 13);
+        for (String f : CARD_FEATS[ck]) {
+            gc.setFill(Color.color(ac.getRed(), ac.getGreen(), ac.getBlue(), 0.95));
+            gc.fillRoundRect(tx + 5, fy - 9.5, 5, 5, 1.2, 1.2);
+            shadowLeft(tx + 21, fy, featF, f, Color.rgb(228, 226, 242));
+            fy += 21;
+        }
+        if (locked) {
+            shadowLeft(tx, fy + 12, Font.font("Microsoft YaHei", 12.5),
+                    "● 尚未开放 · 敬请期待", Color.rgb(255, 214, 160));
+        } else {
+            drawCardBar(tx, fy + 8, "生命", Math.round(CARD_LIFE[ck] * 150) + "",
+                    CARD_LIFE[ck], ac);
+            drawCardBar(tx, fy + 32, "移速", Math.round(CARD_SPEED[ck] * 235) + "",
+                    CARD_SPEED[ck], Color.rgb(120, 220, 255));
+        }
+    }
+
+    /** 无底数值条：标签 + 数值（带投影），进度只画彩色圆角条 + 细描边，不留白槽 */
+    private void drawCardBar(double x, double y, String label, String value,
+            double frac, Color color) {
+        shadowLeft(x, y + 6, Font.font("Microsoft YaHei", 12.5), label,
+                Color.rgb(240, 238, 250));
+        shadowLeft(x + 62, y + 6, Font.font("Consolas", 12), value, Color.WHITE);
+        double bw = 150;
+        double bx = x + 134;
+        double bh = 6;
+        double f = Math.max(0, Math.min(1, frac));
+        gc.setStroke(Color.color(0, 0, 0, 0.5));
+        gc.setLineWidth(1);
+        gc.strokeRoundRect(bx, y, bw, bh, 3, 3);
+        if (f > 0.01) {
+            gc.setFill(Color.color(color.getRed(), color.getGreen(), color.getBlue(), 0.95));
+            gc.fillRoundRect(bx, y, bw * f, bh, 3, 3);
+        }
+    }
+
+    /** 左对齐文字 + 细投影：不垫底色的前提下保证可读性 */
+    private void shadowLeft(double x, double baseY, Font f, String s, Color fill) {
+        gc.setFont(f);
+        gc.setFill(Color.rgb(0, 0, 0, 0.55));
+        gc.fillText(s, x + 1, baseY + 1);
+        gc.setFill(fill);
+        gc.fillText(s, x, baseY);
+    }
+
+    /**
+     * 从顶梁高处照向某座祭坛的聚光：顶部窄、落点宽，光在落点最亮。
+     * strength≈0..1；只对当前选中的职业调用，其余祭坛无光束。
+     */
+    private static void drawSpotlight(GraphicsContext g, double cx, double padY, double padR, double strength) {
+        double topY = 4;
+        double apex = 8;
+        // 外圈柔光
+        g.setFill(new LinearGradient(cx, topY, cx, padY, false, CycleMethod.NO_CYCLE,
+                new Stop(0, Color.rgb(255, 246, 208, 0)),
+                new Stop(1, Color.rgb(255, 244, 205, 0.14 * strength))));
+        g.fillPolygon(new double[]{ cx - apex, cx + apex, cx + padR * 1.7, cx - padR * 1.7 },
+                new double[]{ topY, topY, padY, padY }, 4);
+        // 内束更亮
+        g.setFill(new LinearGradient(cx, topY, cx, padY, false, CycleMethod.NO_CYCLE,
+                new Stop(0, Color.rgb(255, 250, 228, 0)),
+                new Stop(0.65, Color.rgb(255, 250, 228, 0.10 * strength)),
+                new Stop(1, Color.rgb(255, 250, 228, 0.30 * strength))));
+        g.fillPolygon(new double[]{ cx - apex * 0.5, cx + apex * 0.5, cx + padR, cx - padR },
+                new double[]{ topY, topY, padY, padY }, 4);
+        // 最亮的核心窄带
+        g.setFill(Color.rgb(255, 252, 235, 0.20 * strength));
+        g.fillPolygon(new double[]{ cx - apex * 0.2, cx + apex * 0.2, cx + padR * 0.34, cx - padR * 0.34 },
+                new double[]{ topY, topY, padY, padY }, 4);
     }
 
     /**
