@@ -39,6 +39,12 @@ public final class GameApp extends Application {
 
     private World world;
     private Renderer renderer;
+    private Stage stage;
+
+    /** 主界面（inTitle）相关：overlay=当前覆盖面板；dragSlider=正在拖动的音量条下标(-1=无)；鼠标位置 */
+    private int overlay;
+    private int dragSlider = -1;
+    private double mouseX = -1000, mouseY = -1000;
 
     /** 战斗冒烟帧数：-Dab.smoke=180 = 自动选巫师打 180 帧后退出（战斗路径回归） */
     private int smokeFrames = -1;
@@ -47,8 +53,10 @@ public final class GameApp extends Application {
     private int lobbySmokeFrames = -1;
     private int lobbyRendered;
 
+    /** true=主菜单（标题画面）；false=进入大厅或战斗 */
+    private boolean inTitle = true;
     /** true=准备大厅；false=正式战斗 */
-    private boolean inLobby = true;
+    private boolean inLobby = false;
     /** 大厅化身的屏幕坐标（首帧用 geom 出生点赋值） */
     private double lx, ly;
     private boolean lobbyPosInit;
@@ -59,6 +67,8 @@ public final class GameApp extends Application {
     private int cardClass;
     /** 立绘展示进度 0..1：1=完全滑入，0=缩回屏外（离开角色范围时回落） */
     private double cardReveal;
+    /** 大厅左上角操作指引是否展开（可点「✕」收起，点「❖ 操作指引 ▸」展开） */
+    private boolean lobbyGuide = true;
 
     @Override
     public void start(Stage stage) {
@@ -83,6 +93,7 @@ public final class GameApp extends Application {
         if (lobbyFace != null && !lobbyFace.isBlank()) {
             presetNear = Integer.parseInt(lobbyFace);
         }
+        GameConfig.load();   // 音量 / 显示玩家 ID / 显示模式 / 分辨率 / 帧率（含首次生成玩家 ID）
         Sprites.load();
 
         world = new World(20260907L);
@@ -95,6 +106,10 @@ public final class GameApp extends Application {
 
         Scene scene = new Scene(root, 1280, 720);
         scene.setOnKeyPressed(e -> {
+            if (inTitle) {
+                handleTitleKey(e.getCode());
+                return;
+            }
             if (inLobby) {
                 // 大厅阶段：WASD 靠 pressed 轮询移动；空格/E 先应答面前勇者的招募，其次光门出发
                 pressed.add(e.getCode());
@@ -112,19 +127,69 @@ public final class GameApp extends Application {
         });
         scene.setOnKeyReleased(e -> pressed.remove(e.getCode()));
 
+        scene.setOnMouseMoved(e -> {
+            mouseX = e.getX();
+            mouseY = e.getY();
+        });
+        // 音量滑块：按下即定位、按住拖动连续调节
+        scene.setOnMousePressed(e -> {
+            if (e.getButton() != MouseButton.PRIMARY
+                    || !inTitle || overlay != Renderer.OVER_SETTINGS) {
+                return;
+            }
+            int s = settingsSliderAt(e.getX(), e.getY());
+            dragSlider = s;
+            if (s >= 0) {
+                applyVolumeDrag(s, e.getX());
+            }
+        });
+        scene.setOnMouseDragged(e -> {
+            if (dragSlider >= 0 && inTitle && overlay == Renderer.OVER_SETTINGS) {
+                applyVolumeDrag(dragSlider, e.getX());
+            }
+        });
+        // 音量在拖动中不落盘，松开时写一次，避免拖动过程高频写配置
+        scene.setOnMouseReleased(e -> {
+            if (dragSlider >= 0) {
+                GameConfig.save();
+            }
+            dragSlider = -1;
+        });
         scene.setOnMouseClicked(e -> {
-            if (e.getButton() != MouseButton.PRIMARY || inLobby) {
+            if (e.getButton() != MouseButton.PRIMARY) {
+                return;
+            }
+            if (inTitle) {
+                handleTitleClick(e.getX(), e.getY());
+                return;
+            }
+            if (inLobby) {
+                // 大厅里鼠标只用于指引的收起/展开，角色交互仍走空格/E
+                double vw = renderer.getCanvasWidth();
+                double vh = renderer.getCanvasHeight();
+                Renderer.GuideGeom gg = Renderer.lobbyGuideGeom(vw, vh);
+                Renderer.Rect r = lobbyGuide ? gg.hide() : gg.open();
+                if (r.hit(e.getX(), e.getY())) {
+                    lobbyGuide = !lobbyGuide;
+                }
                 return;
             }
             handleChoiceClick(e.getX(), e.getY());
         });
 
+        this.stage = stage;
         stage.setTitle("Arcane Brigade — 奥术旅团");
         stage.setScene(scene);
         stage.show();
         root.requestFocus();
+        applyDisplay();          // 应用本地配置的显示模式 / 窗口分辨率
 
         renderer = new Renderer(canvas);
+
+        // 大厅冒烟（ab.lobbyFrames）：跳过主界面，直接进入准备大厅渲染
+        if (lobbySmokeFrames > 0) {
+            enterLobby();
+        }
 
         // 冒烟自检用：把化身放到某位勇者面前，让招募/细节立绘路径真正绘制。
         // 目标 = ab.lobbySel（已随行）或 ab.lobbyFace（站在面前未招募）。
@@ -146,7 +211,13 @@ public final class GameApp extends Application {
             beginGame(HeroClass.WIZARD);
         }
 
+        // 主界面 BGM：仍在标题（非冒烟直进大厅/战斗）时开始循环播放
+        if (inTitle) {
+            GameAudio.startMenuBgm();
+        }
+
         final long[] last = { System.nanoTime() };
+        final long[] lastDraw = { System.nanoTime() };
         final double[] acc = { 0.0 };
         final double[] fps = { 60.0 };
 
@@ -160,23 +231,49 @@ public final class GameApp extends Application {
                 }
                 fps[0] += (1.0 / Math.max(dt, 1e-6) - fps[0]) * 0.08;
 
+                // 帧率上限只限制「画面刷新」：逻辑仍每帧按固定步长推进。
+                // 30=隔帧绘制；60=默认；120 受显示器刷新限制，高于实际刷新时等同不限。
+                double period = 1.0 / GameConfig.fpsCap;
+                boolean drawNow = (now - lastDraw[0]) / 1e9 >= period - 1e-9;
+                if (drawNow) {
+                    lastDraw[0] = now;
+                }
+
+                // ---- 主菜单阶段（标题画面，纯绘制 + 点击交互） ----
+                if (inTitle) {
+                    lobbyAnimT += dt;
+                    if (drawNow) {
+                        renderer.setFps(fps[0]);
+                        double vw = canvas.getWidth();
+                        double vh = canvas.getHeight();
+                        int hover = overlay == Renderer.OVER_NONE
+                                ? Renderer.menuHit(mouseX, mouseY, vw, vh) : -1;
+                        renderer.drawTitle(lobbyAnimT, hover, overlay,
+                                GameConfig.displayMode == GameConfig.MODE_FULLSCREEN);
+                    }
+                    return;
+                }
+
                 // ---- 准备大厅阶段（不推进 core World） ----
                 if (inLobby) {
-                    renderer.setFps(fps[0]);
                     lobbyAnimT += dt;
                     double vw = canvas.getWidth();
                     double vh = canvas.getHeight();
                     Renderer.LobbyGeom g = Renderer.geom(vw, vh);
                     stepLobby(dt, g);
-                    renderer.drawLobby(g, lx, ly, lobbyChoice, lobbyAnimT, cardClass, cardReveal);
-                    if (lobbySmokeFrames > 0 && ++lobbyRendered >= lobbySmokeFrames) {
-                        System.out.printf("[lobby] 渲染 %d 帧完成（大厅），退出%n", lobbyRendered);
-                        Platform.exit();
+                    if (drawNow) {
+                        renderer.setFps(fps[0]);
+                        renderer.drawLobby(g, lx, ly, lobbyChoice, lobbyAnimT, cardClass, cardReveal,
+                                lobbyGuide);
+                        if (lobbySmokeFrames > 0 && ++lobbyRendered >= lobbySmokeFrames) {
+                            System.out.printf("[lobby] 渲染 %d 帧完成（大厅），退出%n", lobbyRendered);
+                            Platform.exit();
+                        }
                     }
                     return;
                 }
 
-                // ---- 正式战斗阶段 ----
+                // ---- 正式战斗阶段（逻辑推进与画面刷新解耦） ----
                 boolean paused = world.wizardCount() > 0
                         && world.pendingChoices(world.wizard(0)) > 0;
                 if (!paused) {
@@ -195,6 +292,9 @@ public final class GameApp extends Application {
                     acc[0] = 0.0;   // 暂停时不累积
                 }
 
+                if (!drawNow) {
+                    return;
+                }
                 renderer.setFps(fps[0]);
                 renderer.draw(world, (float) (acc[0] / STEP));
 
@@ -216,6 +316,165 @@ public final class GameApp extends Application {
                 }
             }
         }.start();
+    }
+
+    /** 从主界面「开始游戏」进入准备大厅。保留冒烟预设的 lobbyChoice 不动。 */
+    private void enterLobby() {
+        inTitle = false;
+        inLobby = true;
+        overlay = Renderer.OVER_NONE;
+        lobbyPosInit = false;    // 首帧按出生点落位
+        cardClass = 0;
+        cardReveal = 0;
+        GameAudio.stopMenuBgm();        // 离开主界面
+        GameAudio.startLobbyBgm();      // 大厅主音乐（sans..mp3）循环
+        pressed.clear();
+    }
+
+    /** 主界面键盘：Esc 关闭覆盖面板；无覆盖层时 回车/空格 直接开局；F11 切全屏 */
+    private void handleTitleKey(KeyCode code) {
+        if (code == KeyCode.ESCAPE) {
+            if (overlay != Renderer.OVER_NONE) {
+                overlay = Renderer.OVER_NONE;
+            }
+            return;
+        }
+        if (code == KeyCode.F11) {
+            toggleFullscreen();
+            return;
+        }
+        if (overlay == Renderer.OVER_NONE
+                && (code == KeyCode.ENTER || code == KeyCode.SPACE)) {
+            enterLobby();
+        }
+    }
+
+    /**
+     * 主界面点击：无覆盖层时命中底部五个菜单按钮；覆盖层内「设置」走专用逻辑，
+     * 其余覆盖层只认「返回」钮。
+     */
+    private void handleTitleClick(double mx, double my) {
+        double vw = renderer.getCanvasWidth();
+        double vh = renderer.getCanvasHeight();
+        if (overlay == Renderer.OVER_NONE) {
+            switch (Renderer.menuHit(mx, my, vw, vh)) {
+                case 0 -> enterLobby();                     // 开始游戏 → 准备大厅
+                case 1 -> overlay = Renderer.OVER_MULTI;    // 多人联机（开发中占位）
+                case 2 -> overlay = Renderer.OVER_SETTINGS; // 设置
+                case 3 -> overlay = Renderer.OVER_HELP;     // 操作说明
+                case 4 -> Platform.exit();                  // 退出游戏
+                default -> { /* 空白区不响应 */ }
+            }
+            return;
+        }
+        if (overlay == Renderer.OVER_SETTINGS) {
+            handleSettingsClick(mx, my);
+            return;
+        }
+        Renderer.OverlayGeom g = Renderer.menuOverlayGeom(vw, vh, overlay);
+        if (g.close().hit(mx, my)) {
+            overlay = Renderer.OVER_NONE;
+        }
+    }
+
+    /** 设置面板内的点击：返回 / 玩家ID开关 / 音量 / 三组三选一 */
+    private void handleSettingsClick(double mx, double my) {
+        double vw = renderer.getCanvasWidth();
+        double vh = renderer.getCanvasHeight();
+        Renderer.SettingsGeom g = Renderer.settingsGeom(vw, vh);
+        if (g.close().hit(mx, my)) {
+            overlay = Renderer.OVER_NONE;
+            return;
+        }
+        if (g.showId().hit(mx, my)) {
+            GameConfig.showPlayerId = !GameConfig.showPlayerId;
+            GameConfig.save();
+            return;
+        }
+        int s = settingsSliderAt(mx, my);
+        if (s >= 0) {
+            applyVolumeDrag(s, mx);
+            return;
+        }
+        int mi = segmentHit(g.modes(), mx, my);
+        if (mi >= 0) {
+            if (GameConfig.displayMode != mi) {
+                GameConfig.displayMode = mi;
+                applyDisplay();
+            }
+            return;
+        }
+        int ri = segmentHit(g.resolutions(), mx, my);
+        if (ri >= 0 && GameConfig.RESOLUTIONS[ri][0] != GameConfig.winW) {
+            GameConfig.winW = GameConfig.RESOLUTIONS[ri][0];
+            GameConfig.winH = GameConfig.RESOLUTIONS[ri][1];
+            applyDisplay();
+            return;
+        }
+        int fi = segmentHit(g.fps(), mx, my);
+        if (fi >= 0 && GameConfig.FPS_CHOICES[fi] != GameConfig.fpsCap) {
+            GameConfig.fpsCap = GameConfig.FPS_CHOICES[fi];
+            GameConfig.save();
+        }
+    }
+
+    /** 屏幕坐标落在哪条音量条上；没点上返回 -1 */
+    private int settingsSliderAt(double mx, double my) {
+        Renderer.SettingsGeom g = Renderer.settingsGeom(
+                renderer.getCanvasWidth(), renderer.getCanvasHeight());
+        for (int i = 0; i < GameConfig.VOLUME_COUNT; i++) {
+            if (g.volumes()[i].hit(mx, my)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** 命中一排三选一里的哪一段 */
+    private static int segmentHit(Renderer.Rect[] segs, double mx, double my) {
+        for (int i = 0; i < segs.length; i++) {
+            if (segs[i].hit(mx, my)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** 把横向位置换算成 0..100 音量并写入配置（点击 / 拖动共用） */
+    private void applyVolumeDrag(int idx, double mx) {
+        Renderer.SettingsGeom g = Renderer.settingsGeom(
+                renderer.getCanvasWidth(), renderer.getCanvasHeight());
+        Renderer.Rect r = g.volumes()[idx];
+        double frac = Math.max(0, Math.min(1, (mx - r.x()) / r.w()));
+        GameConfig.setVolume(idx, (int) Math.round(frac * 100));
+        GameAudio.refreshVolume();   // 拖动中实时试听 BGM 音量
+    }
+
+    /**
+     * 应用显示模式与窗口分辨率（设置面板 / F11 / 启动时共用）。
+     * 窗口=带标题栏的指定分辨率；全屏 / 无边框窗口=铺满全屏（JavaFX 的全屏即是
+     * 无边框整屏，运行时无法临时去装饰，故两种都走 setFullScreen）。
+     */
+    private void applyDisplay() {
+        if (stage == null) {
+            return;
+        }
+        if (GameConfig.displayMode == GameConfig.MODE_WINDOW) {
+            stage.setFullScreen(false);
+            stage.setResizable(true);
+            stage.setWidth(GameConfig.winW);
+            stage.setHeight(GameConfig.winH);
+        } else {
+            stage.setFullScreen(true);   // MODE_FULLSCREEN 与 MODE_BORDERLESS 同样全屏
+        }
+        GameConfig.save();
+    }
+
+    /** F11：窗口模式与全屏互相切换 */
+    private void toggleFullscreen() {
+        GameConfig.displayMode = (GameConfig.displayMode == GameConfig.MODE_FULLSCREEN)
+                ? GameConfig.MODE_WINDOW : GameConfig.MODE_FULLSCREEN;
+        applyDisplay();
     }
 
     /** 大厅一帧：按 WASD 移动并夹紧在可走范围内，靠近角色即选中（含召唤师可高亮） */
@@ -309,13 +568,18 @@ public final class GameApp extends Application {
         }
     }
 
-    /** 玩家确认职业：生成对应巫师，退出大厅，正式开局 */
+    /** 玩家确认职业：生成对应勇者，退出大厅/主菜单，正式开局 */
     private void beginGame(int classKind) {
-        if (!inLobby) {
-            return;
+        if (!inTitle && !inLobby) {
+            return;                       // 已在战斗中，忽略重复触发
         }
         world.spawnWizard(0f, 0f, classKind);
+        inTitle = false;
         inLobby = false;
+        overlay = Renderer.OVER_NONE;
+        GameAudio.stopMenuBgm();  // 出征 / 战斗冒烟都离开主界面
+        GameAudio.stopLobbyBgm(); // 战斗中暂时没有 BGM
+        pressed.clear();
     }
 
     /**

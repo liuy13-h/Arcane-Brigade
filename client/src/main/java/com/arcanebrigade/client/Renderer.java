@@ -314,6 +314,17 @@ public final class Renderer {
     }
 
     private void drawHud(World w, double vw, double vh) {
+        // 右上角玩家 ID（「设置」里可关）
+        if (GameConfig.showPlayerId && GameConfig.playerId != null) {
+            gc.setFont(hudFont);
+            String tag = "ID " + GameConfig.playerId;
+            double tw = measureWidth(hudFont, tag);
+            gc.setFill(Color.rgb(12, 10, 18, 0.45));
+            gc.fillRoundRect(vw - tw - 28, 10, tw + 16, 24, 6, 6);
+            gc.setFill(Color.rgb(228, 224, 240, 0.92));
+            gc.fillText(tag, vw - tw - 20, 26);
+        }
+
         gc.setFont(hudFont);
         gc.setFill(Color.rgb(228, 228, 240));
         int reactions = w.reactionCount(Element.R_STEAM)
@@ -648,7 +659,7 @@ public final class Renderer {
     // ------------------------------------------------------------------
     // 右侧角色细节卡：文案与数值。下标=职业 id（1..4 = 巫师/战士/弓箭手/召唤师）。
     // ------------------------------------------------------------------
-    private static final String[] CARD_NAME = { "", "巫师", "战士", "弓箭手", "召唤师" };
+    private static final String[] CARD_NAME = { "", "法师", "战士", "弓箭手", "召唤师" };
     private static final String[] CARD_EN = { "", "WIZARD", "VANGUARD", "ARCHER", "SUMMONER" };
     private static final String[] CARD_ROLE = {
             "", "远程 · 法系爆发", "近战 · 范围挥砍", "远程 · 穿透点射", "辅助 · 召唤协战" };
@@ -709,7 +720,7 @@ public final class Renderer {
      * 条脚底线上均匀一字排开。px/py 是化身圆心，与 geom 坐标同参考系。
      */
     public void drawLobby(LobbyGeom g, double px, double py, int chosen, double t,
-            int cardClass, double reveal) {
+            int cardClass, double reveal, boolean showGuide) {
         double vw = canvas.getWidth();
         double vh = canvas.getHeight();
         double pulse = 0.5 + 0.5 * Math.sin(t * 2.4);
@@ -735,22 +746,8 @@ public final class Renderer {
                 new Stop(1, Color.rgb(0, 0, 0, 0.45))));
         gc.fillRect(0, 0, vw, vh);
 
-        // ---- 顶部标题区：柔和渐变幕布 + 「大标题 → 引导小字」两层主次 ----
-        gc.setFill(new LinearGradient(0, 0, 0, 96, false, CycleMethod.NO_CYCLE,
-                new Stop(0, Color.rgb(5, 4, 13, 0.62)),
-                new Stop(1, Color.rgb(5, 4, 13, 0.0))));
-        gc.fillRect(0, 0, vw, 96);
-        Font titleFont = Font.font("Microsoft YaHei", FontWeight.BOLD, 27);
-        drawTextSoft(gc, titleFont, vw / 2, 38, "奥 术 旅 团",
-                Color.rgb(255, 227, 168), Color.rgb(18, 10, 4));
-        Font hf = Font.font("Microsoft YaHei", 13.5);
-        String hint = "WASD 移动 · 靠近勇者空格确认同行 · 走进光门按 E 出征";
-        double hw = measureWidth(hf, hint);
-        gc.setFont(hf);
-        gc.setFill(Color.rgb(228, 225, 240, 0.92));
-        gc.fillText(hint, (vw - hw) / 2, 63);
-        gc.setFill(Color.rgb(255, 227, 168, 0.65));
-        gc.fillRoundRect(vw / 2 - 24, 73, 48, 2, 1, 1);
+        // ---- 左上角操作指引（可隐藏） ----
+        drawLobbyGuide(showGuide);
 
         // ---- 四个角色：均匀一字排开，站在同一脚底线上 ----
         // 立绘已由 Sprites 按整数倍预放大(×2, 最近邻)，这里按自然尺寸 1:1 绘制、
@@ -1181,5 +1178,634 @@ public final class Renderer {
             gc.setFont(Font.font("Consolas", 12));
             gc.fillText("点击选择", bx + cardW / 2 - 24, y0 + cardH - 20);
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 主菜单（TITLE）
+    //
+    // 启动后第一个画面：整幅标题美术（3072×2048，底部内嵌五个菜单按钮）。
+    // 采用 contain 等比铺放——任意窗口比例下整张图都完整可见、左右留暗底，
+    // 按钮命中区永远和美术里印着的位置一致。GameApp 与 Renderer 都只走
+    // menuButtons()/menuHit() 这一份几何，避免"画的框"和"点的框"错位。
+    // ------------------------------------------------------------------
+
+    /** 主界面按钮数量 */
+    public static final int MENU_COUNT = 5;
+    /** 覆盖层种类：无 / 操作说明 / 设置 / 多人联机（占位） */
+    public static final int OVER_NONE = 0;
+    public static final int OVER_HELP = 1;
+    public static final int OVER_SETTINGS = 2;
+    public static final int OVER_MULTI = 3;
+
+    /** 标题画面设计基准尺寸（与美术原图一致）。布局 / 命中区都用它换算。 */
+    private static final double TITLE_W = 3072.0;
+    private static final double TITLE_H = 2048.0;
+
+    /** 五个菜单按钮在标题画（图像坐标）里的命中矩形：{x0, y0, x1, y1}。 */
+    private static final int[][] MENU_BOX = {
+            { 416, 1905, 836, 2048 },   // 0 开始游戏
+            { 866, 1905, 1286, 2048 },  // 1 多人联机 1-4 人
+            { 1330, 1905, 1750, 2048 }, // 2 设置
+            { 1758, 1905, 2178, 2048 }, // 3 操作说明
+            { 2183, 1905, 2603, 2048 }, // 4 退出游戏
+    };
+
+    /** 按钮文字（仅美术缺失兜底绘制时用；美术在位时字是印在图画里的） */
+    private static final String[] MENU_LABELS = {
+            "开始游戏", "多人联机 1–4 人", "设置", "操作说明", "退出游戏" };
+
+    private static final String[] HELP_LINES = {
+            "移动：WASD / 方向键 —— 本作为幸存者玩法，战斗自动开火，你只管走位。",
+            "准备大厅：靠近勇者后按 空格 / E —— 招募同行（可再靠近他人改选）。",
+            "出征：走进大厅下方光门按 E —— 已选可出战职业即可开战。",
+            "升级三选一：鼠标点击卡片选择；按 R 键可免费重抽一次。",
+            "胜利：存活满 20 分钟并击败最终 Boss；全队倒下则失败。",
+    };
+
+    /** 屏幕坐标小矩形：命中判定与绘制共用同一份 */
+    public record Rect(double x, double y, double w, double h) {
+        public boolean hit(double mx, double my) {
+            return mx >= x && mx <= x + w && my >= y && my <= y + h;
+        }
+    }
+
+    /**
+     * 覆盖层面板几何（屏幕坐标）。close 是「返回」钮；clickable 是面板内
+     * 可点击的行（目前仅「设置」的全屏切换行）。其余文字只读不点击。
+     */
+    public record OverlayGeom(double px, double py, double pw, double ph,
+                              Rect close, Rect[] clickable) {}
+
+    /** 标题画面 contain 布局下五个按钮的屏幕矩形（与窗口尺寸无关的换算基准） */
+    public static Rect[] menuButtons(double vw, double vh) {
+        double s = Math.min(vw / TITLE_W, vh / TITLE_H);
+        double ox = (vw - TITLE_W * s) / 2;
+        double oy = (vh - TITLE_H * s) / 2;
+        Rect[] out = new Rect[MENU_BOX.length];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = new Rect(ox + MENU_BOX[i][0] * s, oy + MENU_BOX[i][1] * s,
+                    (MENU_BOX[i][2] - MENU_BOX[i][0]) * s,
+                    (MENU_BOX[i][3] - MENU_BOX[i][1]) * s);
+        }
+        return out;
+    }
+
+    /** 屏幕坐标命中主界面按钮；没点上返回 -1 */
+    public static int menuHit(double mx, double my, double vw, double vh) {
+        Rect[] bs = menuButtons(vw, vh);
+        for (int i = 0; i < bs.length; i++) {
+            if (bs[i].hit(mx, my)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** 覆盖层面板几何。宽度、纵向位置随窗口缩放，各覆盖层高度按内容定 */
+    public static OverlayGeom menuOverlayGeom(double vw, double vh, int overlay) {
+        double pw = Math.min(720, vw - 140);
+        double px = (vw - pw) / 2;
+        double py = vh * 0.13;
+        double ph = switch (overlay) {
+            case OVER_HELP -> 470.0;
+            case OVER_SETTINGS -> 400.0;
+            default -> 360.0;
+        };
+        Rect close = new Rect(px + pw - 148 - 26, py + ph - 52 - 24, 148, 52);
+        Rect[] clickable = overlay == OVER_SETTINGS
+                ? new Rect[] { new Rect(px + 48, py + 118, pw - 96, 72) }
+                : new Rect[0];
+        return new OverlayGeom(px, py, pw, ph, close, clickable);
+    }
+
+    /**
+     * 画主菜单。contain 布局保证整张标题画可见；hover 高亮只在无覆盖层时出现；
+     * overlay != OVER_NONE 时在最上层画对应面板（操作说明 / 设置 / 多人联机占位）。
+     */
+    public void drawTitle(double t, int hover, int overlay, boolean fullscreen) {
+        double vw = canvas.getWidth();
+        double vh = canvas.getHeight();
+        if (vw <= 0 || vh <= 0) {
+            return;
+        }
+        // 暗底（含 contain 的左右留边）
+        gc.setFill(Color.rgb(8, 6, 16));
+        gc.fillRect(0, 0, vw, vh);
+
+        double s = Math.min(vw / TITLE_W, vh / TITLE_H);
+        double ox = (vw - TITLE_W * s) / 2;
+        double oy = (vh - TITLE_H * s) / 2;
+
+        Image art = Sprites.titleScreen;
+        if (art != null) {
+            gc.drawImage(art, ox, oy, TITLE_W * s, TITLE_H * s);
+        } else {
+            drawTitleFallback(vw, vh);   // 缺美术也能玩：画大字 + 按钮
+        }
+
+        if (overlay == OVER_NONE && hover >= 0 && hover < MENU_BOX.length) {
+            int[] b = MENU_BOX[hover];
+            drawMenuHover(ox + b[0] * s, oy + b[1] * s,
+                    (b[2] - b[0]) * s, (b[3] - b[1]) * s, t);
+        }
+        if (overlay != OVER_NONE) {
+            drawMenuOverlay(overlay, fullscreen);
+        }
+    }
+
+    /** 按钮悬停暖色光晕（围绕命中框向外扩一圈，微弱呼吸） */
+    private void drawMenuHover(double x, double y, double w, double h, double t) {
+        double pulse = 0.5 + 0.5 * Math.sin(t * 3.0);
+        gc.setFill(Color.rgb(255, 200, 120, 0.15 + 0.12 * pulse));
+        gc.fillRoundRect(x - 7, y - 7, w + 14, h + 14, 14, 14);
+        gc.setStroke(Color.rgb(255, 214, 140, 0.9));
+        gc.setLineWidth(2.5);
+        gc.strokeRoundRect(x - 7, y - 7, w + 14, h + 14, 14, 14);
+    }
+
+    /** 美术缺失兜底：中央大标题 + 底部程序化按钮，保证主界面功能不受影响 */
+    private void drawTitleFallback(double vw, double vh) {
+        double s = Math.min(vw / TITLE_W, vh / TITLE_H);
+        double ox = (vw - TITLE_W * s) / 2;
+        double oy = (vh - TITLE_H * s) / 2;
+        drawTextSoft(gc, Font.font("Microsoft YaHei", FontWeight.BOLD, 58),
+                ox + TITLE_W * s / 2, oy + TITLE_H * s * 0.24,
+                "奥 术 旅 团", Color.rgb(255, 227, 168), Color.rgb(10, 6, 2, 0.6));
+        drawTextSoft(gc, Font.font("Consolas", 21),
+                ox + TITLE_W * s / 2, oy + TITLE_H * s * 0.24 + 50,
+                "A R C A N E   B R I G A D E", Color.rgb(150, 150, 180), null);
+        Font bf = Font.font("Microsoft YaHei", FontWeight.BOLD, 15);
+        Rect[] bs = menuButtons(vw, vh);
+        for (int i = 0; i < bs.length; i++) {
+            Rect r = bs[i];
+            gc.setFill(Color.rgb(70, 52, 26, 0.9));
+            gc.fillRoundRect(r.x(), r.y(), r.w(), r.h(), 10, 10);
+            gc.setStroke(Color.rgb(200, 160, 90, 0.85));
+            gc.setLineWidth(1.5);
+            gc.strokeRoundRect(r.x(), r.y(), r.w(), r.h(), 10, 10);
+            drawTextSoft(gc, bf, r.x() + r.w() / 2, r.y() + r.h() / 2 + 5,
+                    MENU_LABELS[i], Color.rgb(240, 226, 200), null);
+        }
+    }
+
+    /** 主界面上层覆盖面板：操作说明 / 设置 / 多人联机（开发中占位） */
+    private void drawMenuOverlay(int overlay, boolean fullscreen) {
+        if (overlay == OVER_SETTINGS) {   // 「设置」面板已重做，走独立绘制
+            drawSettingsOverlay();
+            return;
+        }
+        double vw = canvas.getWidth();
+        double vh = canvas.getHeight();
+        OverlayGeom g = menuOverlayGeom(vw, vh, overlay);
+
+        gc.setFill(Color.rgb(5, 3, 10, 0.62));
+        gc.fillRect(0, 0, vw, vh);
+
+        gc.setFill(Color.rgb(21, 17, 32, 0.98));
+        gc.fillRoundRect(g.px(), g.py(), g.pw(), g.ph(), 16, 16);
+        gc.setStroke(Color.rgb(150, 120, 66));
+        gc.setLineWidth(2);
+        gc.strokeRoundRect(g.px(), g.py(), g.pw(), g.ph(), 16, 16);
+
+        String head = switch (overlay) {
+            case OVER_HELP -> "操 作 说 明";
+            case OVER_SETTINGS -> "设 置";
+            default -> "多人联机 · 敬请期待";
+        };
+        drawTextSoft(gc, Font.font("Microsoft YaHei", FontWeight.BOLD, 23),
+                g.px() + g.pw() / 2, g.py() + 58, head,
+                Color.rgb(255, 227, 168), Color.rgb(12, 6, 2, 0.5));
+        gc.setStroke(Color.rgb(120, 96, 58, 0.8));
+        gc.setLineWidth(1);
+        gc.strokeLine(g.px() + 40, g.py() + 82, g.px() + g.pw() - 40, g.py() + 82);
+
+        Font body = Font.font("Microsoft YaHei", 15);
+        Font small = Font.font("Microsoft YaHei", 12.5);
+        double lx = g.px() + 52;
+        Color faint = Color.rgb(198, 198, 216);
+        Color dim = Color.rgb(174, 174, 198);
+
+        switch (overlay) {
+            case OVER_HELP -> {
+                double y = g.py() + 122;
+                gc.setFont(body);
+                for (String line : HELP_LINES) {
+                    gc.setFill(faint);
+                    gc.fillText(line, lx, y);
+                    y += 40;
+                }
+                gc.setFill(dim);
+                gc.setFont(small);
+                gc.fillText("提示：可出战职业为 法师 / 战士 / 弓箭手；召唤师暂未开放。", lx, y + 14);
+            }
+            case OVER_SETTINGS -> {
+                Rect r = g.clickable()[0];
+                boolean on = fullscreen;
+                gc.setFill(on ? Color.rgb(94, 72, 28) : Color.rgb(46, 42, 64));
+                gc.fillRoundRect(r.x(), r.y(), r.w(), r.h(), 10, 10);
+                gc.setStroke(on ? Color.rgb(255, 200, 120) : Color.rgb(132, 124, 152));
+                gc.setLineWidth(on ? 2 : 1.5);
+                gc.strokeRoundRect(r.x(), r.y(), r.w(), r.h(), 10, 10);
+                Font f = Font.font("Microsoft YaHei", 17);
+                gc.setFont(f);
+                gc.setFill(Color.rgb(238, 234, 246));
+                gc.fillText("全屏模式", r.x() + 24, r.y() + r.h() / 2 + 6);
+                Font fs = Font.font("Microsoft YaHei", FontWeight.BOLD, 17);
+                String state = on ? "开" : "关";
+                double sw = measureWidth(fs, state);
+                gc.setFont(fs);
+                gc.setFill(on ? Color.rgb(255, 210, 130) : Color.rgb(176, 172, 192));
+                gc.fillText(state, r.x() + r.w() - 24 - sw, r.y() + r.h() / 2 + 6);
+                gc.setFont(small);
+                gc.setFill(dim);
+                gc.fillText("点击上方开关切换全屏 / 窗口模式（亦可用 F11 快捷切换）。", lx, g.py() + 248);
+                gc.fillText("标题画面在任意窗口比例下等比完整显示；大厅与战斗画面随窗口自适应。", lx, g.py() + 274);
+            }
+            default -> {
+                String[] lines = {
+                        "「多人联机 · 1–4 人在线合作」正在开发中，敬请期待！",
+                        "当前为本地单机抢先体验：从准备大厅招募一位勇者出征，",
+                        "在自动开火的幸存者战斗中存活 20 分钟并击败最终 Boss。",
+                        "在线合作将在后续版本加入，感谢你的关注！",
+                };
+                double y = g.py() + 152;
+                for (String line : lines) {
+                    drawTextSoft(gc, Font.font("Microsoft YaHei", 15.5),
+                            g.px() + g.pw() / 2, y, line, faint, null);
+                    y += 40;
+                }
+            }
+        }
+
+        // 面板右下角「返回」钮
+        drawMenuClose(g.close());
+    }
+
+    /** 覆盖层右下角的「返回」钮 */
+    private void drawMenuClose(Rect r) {
+        gc.setFill(Color.rgb(150, 120, 60));
+        gc.fillRoundRect(r.x(), r.y(), r.w(), r.h(), 10, 10);
+        gc.setStroke(Color.rgb(96, 76, 44));
+        gc.setLineWidth(1.5);
+        gc.strokeRoundRect(r.x(), r.y(), r.w(), r.h(), 10, 10);
+        drawTextSoft(gc, Font.font("Microsoft YaHei", FontWeight.BOLD, 17),
+                r.x() + r.w() / 2, r.y() + r.h() / 2 + 6, "返 回",
+                Color.rgb(32, 24, 10), null);
+    }
+
+    // ------------------------------------------------------------------
+    // 「设置」面板
+    //
+    // 音量（总/BGM/音效/语音）、显示玩家 ID 开关、显示模式（窗口/全屏/
+    // 无边框窗口）、窗口分辨率、帧率上限。数值来源与落地都在 GameConfig，
+    // 这里只负责画。几何统一由 settingsGeom() 产出，命中/绘制不分叉。
+    // ------------------------------------------------------------------
+
+    private static final String[] VOL_LABELS = { "总音量", "BGM 音量", "音效 音量", "语音 音量" };
+    private static final String[] MODE_LABELS = { "窗口", "全屏", "无边框窗口" };
+    private static final String[] RES_LABELS = { "1280×720", "1600×900", "1920×1080" };
+    private static final String[] FPS_LABELS = { "30", "60", "120" };
+
+    /** 设置面板几何：全部控件矩形（屏幕坐标）。GameApp 命中与绘制共用。 */
+    public record SettingsGeom(double px, double py, double pw, double ph,
+            Rect close, Rect[] volumes, Rect showId,
+            Rect[] modes, Rect[] resolutions, Rect[] fps) {}
+
+    /** 三选一的行：把 contentW 三等分，各段间 16px 间距 */
+    private static Rect[] segmentRow(double x, double y, double w) {
+        double gap = 16;
+        double sw = (w - gap * 2) / 3;
+        return new Rect[] {
+                new Rect(x, y, sw, 40),
+                new Rect(x + sw + gap, y, sw, 40),
+                new Rect(x + (sw + gap) * 2, y, sw, 40),
+        };
+    }
+
+    /** 计算「设置」面板几何。所有竖向行距由常量顺序推得，绘制/命中不会错位。 */
+    public static SettingsGeom settingsGeom(double vw, double vh) {
+        double pw = Math.min(820, vw - 120);
+        double px = (vw - pw) / 2;
+        double contentX = px + 48;
+        double contentW = pw - 96;
+
+        // 竖向节奏（相对面板顶）
+        double rowTop = 118;                       // 第一条滑块上缘
+        double rowStep = 52;
+        double showTop = rowTop + 4 * rowStep + 10;    // 开关行
+        double seg1Top = showTop + 40 + 34;            // 显示模式（上方预留 caption）
+        double seg2Top = seg1Top + 54;                 // 窗口分辨率
+        double seg3Top = seg2Top + 54;                 // 帧率上限
+        double closeTop = seg3Top + 40 + 16;           // 返回钮
+        double phRel = closeTop + 46 + 22;
+
+        double ph = Math.min(phRel, vh - 16);
+        double py = Math.max(6, (vh - ph) / 2);
+
+        Rect[] vols = new Rect[GameConfig.VOLUME_COUNT];
+        for (int i = 0; i < vols.length; i++) {
+            vols[i] = new Rect(contentX + 118, py + rowTop + i * rowStep,
+                    contentW - 118 - 64, 26);
+        }
+        Rect showId = new Rect(contentX, py + showTop, contentW, 40);
+        Rect[] modes = segmentRow(contentX, py + seg1Top, contentW);
+        Rect[] res = segmentRow(contentX, py + seg2Top, contentW);
+        Rect[] fps = segmentRow(contentX, py + seg3Top, contentW);
+        Rect close = new Rect(px + pw / 2 - 90, py + closeTop, 180, 46);
+        return new SettingsGeom(px, py, pw, ph, close, vols, showId, modes, res, fps);
+    }
+
+    /** 画「设置」整块覆盖层：美术风镶金面板 + 分区托盘 + 精致控件。 */
+    private void drawSettingsOverlay() {
+        double vw = canvas.getWidth();
+        double vh = canvas.getHeight();
+        SettingsGeom g = settingsGeom(vw, vh);
+        double px = g.px(), py = g.py(), pw = g.pw(), ph = g.ph();
+        double cx = px + pw / 2;
+        double contentX = px + 48;
+
+        // 压暗背景
+        gc.setFill(Color.rgb(3, 2, 9, 0.68));
+        gc.fillRect(0, 0, vw, vh);
+
+        // ---- 面板：下方投影 + 竖向渐变深板 + 双层描边（外层金、内层暗象牙） ----
+        gc.setFill(Color.rgb(0, 0, 0, 0.42));
+        gc.fillRoundRect(px + 3, py + 7, pw, ph, 18, 18);
+        gc.setFill(new LinearGradient(0, py, 0, py + ph, false, CycleMethod.NO_CYCLE,
+                new Stop(0, Color.rgb(46, 38, 70)),
+                new Stop(0.5, Color.rgb(30, 24, 48)),
+                new Stop(1, Color.rgb(19, 15, 32))));
+        gc.fillRoundRect(px, py, pw, ph, 18, 18);
+        gc.setStroke(Color.rgb(214, 178, 100));
+        gc.setLineWidth(2.2);
+        gc.strokeRoundRect(px, py, pw, ph, 18, 18);
+        gc.setStroke(Color.rgb(255, 226, 168, 0.20));
+        gc.setLineWidth(1);
+        gc.strokeRoundRect(px + 3.5, py + 3.5, pw - 7, ph - 7, 15, 15);
+
+        // ---- 标题「设 置」+ 两侧鎏金饰线 ----
+        Font headFont = Font.font("Microsoft YaHei", FontWeight.BOLD, 24);
+        drawTextSoft(gc, headFont, cx, py + 56, "设 置",
+                Color.rgb(255, 224, 160), Color.rgb(10, 5, 2, 0.6));
+        double hw = measureWidth(headFont, "设 置");
+        gc.setStroke(Color.rgb(255, 206, 128, 0.55));
+        gc.setLineWidth(1.2);
+        gc.strokeLine(px + 44, py + 56, cx - hw / 2 - 26, py + 56);
+        gc.strokeLine(cx + hw / 2 + 26, py + 56, px + pw - 44, py + 56);
+        // 标题下细金线 + 中央小菱形
+        gc.setStroke(Color.rgb(190, 148, 84, 0.8));
+        gc.strokeLine(px + 40, py + 84, px + pw - 40, py + 84);
+        gc.setFill(Color.rgb(255, 214, 140));
+        double[] dx = { cx - 4, cx, cx + 4, cx };
+        double[] dy = { py + 84, py + 80, py + 84, py + 88 };
+        gc.fillPolygon(dx, dy, 4);
+
+        Font label = Font.font("Microsoft YaHei", 14);
+        Font value = Font.font("Consolas", 13);
+
+        // ================= 分区一：音量 =================
+        Rect v0 = g.volumes()[0];
+        Rect v3 = g.volumes()[GameConfig.VOLUME_COUNT - 1];
+        drawGroupBox(px + 22, v0.y() - 14, pw - 44, (v3.y() + v3.h()) - v0.y() + 20);
+        gc.setFont(Font.font("Microsoft YaHei", FontWeight.BOLD, 13));
+        gc.setFill(Color.rgb(255, 210, 130));
+        gc.fillText("◈ 音 量", contentX, v0.y() - 20);
+        for (int i = 0; i < GameConfig.VOLUME_COUNT; i++) {
+            Rect r = g.volumes()[i];
+            gc.setFont(label);
+            gc.setFill(Color.rgb(226, 223, 238));
+            gc.fillText(VOL_LABELS[i], contentX, r.y() + r.h() / 2 + 5);
+
+            double v = GameConfig.volume(i);
+            // 轨道底
+            gc.setFill(Color.rgb(10, 8, 18));
+            gc.fillRoundRect(r.x(), r.y(), r.w(), r.h(), 9, 9);
+            gc.setStroke(Color.rgb(40, 34, 58));
+            gc.setLineWidth(1);
+            gc.strokeRoundRect(r.x(), r.y(), r.w(), r.h(), 9, 9);
+            // 填充（金→橙渐变）
+            double fw = Math.max(5, r.w() * v / 100.0);
+            gc.setFill(new LinearGradient(r.x(), 0, r.x() + r.w(), 0, false, CycleMethod.NO_CYCLE,
+                    new Stop(0, Color.rgb(255, 208, 128)),
+                    new Stop(1, Color.rgb(232, 140, 70))));
+            gc.fillRoundRect(r.x(), r.y(), fw, r.h(), 9, 9);
+            // 轨道端部圆形封口让高亮不露直角（在填充端再盖个圆）
+            double midY = r.y() + r.h() / 2;
+            gc.fillOval(r.x() + fw - r.h(), r.y(), r.h(), r.h());
+            // 拇指旋钮
+            double knobX = Math.max(r.x() + 6, Math.min(r.x() + r.w(), r.x() + fw));
+            gc.setFill(Color.rgb(24, 17, 8));
+            gc.fillOval(knobX - 7, midY - 7, 14, 14);   // 深色旋钮底
+            gc.setStroke(Color.rgb(255, 226, 170));
+            gc.setLineWidth(2);
+            gc.strokeOval(knobX - 7, midY - 7, 14, 14);
+            gc.setFill(Color.rgb(255, 226, 170));
+            gc.fillOval(knobX - 2.5, midY - 2.5, 5, 5);
+            // 数值
+            gc.setFont(value);
+            gc.setFill(Color.rgb(250, 240, 214));
+            gc.fillText(String.valueOf((int) v), r.x() + r.w() + 16, midY + 4);
+        }
+
+        // ================= 显示玩家 ID 开关 =================
+        Rect sid = g.showId();
+        boolean idOn = GameConfig.showPlayerId;
+        drawGroupBox(px + 22, sid.y() - 12, pw - 44, sid.h() + 24);
+        // 行底色渐变
+        gc.setFill(idOn
+                ? new LinearGradient(0, sid.y(), 0, sid.y() + sid.h(), false, CycleMethod.NO_CYCLE,
+                        new Stop(0, Color.rgb(96, 72, 30)), new Stop(1, Color.rgb(66, 50, 24)))
+                : new LinearGradient(0, sid.y(), 0, sid.y() + sid.h(), false, CycleMethod.NO_CYCLE,
+                        new Stop(0, Color.rgb(54, 49, 74)), new Stop(1, Color.rgb(38, 34, 54))));
+        gc.fillRoundRect(sid.x(), sid.y(), sid.w(), sid.h(), 10, 10);
+        gc.setStroke(idOn ? Color.rgb(255, 210, 130) : Color.rgb(150, 142, 176));
+        gc.setLineWidth(idOn ? 2 : 1.2);
+        gc.strokeRoundRect(sid.x(), sid.y(), sid.w(), sid.h(), 10, 10);
+        gc.setFont(Font.font("Microsoft YaHei", 15));
+        gc.setFill(Color.rgb(240, 236, 250));
+        gc.fillText("显示玩家 ID", sid.x() + 20, sid.y() + sid.h() / 2 + 5);
+        // 右侧状态胶囊
+        double pillW = 74, pillH = 32;
+        double pillX = sid.x() + sid.w() - pillW - 18;
+        double pillY = sid.y() + (sid.h() - pillH) / 2;
+        gc.setFill(idOn ? Color.rgb(84, 168, 104) : Color.rgb(120, 110, 128));
+        gc.fillRoundRect(pillX, pillY, pillW, pillH, 16, 16);
+        gc.setStroke(Color.rgb(255, 255, 255, 0.25));
+        gc.setLineWidth(1);
+        gc.strokeRoundRect(pillX, pillY, pillW, pillH, 16, 16);
+        drawTextSoft(gc, Font.font("Microsoft YaHei", FontWeight.BOLD, 14),
+                pillX + pillW / 2, pillY + pillH / 2 + 5, idOn ? "开" : "关",
+                Color.WHITE, null);
+
+        // ================= 画面与性能：三组三选一 =================
+        Rect fps0 = g.fps()[0];
+        Rect m0 = g.modes()[0];
+        drawGroupBox(px + 22, m0.y() - 34, pw - 44, (fps0.y() + 40) - m0.y() + 40);
+        drawSegGroup(g.modes(), MODE_LABELS, GameConfig.displayMode, "显示模式");
+        drawSegGroup(g.resolutions(), RES_LABELS, resolutionIndex(), "窗口分辨率");
+        drawSegGroup(g.fps(), FPS_LABELS, fpsIndex(), "帧率上限");
+
+        // 底部小提示（右侧返回钮左侧）
+        Font tip = Font.font("Microsoft YaHei", 12);
+        gc.setFont(tip);
+        gc.setFill(Color.rgb(168, 164, 192));
+        String tipTxt = "设置自动保存 · F11 切换全屏";
+        drawTextSoft(gc, tip, g.px() + 48 + measureWidth(tip, tipTxt) / 2,
+                g.close().y() - 12, tipTxt, Color.rgb(168, 164, 192), null);
+
+        drawMenuClose(g.close());
+    }
+
+    /** 给一组设置项垫一层浅色托盘（分区观感） */
+    private void drawGroupBox(double x, double y, double w, double h) {
+        gc.setFill(Color.rgb(255, 236, 190, 0.045));
+        gc.fillRoundRect(x, y, w, h, 12, 12);
+        gc.setStroke(Color.rgb(184, 146, 88, 0.30));
+        gc.setLineWidth(1);
+        gc.strokeRoundRect(x, y, w, h, 12, 12);
+    }
+
+    /** 一横排三选一（选中的金色浮雕），caption 画在整行上方 */
+    private void drawSegGroup(Rect[] segs, String[] labels, int selected, String caption) {
+        gc.setFont(Font.font("Microsoft YaHei", 12.5));
+        gc.setFill(Color.rgb(206, 202, 226));
+        gc.fillText("◆ " + caption, segs[0].x(), segs[0].y() - 10);
+        for (int i = 0; i < segs.length; i++) {
+            Rect r = segs[i];
+            boolean sel = i == selected;
+            if (sel) {
+                gc.setFill(new LinearGradient(0, r.y(), 0, r.y() + r.h(), false, CycleMethod.NO_CYCLE,
+                        new Stop(0, Color.rgb(214, 176, 110)),
+                        new Stop(1, Color.rgb(150, 104, 46))));
+                gc.fillRoundRect(r.x(), r.y(), r.w(), r.h(), 10, 10);
+                gc.setStroke(Color.rgb(255, 228, 170));
+                gc.setLineWidth(2);
+                gc.strokeRoundRect(r.x(), r.y(), r.w(), r.h(), 10, 10);
+                drawTextSoft(gc, Font.font("Microsoft YaHei", FontWeight.BOLD, 14),
+                        r.x() + r.w() / 2, r.y() + r.h() / 2 + 5, labels[i],
+                        Color.rgb(48, 30, 6), null);
+            } else {
+                gc.setFill(new LinearGradient(0, r.y(), 0, r.y() + r.h(), false, CycleMethod.NO_CYCLE,
+                        new Stop(0, Color.rgb(64, 58, 88)),
+                        new Stop(1, Color.rgb(44, 40, 64))));
+                gc.fillRoundRect(r.x(), r.y(), r.w(), r.h(), 10, 10);
+                gc.setStroke(Color.rgb(140, 132, 168));
+                gc.setLineWidth(1.2);
+                gc.strokeRoundRect(r.x(), r.y(), r.w(), r.h(), 10, 10);
+                drawTextSoft(gc, Font.font("Microsoft YaHei", 14),
+                        r.x() + r.w() / 2, r.y() + r.h() / 2 + 5, labels[i],
+                        Color.rgb(214, 212, 230), null);
+            }
+        }
+    }
+
+    private static int resolutionIndex() {
+        for (int i = 0; i < GameConfig.RESOLUTIONS.length; i++) {
+            if (GameConfig.RESOLUTIONS[i][0] == GameConfig.winW
+                    && GameConfig.RESOLUTIONS[i][1] == GameConfig.winH) {
+                return i;
+            }
+        }
+        return 0;
+    }
+
+    private static int fpsIndex() {
+        for (int i = 0; i < GameConfig.FPS_CHOICES.length; i++) {
+            if (GameConfig.FPS_CHOICES[i] == GameConfig.fpsCap) {
+                return i;
+            }
+        }
+        return 1;
+    }
+
+    // ------------------------------------------------------------------
+    // 大厅左上角操作指引（可收起 / 展开）
+    // ------------------------------------------------------------------
+
+    /** 大厅指引行的【按键、说明】 */
+    private static final String[][] LOBBY_GUIDE = {
+            { "WASD / 方向键", "移动走位" },
+            { "空格 / E", "靠近勇者招募同行" },
+            { "E", "走进下方光门出征" },
+    };
+
+    /** 指引面板几何：展开态的面板 + 「✕」隐藏钮 + 收起态的「展开」钮。 */
+    public record GuideGeom(Rect panel, Rect hide, Rect open,
+            double chipW, double descX, double firstRowY, double rowStep) {}
+
+    /** 计算大厅指引几何。GameApp（命中隐藏钮）与绘制共用，保证点哪是哪。 */
+    public static GuideGeom lobbyGuideGeom(double vw, double vh) {
+        Font keyFont = Font.font("Microsoft YaHei", FontWeight.BOLD, 12.5);
+        Font descFont = Font.font("Microsoft YaHei", 13);
+        double maxKey = 0, maxDesc = 0;
+        for (String[] op : LOBBY_GUIDE) {
+            maxKey = Math.max(maxKey, measureWidth(keyFont, op[0]));
+            maxDesc = Math.max(maxDesc, measureWidth(descFont, op[1]));
+        }
+        double chipW = maxKey + 20;
+        double gx = 16, gy = 14;
+        double guideW = 16 + 10 + chipW + 10 + maxDesc + 14;
+        double guideH = 8 + 22 + 6 + LOBBY_GUIDE.length * 27 + 12;
+        Rect panel = new Rect(gx, gy, guideW, guideH);
+        Rect hide = new Rect(gx + guideW - 46, gy + 4, 36, 26);   // 面板内右上角
+        String openLabel = "❖ 操作指引 ▸";
+        double ow = measureWidth(Font.font("Microsoft YaHei", 14), openLabel) + 22;
+        Rect open = new Rect(gx, gy, ow, 34);
+        double descX = gx + 14 + chipW + 10;
+        double firstRowY = gy + 22 + 22;   // 首行文字基线
+        return new GuideGeom(panel, hide, open, chipW, descX, firstRowY, 27);
+    }
+
+    /** 画左上操作指引。show=false 时只留一个可点开的小钮。 */
+    private void drawLobbyGuide(boolean show) {
+        GuideGeom gg = lobbyGuideGeom(canvas.getWidth(), canvas.getHeight());
+        Font keyFont = Font.font("Microsoft YaHei", FontWeight.BOLD, 12.5);
+        Font descFont = Font.font("Microsoft YaHei", 13);
+        if (!show) {
+            Rect o = gg.open();
+            gc.setFill(Color.rgb(7, 5, 14, 0.60));
+            gc.fillRoundRect(o.x(), o.y(), o.w(), o.h(), 9, 9);
+            gc.setStroke(Color.rgb(255, 214, 140, 0.75));
+            gc.setLineWidth(1.2);
+            gc.strokeRoundRect(o.x(), o.y(), o.w(), o.h(), 9, 9);
+            drawTextSoft(gc, Font.font("Microsoft YaHei", FontWeight.BOLD, 13),
+                    o.x() + o.w() / 2, o.y() + o.h() / 2 + 5, "❖ 操作指引 ▸",
+                    Color.rgb(255, 220, 150), null);
+            return;
+        }
+        Rect p = gg.panel();
+        gc.setFill(Color.rgb(7, 5, 14, 0.60));
+        gc.fillRoundRect(p.x(), p.y(), p.w(), p.h(), 12, 12);
+        gc.setStroke(Color.rgb(180, 142, 86, 0.55));
+        gc.setLineWidth(1.2);
+        gc.strokeRoundRect(p.x(), p.y(), p.w(), p.h(), 12, 12);
+        gc.setFont(Font.font("Microsoft YaHei", FontWeight.BOLD, 13));
+        gc.setFill(Color.rgb(255, 222, 158));
+        gc.fillText("◆ 操作指引", p.x() + 14, p.y() + 22);
+        double lineY = gg.firstRowY();
+        for (String[] op : LOBBY_GUIDE) {
+            double chipX = p.x() + 14;
+            gc.setFill(Color.rgb(255, 210, 130, 0.18));
+            gc.fillRoundRect(chipX, lineY - 13, gg.chipW(), 19, 6, 6);
+            gc.setStroke(Color.rgb(255, 214, 140, 0.75));
+            gc.setLineWidth(1);
+            gc.strokeRoundRect(chipX, lineY - 13, gg.chipW(), 19, 6, 6);
+            drawTextSoft(gc, keyFont, chipX + gg.chipW() / 2, lineY + 1, op[0],
+                    Color.rgb(255, 220, 150), null);
+            gc.setFont(descFont);
+            gc.setFill(Color.rgb(238, 234, 248));
+            gc.fillText(op[1], gg.descX(), lineY + 1);
+            lineY += gg.rowStep();
+        }
+        // 右上角隐藏钮「✕」
+        Rect h = gg.hide();
+        gc.setFill(Color.rgb(255, 210, 130, 0.16));
+        gc.fillRoundRect(h.x(), h.y(), h.w(), h.h(), 7, 7);
+        gc.setStroke(Color.rgb(255, 214, 140, 0.7));
+        gc.setLineWidth(1);
+        gc.strokeRoundRect(h.x(), h.y(), h.w(), h.h(), 7, 7);
+        drawTextSoft(gc, Font.font("Microsoft YaHei", FontWeight.BOLD, 13),
+                h.x() + h.w() / 2, h.y() + h.h() / 2 + 5, "✕",
+                Color.rgb(255, 220, 150), null);
     }
 }

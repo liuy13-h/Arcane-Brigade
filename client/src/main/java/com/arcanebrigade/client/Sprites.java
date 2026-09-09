@@ -36,6 +36,11 @@ public final class Sprites {
     /** 王座大厅背景（启动后的准备大厅整屏底图） */
     public static Image lobbyBg;
     /**
+     * 主菜单标题画面（整幅美术，底部内嵌五个菜单按钮：开始游戏 / 多人联机 / 设置 / 操作说明 / 退出游戏）。
+     * 这是程序启动后第一个画面，按钮命中区坐标见 Renderer 的菜单常量。
+     */
+    public static Image titleScreen;
+    /**
      * 各职业的细节立绘（选人大厅右侧滑出的大图）。
      * 下标 = 职业 id（1..4 = 巫师/战士/弓箭手/召唤师）。
      * 这是美术给的大尺寸全身立绘，与上方 32px 行走小立绘 heroes[] 相互独立。
@@ -68,6 +73,7 @@ public final class Sprites {
         heroes[HeroClass.WARRIOR] = pixelScale(trimOpaque(loadArt("Sprite-0003.png")), 2);   // 0003 战士
         heroes[LobbyClass.SUMMONER] = pixelScale(trimOpaque(loadArt("图片10.png")), 2);      // 召唤师
         lobbyBg = loadArt("皇宫王座大厅背景.jpg");
+        titleScreen = loadArt("title_final_v3_covered_2x.png");
         // 细节立绘（右侧角色卡大图），按下标对齐职业。
         // 美术给的多是带纯色底（黑/白）的整幅图，叠到王座厅上会出现一块黑底/白底，
         // 这里把环绕角色、与图边相连的背景色抠成透明（见 knockoutBackground）。

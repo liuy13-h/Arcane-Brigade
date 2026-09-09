@@ -23,7 +23,7 @@ public final class HeroClass {
     private static final float[] BASE_SPEED = new float[4];
 
     static {
-        NAMES[WIZARD]  = "巫师";
+        NAMES[WIZARD]  = "法师";
         BASE_HP[WIZARD]  = Balance.WIZARD_HP;
         BASE_SPEED[WIZARD]  = Balance.WIZARD_SPEED;
 
