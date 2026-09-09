@@ -10,18 +10,26 @@ import java.nio.ByteBuffer;
  */
 public final class InputCommand {
 
-    public static final int BYTES = 4 + 4 + 4;
+    public static final int BYTES = 4 + 4 + 4 + 4 + 4;
 
     /** 期望移动方向，未归一化时长度 &lt;= 1 */
     public float dx;
     public float dy;
-    /** 位标记，预留给主动技能 / 复活令牌 */
+    /** 位标记：bit0 = 手动开火（鼠标按下） */
     public int buttons;
+    /** 手动开火时的瞄准世界坐标 */
+    public float aimX;
+    public float aimY;
+
+    /** 手动开火按钮位 */
+    public static final int BUTTON_FIRE = 1;
 
     public void reset() {
         dx = 0f;
         dy = 0f;
         buttons = 0;
+        aimX = 0f;
+        aimY = 0f;
     }
 
     public void set(float dx, float dy) {
@@ -41,12 +49,16 @@ public final class InputCommand {
         b.putFloat(dx);
         b.putFloat(dy);
         b.putInt(buttons);
+        b.putFloat(aimX);
+        b.putFloat(aimY);
     }
 
     public void read(ByteBuffer b) {
         dx = b.getFloat();
         dy = b.getFloat();
         buttons = b.getInt();
+        aimX = b.getFloat();
+        aimY = b.getFloat();
     }
 
     public InputCommand copy() {
@@ -54,6 +66,8 @@ public final class InputCommand {
         c.dx = dx;
         c.dy = dy;
         c.buttons = buttons;
+        c.aimX = aimX;
+        c.aimY = aimY;
         return c;
     }
 }

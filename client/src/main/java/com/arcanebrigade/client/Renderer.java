@@ -43,6 +43,9 @@ public final class Renderer {
     private boolean camReady;
     private double fps;
 
+    /** 当前鼠标屏幕坐标，手动开火模式的准星用 */
+    private double mouseX, mouseY;
+
     public Renderer(Canvas canvas) {
         this.canvas = canvas;
         this.gc = canvas.getGraphicsContext2D();
@@ -58,6 +61,24 @@ public final class Renderer {
 
     public double getCanvasHeight() {
         return canvas.getHeight();
+    }
+
+    public double getCamX() {
+        return camX;
+    }
+
+    public double getCamY() {
+        return camY;
+    }
+
+    public void setMouse(double x, double y) {
+        this.mouseX = x;
+        this.mouseY = y;
+    }
+
+    /** 开火切换按钮矩形 [x, y, w, h]。GameApp 命中判定与 drawHud 严格共用同一位置 */
+    public static double[] fireButtonRect(double vw, double vh) {
+        return new double[] { 16, 64, 150, 30 };
     }
 
     public void draw(World w, float alpha) {
@@ -521,6 +542,18 @@ public final class Renderer {
         gc.setFill(Color.rgb(110, 200, 255));
         gc.fillRect(xpX, xpY, xpW * lo.xpRatio(), xpH);
 
+        // 开火模式切换按钮（点击切换自动/手动）
+        boolean auto = w.isAutoFire();
+        double[] fb = fireButtonRect(vw, vh);
+        gc.setFill(Color.rgb(18, 16, 30, 0.85));
+        gc.fillRect(fb[0], fb[1], fb[2], fb[3]);
+        gc.setStroke(auto ? Color.rgb(110, 200, 255) : Color.rgb(255, 170, 90));
+        gc.setLineWidth(1.5);
+        gc.strokeRect(fb[0], fb[1], fb[2], fb[3]);
+        gc.setFont(hudFont);
+        gc.setFill(auto ? Color.rgb(160, 220, 255) : Color.rgb(255, 200, 120));
+        gc.fillText(auto ? "自动开火：开" : "自动开火：关", fb[0] + 10, fb[1] + 21);
+
         // 血条 + 护盾
         int id = w.wizard(0);
         double bw = 340;
@@ -543,6 +576,16 @@ public final class Renderer {
 
         drawSpellBar(w, vw, vh);
         drawPassiveBar(w, vw, vh);
+
+        // 手动开火准星：显示在鼠标位置
+        if (!w.isAutoFire()) {
+            double cx = mouseX, cy = mouseY, r = 9;
+            gc.setStroke(Color.rgb(255, 200, 120, 0.9));
+            gc.setLineWidth(1.5);
+            gc.strokeLine(cx - r, cy, cx + r, cy);
+            gc.strokeLine(cx, cy - r, cx, cy + r);
+            gc.strokeOval(cx - r, cy - r, r * 2, r * 2);
+        }
     }
 
     /** Boss 血条：顶部居中，显示血量 + 护盾 */
@@ -629,54 +672,58 @@ public final class Renderer {
         }
     }
 
-    /** 8 个被动槽：每个格子用被动元素的代表色 + 名称 + 层数 */
+    /** 被动栏：无上限，多行居中排布，从底向上堆叠。每个格子用稀有度代表色 + 名称 + 层数 */
     private void drawPassiveBar(World w, double vw, double vh) {
         Loadout lo = w.loadout(w.wizard(0));
         if (lo == null) {
             return;
         }
+        int n = lo.passives.size();
+        if (n == 0) {
+            return;
+        }
         double pw = 92, ph = 38, gap = 6;
-        double total = Loadout.PASSIVE_SLOTS * pw + (Loadout.PASSIVE_SLOTS - 1) * gap;
-        double x0 = (vw - total) / 2;
-        double y0 = vh - 128;
+        int perRow = Math.max(1, (int) ((vw - 24) / (pw + gap)));
+        int rows = (n + perRow - 1) / perRow;
+        double baseY = vh - 128;   // 底行顶部
 
-        gc.setFont(Font.font("Microsoft YaHei", 11));
-        for (int i = 0; i < Loadout.PASSIVE_SLOTS; i++) {
-            double bx = x0 + i * (pw + gap);
-            int pid = lo.passives[i];
-            if (pid == Passives.NONE) {
-                gc.setFill(Color.rgb(18, 16, 28, 0.65));
-                gc.fillRect(bx, y0, pw, ph);
-                gc.setStroke(Color.rgb(60, 60, 80));
-                gc.setLineWidth(1);
-                gc.strokeRect(bx, y0, pw, ph);
+        Font f = Font.font("Microsoft YaHei", 11);
+        Font fNum = Font.font("Consolas", 12);
+        for (int i = 0; i < n; i++) {
+            int row = i / perRow;
+            int col = i % perRow;
+            int inRow = Math.min(perRow, n - row * perRow);
+            double total = inRow * pw + (inRow - 1) * gap;
+            double x0 = (vw - total) / 2;
+            double bx = x0 + col * (pw + gap);
+            double by = baseY - (rows - 1 - row) * (ph + gap);
+            int pid = lo.passives.get(i);
+            PassiveDef d = Passives.get(pid);
+            if (d == null) {
                 continue;
             }
-            PassiveDef d = Passives.get(pid);
             Color rarity = switch (d.rarity) {
                 case PassiveDef.RARE -> Color.rgb(80, 160, 240);
                 case PassiveDef.EPIC -> Color.rgb(240, 160, 60);
                 default -> Color.rgb(110, 110, 130);
             };
             gc.setFill(Color.rgb(24, 20, 38, 0.9));
-            gc.fillRect(bx, y0, pw, ph);
+            gc.fillRect(bx, by, pw, ph);
             gc.setStroke(rarity);
             gc.setLineWidth(d.kind == PassiveDef.Kind.MUTATION ? 2.5 : 1);
-            gc.strokeRect(bx, y0, pw, ph);
+            gc.strokeRect(bx, by, pw, ph);
 
-            // 名称
+            gc.setFont(f);
             gc.setFill(Color.rgb(232, 232, 244));
-            gc.fillText(d.name, bx + 6, y0 + 16);
-            // 层数
-            if (lo.pstacks[i] > 1) {
+            gc.fillText(d.name, bx + 6, by + 16);
+            if (lo.pstacks.get(i) > 1) {
                 gc.setFill(rarity);
-                gc.setFont(Font.font("Consolas", 12));
-                gc.fillText("x" + lo.pstacks[i], bx + pw - 24, y0 + 16);
-                gc.setFont(Font.font("Microsoft YaHei", 11));
+                gc.setFont(fNum);
+                gc.fillText("x" + lo.pstacks.get(i), bx + pw - 24, by + 16);
+                gc.setFont(f);
             }
-            // 类别标签
             gc.setFill(Color.rgb(150, 150, 170));
-            gc.fillText(kindLabel(d.kind), bx + 6, y0 + 32);
+            gc.fillText(kindLabel(d.kind), bx + 6, by + 32);
         }
     }
 

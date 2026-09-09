@@ -34,6 +34,11 @@ public final class IntList {
         data[size++] = v;
     }
 
+    /** 覆盖指定下标的值。调用方保证 i 在 [0, size) 内 */
+    public void set(int i, int v) {
+        data[i] = v;
+    }
+
     public void clear() {
         size = 0;
     }

@@ -91,17 +91,17 @@ public final class Balance {
     public static final float SPAWN_RING_OUT  = 900f;
     public static final float DESPAWN_RANGE   = 1500f; // 超出这个距离直接回收
 
-    // ---- 敌人血量随时间成长（本轮核心：怪变少，但越往后越硬）----
-    /** 线性项：每秒 +1.8% */
-    public static final float ENEMY_HP_GROWTH_LINEAR = 0.018f;
-    /** 二次项：后期加速，让最后 5 分钟真的有压迫感 */
-    public static final float ENEMY_HP_GROWTH_QUAD   = 0.000010f;
-    /** 成长上限。不封顶后期会出现打不动的肉墙 */
-    public static final float ENEMY_HP_SCALE_CAP     = 32f;
+    // ---- 敌人血量随时间成长（本轮调整：削弱后期成长，让小怪别指数变硬）----
+    /** 线性项：每秒 +1.2%（原 1.8%） */
+    public static final float ENEMY_HP_GROWTH_LINEAR = 0.012f;
+    /** 二次项：后期轻微加速（原 0.000010，削弱后几乎线性） */
+    public static final float ENEMY_HP_GROWTH_QUAD   = 0.000003f;
+    /** 成长上限。削弱到 16x，避免后期出现打不动的肉墙 */
+    public static final float ENEMY_HP_SCALE_CAP     = 16f;
 
     /**
      * 敌人血量 = 基础血 × 本系数（t = 游戏时间秒）。
-     * 参考值：300s≈7x、600s≈15x、900s≈25x、1200s≈32x（封顶）。
+     * 参考值（削弱后）：300s≈4.9x、600s≈9.3x、900s≈14.2x、1200s≈16x（封顶）。
      * 调难度改上面三个常量即可，公式集中在这里，不在逻辑里散落。
      */
     public static float enemyHpScale(float t) {

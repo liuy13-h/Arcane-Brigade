@@ -48,6 +48,8 @@ public final class GameApp extends Application {
     private boolean selecting = true;
     private int chosenClass = HeroClass.WIZARD;
     private double mouseX, mouseY;
+    /** 鼠标左键是否按下（手动开火模式用） */
+    private boolean mouseDown;
 
     @Override
     public void start(Stage stage) {
@@ -97,6 +99,28 @@ public final class GameApp extends Application {
             mouseY = e.getY();
         });
 
+        scene.setOnMousePressed(e -> {
+            if (e.getButton() != MouseButton.PRIMARY) {
+                return;
+            }
+            if (selecting) {
+                return;
+            }
+            mouseDown = true;
+            // 点开火切换按钮：切换自动/手动开火
+            double[] fb = Renderer.fireButtonRect(canvas.getWidth(), canvas.getHeight());
+            if (e.getX() >= fb[0] && e.getX() <= fb[0] + fb[2]
+                    && e.getY() >= fb[1] && e.getY() <= fb[1] + fb[3]) {
+                world.setAutoFire(!world.isAutoFire());
+            }
+        });
+
+        scene.setOnMouseReleased(e -> {
+            if (e.getButton() == MouseButton.PRIMARY) {
+                mouseDown = false;
+            }
+        });
+
         scene.setOnMouseClicked(e -> {
             if (e.getButton() != MouseButton.PRIMARY) {
                 return;
@@ -140,6 +164,8 @@ public final class GameApp extends Application {
                     dt = 0.25;
                 }
                 fps[0] += (1.0 / Math.max(dt, 1e-6) - fps[0]) * 0.08;
+
+                renderer.setMouse(mouseX, mouseY);
 
                 if (selecting) {
                     renderer.setFps(fps[0]);
@@ -296,5 +322,17 @@ public final class GameApp extends Application {
             dy += 1f;
         }
         input.set(dx, dy);
+
+        // 开火：手动模式下按住鼠标左键，朝鼠标世界坐标开火
+        input.buttons = 0;
+        if (!world.isAutoFire() && mouseDown) {
+            input.buttons |= InputCommand.BUTTON_FIRE;
+        }
+        double camX = renderer.getCamX();
+        double camY = renderer.getCamY();
+        double vw = renderer.getCanvasWidth();
+        double vh = renderer.getCanvasHeight();
+        input.aimX = (float) (camX + (mouseX - vw / 2));
+        input.aimY = (float) (camY + (mouseY - vh / 2));
     }
 }

@@ -141,6 +141,8 @@ public final class World {
     private int bossTier;
     /** 击败最后一只 Boss 后置位，客户端据此暂停并弹胜利画面 */
     private boolean victory;
+    /** 开火模式：true=自动索敌开火，false=手动（朝鼠标方向，按住开火） */
+    private boolean autoFire = true;
     private float bossWarningTimer;
     private float bossSummonTimer;
 
@@ -566,7 +568,7 @@ public final class World {
         if (bossId >= 0) {
             updateBossPhase(dt);  // Boss 阶段技能（预警圈 / 召唤）
         }
-        castSpells(dt);
+        castSpells(dt, in);
         updateProjectiles(dt);
         updatePickups(dt);
         updateZones(dt);
@@ -1061,8 +1063,9 @@ public final class World {
     // 法术
     // ------------------------------------------------------------------
 
-    /** 自动施法。玩家只管走位，所有主动技能都在这里按各自冷却自动放出去。 */
-    private void castSpells(float dt) {
+    /** 施法。自动模式下自动索敌放技能；手动模式下按住开火键朝 aim 方向放。 */
+    private void castSpells(float dt, InputCommand in) {
+        boolean manual = !autoFire;
         for (int n = 0; n < wizards.size(); n++) {
             int id = wizards.get(n);
             if (!alive[id]) {
@@ -1085,7 +1088,18 @@ public final class World {
                 if (lo.cd[s] > 0f) {
                     continue;
                 }
-                if (castOne(def, raw, id, s)) {
+                boolean fired;
+                if (manual) {
+                    // 手动：没按住开火键就不放，也不进冷却
+                    if ((in.buttons & InputCommand.BUTTON_FIRE) == 0) {
+                        continue;
+                    }
+                    float facing = (float) Math.atan2(in.aimY - y[id], in.aimX - x[id]);
+                    fired = castOne(def, raw, id, s, true, facing);
+                } else {
+                    fired = castOne(def, raw, id, s, false, 0f);
+                }
+                if (fired) {
                     float cdTime = def.cooldown / Math.max(0.1f, lo.stats.atkSpeed);
                     lo.cd[s] = cdTime;
                 }
@@ -1115,16 +1129,18 @@ public final class World {
         return p;
     }
 
-    /** 施放一个法术。返回是否成功出手（没找到目标就不进冷却，否则会被远处的怪白白卡住） */
-    private boolean castOne(SpellDef def, int rawSpellId, int caster, int slot) {
+    /** 施放一个法术。返回是否成功出手（自动模式没找到目标就不进冷却，手动模式朝 aim 方向必出手） */
+    private boolean castOne(SpellDef def, int rawSpellId, int caster, int slot, boolean manualAim, float facing) {
         Loadout lo = loadout[caster];
         Stats st = lo.stats;
-        float seekRange = (def.form == SpellDef.Form.MELEE_ARC) ? def.arcRadius : def.range;
-        int target = nearestEnemy(x[caster], y[caster], seekRange);
-        if (target < 0) {
-            return false;
+        if (!manualAim) {
+            float seekRange = (def.form == SpellDef.Form.MELEE_ARC) ? def.arcRadius : def.range;
+            int target = nearestEnemy(x[caster], y[caster], seekRange);
+            if (target < 0) {
+                return false;
+            }
+            facing = (float) Math.atan2(y[target] - y[caster], x[target] - x[caster]);
         }
-        float facing = (float) Math.atan2(y[target] - y[caster], x[target] - x[caster]);
         float power = computePower(def, lo);
 
         switch (def.form) {
@@ -2098,6 +2114,16 @@ public final class World {
     /** 是否已击败最终 Boss（胜利判定）。一旦置位不会复位 */
     public boolean victory() {
         return victory;
+    }
+
+    /** 开火模式开关。手动模式下玩家按住鼠标左键朝鼠标方向开火 */
+    public void setAutoFire(boolean auto) {
+        this.autoFire = auto;
+    }
+
+    /** 当前是否自动开火 */
+    public boolean isAutoFire() {
+        return autoFire;
     }
 
     /** 当前 Boss 档位（BOSS_NAMES 下标），没有 Boss 时返回 -1 */

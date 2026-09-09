@@ -283,8 +283,8 @@ public final class HeadlessSmoke {
         System.out.printf("模拟 %d 帧 = %.1f 秒，耗时 %.0f ms，平均 %.3f ms/帧%n",
                 frames, frames * Balance.FIXED_STEP, (t1 - t0) / 1e6,
                 (t1 - t0) / 1e6 / frames);
-        System.out.printf("等级：%d，xpRatio=%.2f，被动数 %d / %d%n",
-                lo.level, lo.xpRatio(), lo.passiveCount(), Loadout.PASSIVE_SLOTS);
+        System.out.printf("等级：%d，xpRatio=%.2f，被动数 %d（无上限）%n",
+                lo.level, lo.xpRatio(), lo.passiveCount());
         System.out.printf("主动槽：%d 个，%s | %s | %s%n",
                 lo.activeCount(),
                 spellLabel(lo.spells[0], lo.evolvedMask),
