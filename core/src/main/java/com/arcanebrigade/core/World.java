@@ -137,8 +137,10 @@ public final class World {
     private float stageTimer;
     private boolean obstaclesGenerated;
     private int bossId = -1;
-    /** 当前 Boss 是第几只（BOSS_TIMES 的下标），HUD 显示名字用 */
+    /** 当前 Boss 是第几只（BOSS_LEVELS 的下标），HUD 显示名字用 */
     private int bossTier;
+    /** 击败最后一只 Boss 后置位，客户端据此暂停并弹胜利画面 */
+    private boolean victory;
     private float bossWarningTimer;
     private float bossSummonTimer;
 
@@ -224,6 +226,10 @@ public final class World {
         }
         alive[id] = false;
         if (id == bossId) {
+            // 击败最后一只 Boss = 通关。前几只倒下只清标记，不打断对局。
+            if (bossTier == Balance.BOSS_LEVELS.length - 1) {
+                victory = true;
+            }
             bossId = -1;   // Boss 倒下：清掉阶段技能标记，下一帧 updateBossPhase 也会兜底
         }
         int k = kind[id];
@@ -506,7 +512,7 @@ public final class World {
     }
 
     /**
-     * 生成一个 Boss。tier 是 BOSS_TIMES / BOSS_HP_TIERS 的下标（0..3），
+     * 生成一个 Boss。tier 是 BOSS_LEVELS / BOSS_HP_TIERS 的下标（0..3），
      * 血池、伤害、护盾都按档位取，越靠后越硬。
      *
      * 生成位置在玩家外侧但仍在可视范围内（比普通刷怪环更近），
@@ -607,13 +613,15 @@ public final class World {
 
     /**
      * 生成某阶段的障碍物布局。围绕玩家散布，排除安全圈，避免出生即卡死。
-     * 障碍类型随场景主题变化（森林=树/石，雪原=冰晶，熔岩=熔岩石，终焉=尖塔）。
+     * 模板风格：沙漠遗迹——岩石 / 碎石堆 / 枯灌，另在散布中段放一口石井地标。
+     * 全部钳制在城墙内侧，不让岩石压到边界装饰上。
      */
     private void generateObstacles(int stage) {
         int w = firstWizard();
         float cx = (w >= 0) ? x[w] : 0f;
         float cy = (w >= 0) ? y[w] : 0f;
         obstacleHash.beginFrame();
+        float lim = Balance.WORLD_HALF - 90f;   // 城墙内侧留出走位空间
         int n = Balance.OBSTACLE_COUNT_MIN
                 + rng.nextInt(Balance.OBSTACLE_COUNT_MAX - Balance.OBSTACLE_COUNT_MIN + 1);
         for (int k = 0; k < n; k++) {
@@ -621,13 +629,22 @@ public final class World {
             // 距离：安全圈之外到散布半径之内，避免全堆在一起
             float dist = Balance.OBSTACLE_SAFE_RADIUS
                     + rng.nextFloat() * (Balance.OBSTACLE_SPREAD - Balance.OBSTACLE_SAFE_RADIUS);
-            float ox = cx + (float) Math.cos(ang) * dist;
-            float oy = cy + (float) Math.sin(ang) * dist;
+            float ox = clampCoord(cx + (float) Math.cos(ang) * dist);
+            float oy = clampCoord(cy + (float) Math.sin(ang) * dist);
+            ox = Math.max(-lim, Math.min(lim, ox));
+            oy = Math.max(-lim, Math.min(lim, oy));
             float r = Balance.OBSTACLE_R_MIN
                     + rng.nextFloat() * (Balance.OBSTACLE_R_MAX - Balance.OBSTACLE_R_MIN);
             int type = rng.nextInt(3);   // 0/1/2 三种视觉，渲染层按 stage 上色
             spawnObstacle(ox, oy, r, type);
         }
+        // 地标石井（type 3）：每阶段一座，放在散布半径中段，纯装饰但有真实碰撞
+        float wang = rng.nextFloat() * (float) (Math.PI * 2);
+        float wdist = Balance.OBSTACLE_SAFE_RADIUS
+                + (Balance.OBSTACLE_SPREAD - Balance.OBSTACLE_SAFE_RADIUS) * 0.55f;
+        float wx = Math.max(-lim, Math.min(lim, clampCoord(cx + (float) Math.cos(wang) * wdist)));
+        float wy = Math.max(-lim, Math.min(lim, clampCoord(cy + (float) Math.sin(wang) * wdist)));
+        spawnObstacle(wx, wy, 58f, 3);
     }
 
     private int spawnObstacle(float sx, float sy, float radius, int type) {
@@ -2060,9 +2077,27 @@ public final class World {
         return stage;
     }
 
+    /**
+     * 主控玩家的等级。WaveDirector 用它决定 Boss 何时登场。
+     * 没有玩家（还没生成 / 全灭）时返回 0，这样不会误触发刷 Boss。
+     */
+    public int playerLevel() {
+        int w = firstWizard();
+        if (w < 0) {
+            return 0;
+        }
+        Loadout lo = loadout[w];
+        return (lo == null) ? 0 : lo.level;
+    }
+
     /** 当前 Boss 实体 id，-1 表示没有 Boss 在场 */
     public int bossId() {
         return bossId;
+    }
+
+    /** 是否已击败最终 Boss（胜利判定）。一旦置位不会复位 */
+    public boolean victory() {
+        return victory;
     }
 
     /** 当前 Boss 档位（BOSS_NAMES 下标），没有 Boss 时返回 -1 */

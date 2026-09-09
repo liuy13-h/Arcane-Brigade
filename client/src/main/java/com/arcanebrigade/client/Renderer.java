@@ -68,25 +68,58 @@ public final class Renderer {
         }
         updateCamera(w, alpha);
 
-        // 背景与地砖随场景主题切换（森林 / 雪原 / 熔岩 / 终焉）
-        Color[] pal = stagePalette(w.stage());
+        // 沙漠遗迹模板：先铺外部地面，再把沙地裁进城墙内侧，最后压上城墙
+        Color[] pal = STAGE_PAL[w.stage()];
         gc.setFill(pal[0]);
         gc.fillRect(0, 0, vw, vh);
-        drawTiles(vw, vh, pal[1], pal[2]);
+        drawGround(vw, vh, pal);
+        drawBoundary(vw, vh, pal);
         drawObstacles(w, alpha, vw, vh);
         drawEntities(w, alpha, vw, vh);
         drawHud(w, vw, vh);
         drawBossBar(w, vw);
     }
 
-    /** 4 个阶段的配色：[背景, 地砖A, 地砖B] */
-    private static Color[] stagePalette(int stage) {
-        return switch (stage) {
-            case 0 -> new Color[] { Color.rgb(18, 22, 16), Color.rgb(26, 34, 24), Color.rgb(31, 40, 28) }; // 森林
-            case 1 -> new Color[] { Color.rgb(20, 24, 32), Color.rgb(28, 34, 44), Color.rgb(33, 40, 52) }; // 雪原
-            case 2 -> new Color[] { Color.rgb(28, 16, 14), Color.rgb(38, 22, 18), Color.rgb(44, 26, 20) }; // 熔岩
-            default -> new Color[] { Color.rgb(18, 14, 26), Color.rgb(26, 20, 38), Color.rgb(31, 24, 45) }; // 终焉
-        };
+    /**
+     * 模板风格：沙漠遗迹（用户提供的参考图）。四个阶段共用同一套结构——
+     * 沙地 + 龟裂 + 碎石 + 枯灌 + 环形城墙 + 中央石井，只做色调偏移，
+     * 保证整局都是同一张模板图的观感，而不是四种不相干的地图。
+     *
+     * 索引：0 外部地面, 1 沙地A, 2 沙地B, 3 裂纹/碎石, 4 城墙主体, 5 城墙亮面,
+     *      6 城墙暗面, 7 枯灌, 8 岩石主体, 9 岩石亮面, 10 岩石暗面
+     */
+    private static final Color[][] STAGE_PAL = {
+        // 0 荒漠遗迹（参考图原色）
+        desertPal(0x60422A, 0xCEA876, 0xC49C6A, 0xAC865A, 0xB08458, 0xD0AC82, 0x6E4E34,
+                0x6A7A3E, 0x968470, 0xB8A88E, 0x5E4838),
+        // 1 黄昏荒漠
+        desertPal(0x583822, 0xC89668, 0xBC8A5E, 0xA0744C, 0xA8764E, 0xC89A6C, 0x64442C,
+                0x7A6E38, 0x8E7460, 0xB0967C, 0x54402E),
+        // 2 灼烬裂谷
+        desertPal(0x34221C, 0x8A6450, 0x7E5A48, 0x664638, 0x6E4C40, 0x8E664E, 0x402A24,
+                0x5A4A2E, 0x6E5A50, 0x8E7666, 0x3C2C26),
+        // 3 终焉废土
+        desertPal(0x2C2636, 0x8A7C92, 0x7E7286, 0x665C74, 0x6E6480, 0x8E849E, 0x403850,
+                0x4E5A46, 0x6A6278, 0x8A8296, 0x383244),
+    };
+
+    private static Color[] desertPal(int outer, int sandA, int sandB, int crack, int wall,
+                                     int wallL, int wallD, int shrub,
+                                     int rock, int rockL, int rockD) {
+        return new Color[] { rgb(outer), rgb(sandA), rgb(sandB), rgb(crack),
+                rgb(wall), rgb(wallL), rgb(wallD), rgb(shrub),
+                rgb(rock), rgb(rockL), rgb(rockD) };
+    }
+
+    private static Color rgb(int v) {
+        return Color.rgb((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF);
+    }
+
+    /** 与坐标绑定的确定性哈希：装饰的形状/位置逐帧稳定，不闪烁 */
+    private static long hash2(int x, int y) {
+        long h = x * 374761393L + y * 668265263L;
+        h = (h ^ (h >>> 13)) * 1274126177L;
+        return h ^ (h >>> 16);
     }
 
     private void updateCamera(World w, float alpha) {
@@ -106,28 +139,154 @@ public final class Renderer {
         }
     }
 
-    private void drawTiles(double vw, double vh, Color tileA, Color tileB) {
+    /**
+     * 沙地：只在城墙内侧铺。参考图没有棋盘格，所以底色用单一沙色，
+     * 再叠哈希决定的沙丘暗斑 / 龟裂 / 碎石 / 枯灌，做出参考图那种斑驳质感。
+     * 装饰逐帧稳定不闪烁，也不增加任何实体开销。
+     */
+    private void drawGround(double vw, double vh, Color[] pal) {
         double left = camX - vw / 2;
         double top = camY - vh / 2;
+        float H = Balance.WORLD_HALF;
         int c0 = (int) Math.floor(left / TILE);
         int c1 = (int) Math.floor((left + vw) / TILE);
         int r0 = (int) Math.floor(top / TILE);
         int r1 = (int) Math.floor((top + vh) / TILE);
+        gc.setFill(pal[1]);
         for (int c = c0; c <= c1; c++) {
             for (int r = r0; r <= r1; r++) {
-                gc.setFill(((c + r) & 1) == 0 ? tileA : tileB);
-                gc.fillRect(c * TILE - left, r * TILE - top, TILE, TILE);
+                double x0 = Math.max(c * TILE, -H);
+                double y0 = Math.max(r * TILE, -H);
+                double x1 = Math.min((c + 1) * TILE, H);
+                double y1 = Math.min((r + 1) * TILE, H);
+                if (x1 <= x0 || y1 <= y0) {
+                    continue;   // 完全落在城墙外
+                }
+                // 装饰绘制会改画笔颜色，所以底色必须在每格绘制前重设
+                gc.setFill(pal[1]);
+                gc.fillRect(x0 - left, y0 - top, x1 - x0, y1 - y0);
+                boolean fullyInside = c * TILE >= -H && (c + 1) * TILE <= H
+                        && r * TILE >= -H && (r + 1) * TILE <= H;
+                if (fullyInside) {
+                    drawTileDecor(c, r, left, top, pal);
+                }
             }
         }
     }
 
-    /** 障碍物：静态碰撞体，绘制在实体下层，颜色随场景主题与类型变化 */
+    /** 每格至多一样装饰：沙丘暗斑 / 龟裂 / 碎石 / 枯灌，全部由哈希决定 */
+    private void drawTileDecor(int c, int r, double left, double top, Color[] pal) {
+        long h = hash2(c, r);
+        int roll = (int) ((h >>> 3) % 100);
+        double bx = c * TILE - left;
+        double by = r * TILE - top;
+        if (roll < 22) {
+            // 沙丘起伏：位置与大小都随哈希偏移，避免出现规则的网格感
+            double px = bx + TILE * (0.1 + ((h >>> 7) % 70) / 100.0);
+            double py = by + TILE * (0.1 + ((h >>> 11) % 70) / 100.0);
+            double rad = 12 + ((h >>> 15) % 22);
+            gc.setFill(pal[2].deriveColor(0, 1, 1, 0.35));
+            gc.fillOval(px - rad, py - rad * 0.7, rad * 2, rad * 1.4);
+        } else if (roll < 40) {
+            // 龟裂的干土
+            double px = bx + TILE * (0.15 + ((h >>> 7) % 65) / 100.0);
+            double py = by + TILE * (0.15 + ((h >>> 11) % 65) / 100.0);
+            double len = 14 + ((h >>> 15) % 18);
+            gc.setStroke(pal[3]);
+            gc.setLineWidth(1.5);
+            gc.strokeLine(px, py, px + len, py + len * 0.4);
+            gc.strokeLine(px + len * 0.5, py + len * 0.2, px + len * 0.8, py - len * 0.3);
+        } else if (roll < 58) {
+            // 散落碎石
+            gc.setFill(pal[3]);
+            for (int k = 0; k < 4; k++) {
+                double px = bx + TILE * (0.1 + ((h >>> (k * 6 + 5)) % 76) / 100.0);
+                double py = by + TILE * (0.1 + ((h >>> (k * 7 + 9)) % 76) / 100.0);
+                gc.fillOval(px, py, 4 + (k % 2) * 4, 3 + (k % 2) * 3);
+            }
+        } else if (roll < 68) {
+            // 枯灌：几笔向上的短枝
+            double px = bx + TILE * 0.5 + (((h >>> 9) % 24) - 12);
+            double py = by + TILE * 0.5 + (((h >>> 13) % 24) - 12);
+            gc.setStroke(pal[7]);
+            gc.setLineWidth(2);
+            for (int k = 0; k < 5; k++) {
+                double a = -Math.PI / 2 + (k - 2) * 0.4;
+                gc.strokeLine(px, py, px + Math.cos(a) * 10, py + Math.sin(a) * 10);
+            }
+        }
+    }
+
+    /**
+     * 环形城墙：沿世界边界 ±24px 铺石块，块长 / 厚度 / 色调由哈希抖动，
+     * 复现模板图那种"残破但连续"的遗迹围墙。只画视口内的部分。
+     */
+    private void drawBoundary(double vw, double vh, Color[] pal) {
+        double left = camX - vw / 2;
+        double top = camY - vh / 2;
+        double right = left + vw;
+        double bottom = top + vh;
+        float H = Balance.WORLD_HALF;
+        final double BLOCK = 46.0;
+        for (int side = 0; side < 4; side++) {
+            boolean horiz = side < 2;
+            double fixed = (side == 0 || side == 2) ? -H : H;
+            double a0 = horiz ? left : top;
+            double a1 = horiz ? right : bottom;
+            int i0 = (int) Math.floor(a0 / BLOCK) - 1;
+            int i1 = (int) Math.floor(a1 / BLOCK) + 1;
+            for (int i = i0; i <= i1; i++) {
+                long h = hash2(i, side * 977 + 13);
+                double jitter = ((h >>> 8) % 7) - 3;
+                double blockLen = BLOCK - 5 + jitter * 1.6;
+                double pa = i * BLOCK + jitter * 1.8;
+                double thick = 46.0;
+                double x;
+                double y;
+                double w;
+                double hgt;
+                if (horiz) {
+                    x = pa;
+                    y = fixed - thick / 2;
+                    w = blockLen;
+                    hgt = thick;
+                } else {
+                    x = fixed - thick / 2;
+                    y = pa;
+                    w = thick;
+                    hgt = blockLen;
+                }
+                if (x + w < left || x > right || y + hgt < top || y > bottom) {
+                    continue;
+                }
+                double sx = x - left;   // 世界坐标 -> 屏幕坐标
+                double sy = y - top;
+                int tone = (int) ((h >>> 20) % 5);
+                gc.setFill(tone < 2 ? pal[4] : (tone < 4 ? pal[5] : pal[6]));
+                gc.fillRect(sx, sy, w, hgt);
+                gc.setFill(pal[5]);   // 内侧受光边
+                if (horiz) {
+                    gc.fillRect(sx, side == 0 ? sy + hgt - 5 : sy, w, 5);
+                } else {
+                    gc.fillRect(side == 2 ? sx + w - 5 : sx, sy, 5, hgt);
+                }
+                gc.setFill(pal[6]);   // 外侧落影
+                if (horiz) {
+                    gc.fillRect(sx, side == 0 ? sy : sy + hgt - 4, w, 4);
+                } else {
+                    gc.fillRect(sx, side == 2 ? sy : sy + hgt - 4, w, 4);
+                }
+            }
+        }
+    }
+
+    /** 障碍物：模板风格的多边形岩石 / 石井，带落地阴影与受光面，绘制在实体下层 */
     private void drawObstacles(World w, float alpha, double vw, double vh) {
         double left = camX - vw / 2;
         double top = camY - vh / 2;
         double right = left + vw;
         double bottom = top + vh;
-        int stage = w.stage();
+        Color[] pal = STAGE_PAL[w.stage()];
         for (int i = 0; i < w.highWater(); i++) {
             if (!w.alive[i] || w.kind[i] != World.KIND_OBSTACLE) {
                 continue;
@@ -140,42 +299,62 @@ public final class Renderer {
             }
             double sx = rx - left;
             double sy = ry - top;
-            gc.setFill(obstacleFill(stage, w.meta[i]));
-            gc.fillOval(sx - rr, sy - rr, rr * 2, rr * 2);
-            gc.setStroke(obstacleStroke(stage));
-            gc.setLineWidth(2);
-            gc.strokeOval(sx - rr, sy - rr, rr * 2, rr * 2);
+            if (w.meta[i] == 3) {
+                drawWell(sx, sy, rr, pal);
+            } else {
+                drawBoulder(sx, sy, rr, i, pal);
+            }
         }
     }
 
-    private static Color obstacleFill(int stage, int type) {
-        return switch (stage) {
-            case 0 -> switch (type) { // 森林：树 / 巨石 / 灌木
-                case 0 -> Color.rgb(46, 92, 46);
-                case 1 -> Color.rgb(110, 110, 120);
-                default -> Color.rgb(60, 80, 50);
-            };
-            case 1 -> switch (type) { // 雪原：冰晶 / 雪堆
-                case 0 -> Color.rgb(150, 200, 230);
-                case 1 -> Color.rgb(205, 225, 240);
-                default -> Color.rgb(170, 190, 210);
-            };
-            case 2 -> Color.rgb(120, 50, 40);  // 熔岩：熔岩石（统一偏红）
-            default -> switch (type) {          // 终焉：虚空尖塔
-                case 0 -> Color.rgb(90, 60, 130);
-                case 1 -> Color.rgb(70, 50, 100);
-                default -> Color.rgb(110, 70, 150);
-            };
-        };
+    /** 岩石：不规则多边形 + 左上受光面 + 右下落影，形状由实体下标决定且逐帧稳定 */
+    private void drawBoulder(double sx, double sy, double rr, int seed, Color[] pal) {
+        long h = hash2(seed, 7919);
+        int n = 6 + (int) ((h >>> 4) % 3);
+        double[] xs = new double[n];
+        double[] ys = new double[n];
+        for (int k = 0; k < n; k++) {
+            double a = k * (Math.PI * 2 / n)
+                    + (((h >>> (k % 14)) % 100) / 100.0) * (Math.PI * 2 / n) * 0.6;
+            double rad = rr * (0.8 + (((h >>> (k * 5 + 3)) % 100) / 100.0) * 0.32);
+            xs[k] = sx + Math.cos(a) * rad;
+            ys[k] = sy + Math.sin(a) * rad;
+        }
+        gc.setFill(Color.rgb(0, 0, 0, 0.18));
+        gc.fillOval(sx - rr * 0.92, sy + rr * 0.42, rr * 1.84, rr * 0.86);
+        gc.setFill(pal[8]);
+        gc.fillPolygon(xs, ys, n);
+        gc.setStroke(pal[10]);
+        gc.setLineWidth(2);
+        gc.strokePolygon(xs, ys, n);
+        double[] hx = new double[n];
+        double[] hy = new double[n];
+        for (int k = 0; k < n; k++) {
+            hx[k] = sx + (xs[k] - sx) * 0.52 - rr * 0.12;
+            hy[k] = sy + (ys[k] - sy) * 0.52 - rr * 0.16;
+        }
+        gc.setFill(pal[9]);
+        gc.fillPolygon(hx, hy, n);
     }
 
-    private static Color obstacleStroke(int stage) {
-        return switch (stage) {
-            case 0 -> Color.rgb(20, 40, 20);
-            case 1 -> Color.rgb(120, 160, 190);
-            case 2 -> Color.rgb(200, 90, 60);
-            default -> Color.rgb(60, 40, 90);
-        };
+    /** 石井：石圈 + 井口黑洞 + 八块井沿石，对应模板图中央的遗迹水井 */
+    private void drawWell(double sx, double sy, double rr, Color[] pal) {
+        gc.setFill(Color.rgb(0, 0, 0, 0.2));
+        gc.fillOval(sx - rr, sy - rr + 7, rr * 2, rr * 2);
+        gc.setFill(pal[8]);
+        gc.fillOval(sx - rr, sy - rr, rr * 2, rr * 2);
+        gc.setStroke(pal[6]);
+        gc.setLineWidth(3);
+        gc.strokeOval(sx - rr, sy - rr, rr * 2, rr * 2);
+        gc.setFill(rgb(0x26211C));
+        gc.fillOval(sx - rr * 0.6, sy - rr * 0.6, rr * 1.2, rr * 1.2);
+        gc.setFill(pal[5]);
+        for (int k = 0; k < 8; k++) {
+            double a = k * Math.PI / 4;
+            double bx = sx + Math.cos(a) * rr * 0.82;
+            double by = sy + Math.sin(a) * rr * 0.82;
+            gc.fillOval(bx - 5, by - 5, 10, 10);
+        }
     }
 
     private void drawEntities(World w, float alpha, double vw, double vh) {
@@ -560,6 +739,42 @@ public final class Renderer {
      * 三张卡片展示各职业的基础属性、特性、起手武器与技能池预览。
      * 卡片矩形必须与 GameApp.classCardRects 完全一致，否则点不到。
      */
+    /** 胜利结算画面：半透明罩层 + 战报。由 GameApp 在 world.victory() 时调用 */
+    public void drawVictory(World w, double vw, double vh) {
+        gc.setFill(Color.rgb(8, 6, 14, 0.8));
+        gc.fillRect(0, 0, vw, vh);
+
+        gc.setFont(Font.font("Microsoft YaHei", 46));
+        gc.setFill(Color.rgb(255, 214, 120));
+        gc.fillText("胜  利", vw / 2 - 56, vh * 0.32);
+
+        gc.setFont(Font.font("Microsoft YaHei", 16));
+        gc.setFill(Color.rgb(235, 230, 220));
+        gc.fillText("终焉之影已被击败，奥术旅团凯旋！", vw / 2 - 148, vh * 0.32 + 48);
+
+        int wid = w.wizardCount() > 0 ? w.wizard(0) : -1;
+        Loadout lo = (wid >= 0) ? w.loadout(wid) : null;
+        int secs = (int) w.time();
+        String stats = String.format("用时 %d:%02d    等级 Lv.%d    击杀 %d",
+                secs / 60, secs % 60,
+                (lo != null ? lo.level : 0), w.killCount());
+        gc.setFont(Font.font("Consolas", 15));
+        gc.setFill(Color.rgb(200, 200, 215));
+        double tw = measurerLayout(stats, Font.font("Consolas", 15));
+        gc.fillText(stats, vw / 2 - tw / 2, vh * 0.32 + 96);
+
+        gc.setFont(Font.font("Microsoft YaHei", 13));
+        gc.setFill(Color.rgb(160, 160, 180));
+        gc.fillText("按 R 重新开始", vw / 2 - 48, vh * 0.32 + 140);
+    }
+
+    /** 量字符串像素宽度，同时返回宽度（复用 measurer，避免每帧新建 Text 节点） */
+    private double measurerLayout(String s, Font f) {
+        measurer.setFont(f);
+        measurer.setText(s);
+        return measurer.getLayoutBounds().getWidth();
+    }
+
     public void drawClassSelect(double vw, double vh, double[][] rects, double mx, double my) {
         gc.setFill(Color.rgb(14, 12, 22));
         gc.fillRect(0, 0, vw, vh);

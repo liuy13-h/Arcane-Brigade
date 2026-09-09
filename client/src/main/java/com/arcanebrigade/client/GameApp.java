@@ -80,10 +80,14 @@ public final class GameApp extends Application {
                 return;
             }
             pressed.add(e.getCode());
-            // R 键在升级面板弹出时是重抽
-            if (e.getCode() == KeyCode.R && world.wizardCount() > 0
-                    && world.pendingChoices(world.wizard(0)) > 0) {
-                world.rerollChoices(world.wizard(0));
+            // R 键：胜利画面下重开一局；升级面板弹出时则是重抽
+            if (e.getCode() == KeyCode.R) {
+                if (world.victory()) {
+                    restart();
+                } else if (world.wizardCount() > 0
+                        && world.pendingChoices(world.wizard(0)) > 0) {
+                    world.rerollChoices(world.wizard(0));
+                }
             }
         });
         scene.setOnKeyReleased(e -> pressed.remove(e.getCode()));
@@ -142,6 +146,18 @@ public final class GameApp extends Application {
                     double vw = canvas.getWidth();
                     double vh = canvas.getHeight();
                     renderer.drawClassSelect(vw, vh, classCardRects(vw, vh), mouseX, mouseY);
+                    return;
+                }
+
+                // 胜利：冻结模拟，罩层结算。模拟一旦停了就不再推进，直到按 R 重开
+                if (world.victory()) {
+                    renderer.setFps(fps[0]);
+                    renderer.draw(world, 0f);
+                    renderer.drawVictory(world, canvas.getWidth(), canvas.getHeight());
+                    if (smokeFrames > 0 && ++renderedFrames >= smokeFrames) {
+                        System.out.printf("[smoke] 胜利画面，渲染 %d 帧完成，退出%n", renderedFrames);
+                        Platform.exit();
+                    }
                     return;
                 }
 
@@ -236,6 +252,14 @@ public final class GameApp extends Application {
         world.spawnWizard(0f, 0f, classKind);
         chosenClass = classKind;
         selecting = false;
+    }
+
+    /** 胜利后重开：换一个种子重建世界，回到选职业界面 */
+    private void restart() {
+        world = new World(System.nanoTime());
+        selecting = true;
+        pressed.clear();
+        renderedFrames = 0;
     }
 
     /** 三张职业卡片的矩形 [x, y, w, h]，命中判定与 Renderer 必须一致 */

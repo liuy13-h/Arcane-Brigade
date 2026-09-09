@@ -339,6 +339,7 @@ public final class HeadlessSmoke {
         int maxEnemies = 0;
         int lastBoss = -1;
         int bossSeen = 0;
+        int lvlIdx = 0;
         long t0 = System.nanoTime();
         for (int i = 0; i < frames; i++) {
             double base = i * 0.004;
@@ -352,17 +353,24 @@ public final class HeadlessSmoke {
                 System.out.printf("  阶段切换 -> stage %d  t=%.1fs  障碍物 %d  场上敌人 %d%n",
                         s, w.time(), w.obstacleCount(), w.enemyCount());
             }
-            // Boss 登场/倒下：验证 BOSS_TIMES 时间表真的把 Boss 送进场
+            // Boss 登场/倒下：验证 BOSS_LEVELS 等级表真的把 Boss 送进场
             int b = w.bossId();
             if (b != lastBoss) {
                 if (b >= 0) {
                     bossSeen++;
-                    System.out.printf("  Boss 登场：%s  t=%.1fs  HP=%.0f  场上敌人 %d%n",
-                            w.bossName(), w.time(), w.maxHp[b], w.enemyCount());
+                    System.out.printf("  Boss 登场：%s  Lv.%d  t=%.1fs  HP=%.0f  场上敌人 %d%n",
+                            w.bossName(), w.playerLevel(), w.time(), w.maxHp[b], w.enemyCount());
                 } else {
-                    System.out.printf("  Boss 被击杀  t=%.1fs%n", w.time());
+                    System.out.printf("  Boss 被击杀  Lv.%d  t=%.1fs%n", w.playerLevel(), w.time());
                 }
                 lastBoss = b;
+            }
+            // 记录玩家升到每个 Boss 触发等级的时间点，用来评估等级曲线节奏
+            if (lvlIdx < Balance.BOSS_LEVELS.length
+                    && w.playerLevel() >= Balance.BOSS_LEVELS[lvlIdx]) {
+                System.out.printf("  达到 Lv.%d  t=%.1fs  场上敌人 %d%n",
+                        Balance.BOSS_LEVELS[lvlIdx], w.time(), w.enemyCount());
+                lvlIdx++;
             }
             maxObstacles = Math.max(maxObstacles, w.obstacleCount());
             maxEnemies = Math.max(maxEnemies, w.enemyCount());
@@ -386,8 +394,9 @@ public final class HeadlessSmoke {
                 frames, frames * Balance.FIXED_STEP, (t1 - t0) / 1e6);
         System.out.printf("到达阶段 %d，最大障碍数 %d（安全圈外生成），峰值敌人 %d，结束敌人 %d%n",
                 lastStage, maxObstacles, maxEnemies, w.enemyCount());
-        System.out.printf("时间表 Boss 登场次数 %d，血量成长系数 t=%.0fs 时 %.1fx%n",
-                bossSeen, w.time(), Balance.enemyHpScale(w.time()));
+        System.out.printf("等级表 Boss 登场次数 %d / %d，结束时 Lv.%d，血量成长系数 t=%.0fs 时 %.1fx%n",
+                bossSeen, Balance.BOSS_LEVELS.length, w.playerLevel(),
+                w.time(), Balance.enemyHpScale(w.time()));
         System.out.printf("显式 Boss id=%d，30 秒后 %s%n",
                 bossIdAtSpawn, bossGone ? "已被击杀（阶段技能路径已覆盖）" : "仍存活");
         System.out.println("OK：场景 / 障碍 / 阶段 / Boss 代码路径无异常");

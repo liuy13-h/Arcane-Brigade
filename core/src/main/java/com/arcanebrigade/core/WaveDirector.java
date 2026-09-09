@@ -9,24 +9,25 @@ import java.util.Random;
  *   1) 基础刷怪：速率随时间爬升，但封顶；场上数量受"软上限"约束，
  *      所以玩家看到的怪明显变少，难度改由敌人血量成长曲线承担。
  *   2) 变体怪：随时间解锁精英 / 小偷 / 远程，按概率混入普通刷怪。
- *   3) Boss：按 Balance.BOSS_TIMES 在每个阶段末尾登场，一局共 4 只。
+ *   3) Boss：玩家升到 Balance.BOSS_LEVELS 里的等级时登场，一局共 4 只。
  *      Boss 在场时普通刷怪降速，把舞台让给 Boss 战。
  *
- * 时间点全部读 Balance，改阶段时长 / Boss 时间表这里自动跟着变。
+ * 等级阈值与刷怪数值全部读 Balance，改 Boss 出场节奏这里自动跟着变。
  */
 public final class WaveDirector {
 
     private float acc;
-    /** 每只 Boss 是否已登场，长度对齐 Balance.BOSS_TIMES */
-    private final boolean[] bossSpawned = new boolean[Balance.BOSS_TIMES.length];
+    /** 每只 Boss 是否已登场，长度对齐 Balance.BOSS_LEVELS */
+    private final boolean[] bossSpawned = new boolean[Balance.BOSS_LEVELS.length];
     private final Random rng = new Random(0x5EEDL);
 
     public void update(World w, float dt) {
         float t = w.time();
 
-        // --- Boss 时间表：到点就上，但若上一只还活着就等它倒下再上 ---
-        for (int i = 0; i < Balance.BOSS_TIMES.length; i++) {
-            if (!bossSpawned[i] && t >= Balance.BOSS_TIMES[i] && w.bossId() < 0) {
+        // --- Boss 等级表：到等级就上，但若上一只还活着就等它倒下再上 ---
+        int level = w.playerLevel();
+        for (int i = 0; i < Balance.BOSS_LEVELS.length; i++) {
+            if (!bossSpawned[i] && level >= Balance.BOSS_LEVELS[i] && w.bossId() < 0) {
                 bossSpawned[i] = true;
                 w.spawnBoss(i);
             }

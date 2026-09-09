@@ -239,8 +239,13 @@ public final class Balance {
     public static final float RANGED_KEEP_DIST = 280f;   // 保持的最小距离，太近就后退
 
     // ---- Boss（本轮正式引入：每个阶段末尾一只，一局共 4 只）----
-    /** 登场时间点（秒）。与 STAGE_DURATIONS 对齐：每阶段末一只，1100s 是最终 Boss */
-    public static final float[] BOSS_TIMES    = { 300f, 600f, 900f, 1100f };
+    /**
+     * 登场触发等级：玩家升到这些等级时刷对应那只 Boss。
+     * 用等级而不是时间，是因为等级直接反映 build 强度——
+     * 同样的时间点，一个吃满经验的玩家和一个挂机的玩家该面对的 Boss 强度不该一样。
+     * 到等级但上一只还活着时不会叠加，会等它倒下再上（见 WaveDirector）。
+     */
+    public static final int[]   BOSS_LEVELS   = { 4, 8, 12, 16 };
     public static final String[] BOSS_NAMES   = { "石心巨像", "熔岩领主", "霜寂君王", "终焉之影" };
     /** 每只 Boss 的血池。第一只别太肉，5 分钟时的 build 打得动 */
     public static final float[] BOSS_HP_TIERS = { 2000f, 4200f, 7200f, 13000f };

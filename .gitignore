@@ -35,3 +35,7 @@ desktop.ini
 *.log
 hs_err_pid*
 replay_pid*
+
+# ---- 运行/预览产物 ----
+preview/
+build.log
