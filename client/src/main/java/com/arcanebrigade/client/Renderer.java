@@ -2,6 +2,8 @@ package com.arcanebrigade.client;
 
 import com.arcanebrigade.core.Balance;
 import com.arcanebrigade.core.Element;
+import com.arcanebrigade.core.enemy.BoneSerpent;
+import com.arcanebrigade.core.enemy.EnemyStats;
 import com.arcanebrigade.core.HeroClass;
 import com.arcanebrigade.core.Loadout;
 import com.arcanebrigade.core.PassiveDef;
@@ -30,6 +32,13 @@ import javafx.scene.text.Text;
 public final class Renderer {
 
     private static final double TILE = 72.0;
+
+    /**
+     * 小怪精灵的脚底线：相对实体中心的屏幕 y 偏移。绿史莱姆是 32×32 精灵、
+     * 以 (sx-16, sy-16) 居中绘制，不透明像素底边落在中心下方 14px。跳跳史莱姆
+     * 用同一条线贴地，两者才会站在同一个平面上。
+     */
+    private static final double GROUND_LINE = 14.0;
 
     /** 复用同一个 Text 量宽度，避免每帧新建节点 */
     private static final Text measurer = new Text();
@@ -421,6 +430,12 @@ public final class Renderer {
             double sx = rx - left;
             double sy = ry - top;
 
+            // 骨蛇整条交给 drawSerpent 按链序（尾→头）绘制：按 id 画的话头会先落笔，
+            // 随后每一节身体都盖在头上，转弯时看起来就是一串散开的头骨。
+            if (w.kind[i] == World.KIND_ENEMY && w.variant[i] == EnemyStats.V_SERPENT) {
+                continue;
+            }
+
             switch (w.kind[i]) {
                 case World.KIND_WIZARD -> {
                     Loadout wlo = w.loadout(i);
@@ -455,8 +470,10 @@ public final class Renderer {
                     }
                 }
                 case World.KIND_ENEMY -> {
-                    if (w.variant[i] == World.V_BOSS) {
+                    if (w.variant[i] == EnemyStats.V_BOSS) {
                         drawBossSprite(w, i, sx, sy);
+                    } else if (w.variant[i] == EnemyStats.V_SLIME) {
+                        drawSlime(w, i, sx, sy);
                     } else {
                         gc.drawImage(Sprites.enemies[w.meta[i] % Sprites.enemies.length], sx - 16, sy - 16);
                     }
@@ -470,15 +487,30 @@ public final class Renderer {
                     }
                 }
                 case World.KIND_MINION -> {
-                    // 宠物：秘能仆从，带一条细血条（血是普通小怪的 2 倍，值得看）
-                    if (Sprites.minion != null) {
-                        gc.drawImage(Sprites.minion, sx - 14, sy - 18, 28, 28);
+                    // 宠物：Abigail 幽灵，带一条细血条（血是普通小怪的 2 倍，值得看）。
+                    // 走动相位与世界时间同步——4 只宠物不会各播各的动画。
+                    Image min = null;
+                    if (Sprites.minionAnim != null) {
+                        min = Sprites.minionAnim.frameAt(w.time());
+                    }
+                    if (min == null) {
+                        min = Sprites.minion;
+                    }
+                    // 血条贴精灵头顶。Abigail 比旧的 28×28 仆从高出近一倍，
+                    // 血条要是还留在实体半径那条线上，会正好横在幽灵脸上。
+                    double minTop = sy - rr - 9;
+                    if (min != null) {
+                        // 底边贴地：脚落在实体半径处，与旧版 28×28 的落地线一致
+                        double mw = min.getWidth();
+                        double mh = min.getHeight();
+                        minTop = sy + w.r[i] - mh;
+                        gc.drawImage(min, Math.round(sx - mw / 2), Math.round(minTop));
                     }
                     float mf = Math.max(0f, w.hp[i] / Math.max(1f, w.maxHp[i]));
                     gc.setFill(Color.rgb(30, 12, 16, 0.85));
-                    gc.fillRect(sx - 12, sy - rr - 9, 24, 4);
+                    gc.fillRect(sx - 12, minTop - 6, 24, 4);
                     gc.setFill(Color.rgb(150, 215, 255));
-                    gc.fillRect(sx - 11, sy - rr - 8, 22 * mf, 2);
+                    gc.fillRect(sx - 11, minTop - 5, 22 * mf, 2);
                 }
                 case World.KIND_PROJECTILE -> {
                     // 敌人弹幕用统一的"敌意红"，玩家弹幕按元素上色——两者不能混成一种颜色，
@@ -504,6 +536,46 @@ public final class Renderer {
                 case World.KIND_ZONE -> drawZone(w, i, sx, sy);
                 default -> { }
             }
+        }
+        drawSerpent(w, alpha, left, top);
+    }
+
+    /**
+     * 骨蛇：独立于实体循环、按**链序从尾到头**绘制。
+     *
+     * 从尾往头画，后面的骨节才会压住前面的——折返转弯时呈现的是"蛇身叠在头后面"，
+     * 这正是飞龙该有的层次感；反过来画则每一节都会盖住头。
+     *
+     * 朝向直接问 BoneSerpent.segmentAngle：头朝玩家、其余节朝前一节，与碰撞用的
+     * 骨链是同一个方向。角度不落库也不插值——它每帧都能从位置重推，且 60Hz 下
+     * 相邻帧的角度差极小，插值省下来的抖动肉眼根本看不到。
+     *
+     * 每帧只有 SERPENT_SEGMENTS（12）次旋转绘制，不值得像弹幕那样预烘焙旋转帧。
+     */
+    private void drawSerpent(World w, float alpha, double left, double top) {
+        int n = w.serpentSegmentCount();
+        if (n <= 0) {
+            return;
+        }
+        for (int s = n - 1; s >= 0; s--) {
+            int seg = w.serpentSegment(s);
+            if (seg < 0 || !w.alive[seg]) {
+                continue;
+            }
+            Image img = (s == 0) ? Sprites.serpentHead
+                    : (s == n - 1) ? Sprites.serpentTail : Sprites.serpentBody;
+            if (img == null) {
+                continue;   // 美术缺失：整条蛇不画，但逻辑照跑（冒烟测试仍能验证 AI）
+            }
+            float rx = w.px[seg] + (w.x[seg] - w.px[seg]) * alpha;
+            float ry = w.py[seg] + (w.y[seg] - w.py[seg]) * alpha;
+            double iw = img.getWidth();
+            double ih = img.getHeight();
+            gc.save();
+            gc.translate(rx - left, ry - top);
+            gc.rotate(Math.toDegrees(BoneSerpent.segmentAngle(w, s)));
+            gc.drawImage(img, -iw / 2, -ih / 2);
+            gc.restore();
         }
     }
 
@@ -533,6 +605,34 @@ public final class Renderer {
             gc.setFill(Color.rgb(150, 60, 70));
             gc.fillOval(sx - w.r[i], sy - w.r[i], w.r[i] * 2, w.r[i] * 2);
         }
+    }
+
+    /**
+     * 跳跳史莱姆：用 Blue_Slime.gif 动画帧，按 World.hopH 的跳跃高度整体抬升精灵，
+     * 脚下始终压一道地面阴影（腾空越高，影子越小越淡，落回原位时恢复）。
+     * 缺 GIF 时退回静态绿史莱姆，保证不会白屏。
+     */
+    private void drawSlime(World w, int i, double sx, double sy) {
+        float hop = w.hopH[i];
+        Image img = null;
+        if (Sprites.slimeAnim != null && Sprites.slimeAnim.frames.length > 0) {
+            img = Sprites.slimeAnim.frameAt(w.time());
+        }
+        if (img == null) {
+            img = Sprites.enemies[0];
+        }
+
+        // 地面阴影：越腾空越小越淡，落回时恢复
+        double airRatio = Math.max(0.0, Math.min(1.0, hop / EnemyStats.SLIME_HOP_HEIGHT));
+        double shadowScale = 1.0 - 0.45 * airRatio;
+        double sw = w.r[i] * 2 * shadowScale;
+        gc.setFill(Color.rgb(0, 0, 0, 0.06 + 0.26 * (1.0 - airRatio)));
+        gc.fillOval(sx - sw / 2, sy + GROUND_LINE - 3, sw, 6);
+
+        // 精灵底边落在与绿史莱姆一致的脚底线上，再按 hop 整体上移
+        double hw = img.getWidth();
+        double hh = img.getHeight();
+        gc.drawImage(img, Math.round(sx - hw / 2), Math.round(sy + GROUND_LINE - hh - hop));
     }
 
     /** 敌人身上的元素状态：一圈元素色的环；被眩晕时环变成断续的白色 */
@@ -772,16 +872,19 @@ public final class Renderer {
         if (bid < 0 || !w.alive[bid]) {
             return;
         }
-        double bw = Math.min(700, vw - 80);
+        // 小 Boss（骨蛇）血条短一截、换成骨白色：一眼能分出"遭遇战"和"阶段 Boss"，
+        // 也免得玩家把骨蛇误当成需要认真准备的那四只
+        boolean mini = w.serpentActive();
+        double bw = Math.min(mini ? 440 : 700, vw - 80);
         double bh = 14;
         double bx = (vw - bw) / 2;
         double by = 16;
         float f = Math.max(0f, w.hp[bid] / w.maxHp[bid]);
         gc.setFill(Color.rgb(8, 6, 12, 0.8));
         gc.fillRect(bx - 3, by - 3, bw + 6, bh + 6);
-        gc.setFill(Color.rgb(60, 20, 30));
+        gc.setFill(mini ? Color.rgb(46, 42, 30) : Color.rgb(60, 20, 30));
         gc.fillRect(bx, by, bw, bh);
-        gc.setFill(Color.rgb(220, 60, 80));
+        gc.setFill(mini ? Color.rgb(226, 208, 150) : Color.rgb(220, 60, 80));
         gc.fillRect(bx, by, bw * f, bh);
         if (w.enemyShield[bid] > 0f) {
             float sf = Math.min(1f, w.enemyShield[bid] / w.maxHp[bid]);
@@ -789,15 +892,15 @@ public final class Renderer {
             gc.fillRect(bx, by, bw * sf, bh);
         }
         gc.setFont(hudFont);
-        gc.setFill(Color.rgb(255, 190, 200));
-        String title = "BOSS  " + w.bossName();
+        gc.setFill(mini ? Color.rgb(245, 235, 205) : Color.rgb(255, 190, 200));
+        String title = (mini ? "小 BOSS  " : "BOSS  ") + w.bossName();
         int tier = w.bossTier();
         if (tier >= 0) {
-            title += "  (" + (tier + 1) + "/" + Balance.BOSS_NAMES.length + ")";
+            title += "  (" + (tier + 1) + "/" + EnemyStats.BOSS_NAMES.length + ")";
         }
         gc.fillText(title, bx, by - 6);
         // 右侧显示剩余血量数字，玩家能判断还要打多久
-        gc.setFill(Color.rgb(240, 220, 230));
+        gc.setFill(mini ? Color.rgb(238, 230, 210) : Color.rgb(240, 220, 230));
         String hpText = String.format("%.0f / %.0f", w.hp[bid], w.maxHp[bid]);
         gc.fillText(hpText, bx + bw - measureWidth(hudFont, hpText), by - 6);
     }

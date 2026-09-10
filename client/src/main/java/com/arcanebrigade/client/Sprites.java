@@ -18,6 +18,8 @@ import javafx.scene.paint.RadialGradient;
 import javafx.scene.paint.Stop;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.function.Consumer;
 
@@ -38,8 +40,22 @@ public final class Sprites {
     public static GifDecoder.Animation[] heroWalk = new GifDecoder.Animation[5];
     /** 按 Boss 档位索引的 Boss 形象（BOSS_NAMES 的顺序） */
     public static Image[] bosses = new Image[4];
-    /** 召唤师的宠物形象（程序化：没给美术素材，自己画一只秘能仆从） */
+    /** 召唤师的宠物形象（程序化兜底：Abigail 美术读不到时自己画一只秘能仆从） */
     public static Image minion;
+    /** 召唤师宠物的逐帧动画（Abigail_(minion).gif 解码），null 时退化为上面的静态兜底形象 */
+    public static GifDecoder.Animation minionAnim;
+    /**
+     * 骨蛇（小 Boss）三段美术：头 / 身体 / 尾巴。
+     *
+     * 三张都是**朝上**的竖构图——头的口鼻在上、脖子在底端；身体是竖着走的脊柱
+     * （左右是肋骨，中间那列才是脊椎）；尾巴上宽下尖。所以把它们按序首尾相接时，
+     * 只要让每一节的"上"指向它前面那一节，骨节就自然连成一条曲线。
+     * 按原生尺寸绘制：头 42×76、身体 42×24、尾 22×24，与 EnemyStats 里的
+     * SERPENT_HEAD_GAP / SERPENT_SPACING 是按同一套尺寸配的，改尺寸要一起改。
+     */
+    public static Image serpentHead;
+    public static Image serpentBody;
+    public static Image serpentTail;
     /** 王座大厅背景（启动后的准备大厅整屏底图） */
     public static Image lobbyBg;
     /**
@@ -54,6 +70,8 @@ public final class Sprites {
      */
     public static Image[] heroPortraits = new Image[5];
     public static Image[] enemies = new Image[3];
+    /** 跳跳史莱姆的跳动动画（Blue_Slime.gif 解码 + 最近邻放大），null 时退化为静态史莱姆 */
+    public static GifDecoder.Animation slimeAnim;
     /** 按元素索引的弹体颜色，见 Element。运行时只查表，不做任何变换 */
     public static Image[] bolts = new Image[Element.COUNT];
     /** 敌方弹幕（统一的"敌意红"），与玩家元素弹做明显区分 */
@@ -83,6 +101,13 @@ public final class Sprites {
             bosses[t] = loadBoss(t);
         }
         minion = bake(28, 28, Sprites::paintMinion);
+        // 召唤物：从仓库根 image/ 读 Abigail 幽灵 GIF（用户指定替换掉程序化仆从）
+        minionAnim = loadMinionAnim();
+        // 骨蛇三段美术。原素材是 WebP，JavaFX 21 没有 WebP 解码器（会抛
+        // "No loader for image data"），已用 PIL 转成同尺寸 PNG 后入库。
+        serpentHead = loadArt("Bone_Serpent_Head.png");
+        serpentBody = loadArt("Bone_Serpent_Body.png");
+        serpentTail = loadArt("Bone_Serpent_Tail.png");
 
         // 大厅背景与标题画面：从仓库根 image/ 读现成美术
         lobbyBg = loadArt("皇宫王座大厅背景.jpg");
@@ -98,6 +123,8 @@ public final class Sprites {
         enemies[0] = bake(32, 32, g -> paintSlime(g, Color.rgb(96, 200, 120), Color.rgb(40, 120, 70)));
         enemies[1] = bake(32, 32, g -> paintBat(g, Color.rgb(178, 130, 235), Color.rgb(96, 62, 150)));
         enemies[2] = bake(32, 32, g -> paintBrute(g, Color.rgb(240, 150, 80), Color.rgb(150, 74, 30)));
+        // 跳跳史莱姆：从仓库根 image/ 读现成 GIF，最近邻放大到比主角略小的尺寸
+        slimeAnim = loadSlimeAnim();
         bolts[Element.NONE]   = bake(22, 22, g -> paintBolt(g,
                 Color.rgb(255, 250, 225), Color.rgb(255, 215, 120), Color.rgb(230, 180, 90)));
         bolts[Element.FIRE]   = bake(22, 22, g -> paintBolt(g,
@@ -296,7 +323,11 @@ public final class Sprites {
      * 兼容 run.bat（项目根）与 IntelliJ（可能是模块目录）两种工作目录。
      * 找不到时打印警告并返回 null，调用方需容忍缺图。
      */
-    private static Image loadArt(String fileName) {
+    /**
+     * 从仓库根目录 image/ 定位某个美术文件。从当前工作目录往上逐级找 image 目录，
+     * 兼容 run.bat（项目根）与 IntelliJ（可能是模块目录）两种工作目录。
+     */
+    private static File artFile(String fileName) {
         File dir = null;
         for (File d = new File(System.getProperty("user.dir")); d != null; d = d.getParentFile()) {
             File cand = new File(d, "image");
@@ -305,12 +336,75 @@ public final class Sprites {
                 break;
             }
         }
-        File f = (dir != null) ? new File(dir, fileName) : new File(fileName);
+        return (dir != null) ? new File(dir, fileName) : new File(fileName);
+    }
+
+    private static Image loadArt(String fileName) {
+        File f = artFile(fileName);
         if (!f.isFile()) {
             System.err.println("[Sprites] 缺少美术资源: " + f.getAbsolutePath());
             return null;
         }
         return new Image(f.toURI().toString(), false);
+    }
+
+    /**
+     * 跳跳史莱姆的目标高度：与原图一致（32×24），即不放大、按原生像素绘制。
+     * 绿史莱姆是 32px 精灵，原图尺寸下两者的像素密度与体格才对得上。
+     */
+    private static final int SLIME_TARGET_H = 24;
+
+    /** 跳跳史莱姆：解码 image/Blue_Slime.gif，按原生尺寸使用（不下采样也不放大） */
+    private static GifDecoder.Animation loadSlimeAnim() {
+        File f = artFile("Blue_Slime.gif");
+        if (!f.isFile()) {
+            System.err.println("[Sprites] 缺少美术资源: " + f.getAbsolutePath());
+            return null;
+        }
+        try (InputStream in = new FileInputStream(f)) {
+            return scaleAnim(GifDecoder.decode(in), SLIME_TARGET_H);
+        } catch (IOException e) {
+            System.err.println("[Sprites] 读取 Blue_Slime.gif 失败: " + e);
+            return null;
+        }
+    }
+
+    /**
+     * 召唤物（Abigail 幽灵）的目标高度 = 原图高度（30×50），即不缩放、按原生像素绘制。
+     * 与蓝色史莱姆同样的取舍：整数倍缩放才能保住像素风，×2 就比主角还高，所以取 1×。
+     */
+    private static final int MINION_TARGET_H = 50;
+
+    /** 召唤物：解码 image/Abigail_(minion).gif，按原生尺寸使用 */
+    private static GifDecoder.Animation loadMinionAnim() {
+        File f = artFile("Abigail_(minion).gif");
+        if (!f.isFile()) {
+            System.err.println("[Sprites] 缺少美术资源: " + f.getAbsolutePath());
+            return null;
+        }
+        try (InputStream in = new FileInputStream(f)) {
+            return scaleAnim(GifDecoder.decode(in), MINION_TARGET_H);
+        } catch (IOException e) {
+            System.err.println("[Sprites] 读取 Abigail_(minion).gif 失败: " + e);
+            return null;
+        }
+    }
+
+    /**
+     * 把动画每帧按最近邻整数倍缩放，得到清晰像素风，返回新 Animation（原动画不动）。
+     * k=1 表示原图已经就是目标尺寸，直接沿用（pixelScale 会原样返回）。
+     */
+    private static GifDecoder.Animation scaleAnim(GifDecoder.Animation a, int targetH) {
+        if (a == null || a.frames.length == 0) {
+            return null;
+        }
+        int srcH = (int) a.frames[0].getHeight();
+        int k = Math.max(1, (int) Math.round(targetH / (double) srcH));
+        Image[] out = new Image[a.frames.length];
+        for (int i = 0; i < a.frames.length; i++) {
+            out[i] = pixelScale(a.frames[i], k);
+        }
+        return new GifDecoder.Animation(out, a.delays);
     }
 
     /**

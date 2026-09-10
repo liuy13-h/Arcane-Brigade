@@ -50,6 +50,16 @@ if not exist "%CLIENTOUT%" mkdir "%CLIENTOUT%"
 dir /s /b "client\src\main\java\*.java" > "%TEMP%\ab_client_src.txt"
 "%JAVAC%" --release 17 -encoding UTF-8 -cp "%COREOUT%;%FB%;%FG%;%FC%;%FM%" -d "%CLIENTOUT%" "@%TEMP%\ab_client_src.txt"
 if errorlevel 1 goto :failbuild
+
+rem javac does NOT copy resources. Character art, walk GIFs, boss art and the
+rem icon all live in client\src\main\resources and are read from /sprites/...
+rem on the classpath. Without this copy the game silently falls back to the
+rem procedural placeholder art (missing character models). Maven does this via
+rem maven-resources-plugin; the javac path has to do it by hand.
+if exist "client\src\main\resources" (
+  xcopy /e /i /y /q "client\src\main\resources\*" "%CLIENTOUT%\" >nul
+  if errorlevel 1 goto :failbuild
+)
 del /q "%TEMP%\ab_core_src.txt" "%TEMP%\ab_client_src.txt" >nul 2>nul
 
 :run

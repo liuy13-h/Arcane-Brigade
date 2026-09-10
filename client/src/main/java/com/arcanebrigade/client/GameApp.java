@@ -229,7 +229,8 @@ public final class GameApp extends Application {
 
         // 战斗冒烟：跳过大厅，自动选职业直接跑真实模拟+渲染路径做稳定性验证。
         // -Dab.class=N 可指定职业（默认巫师），用来覆盖各职业专属的渲染分支；
-        // -Dab.boss=N 直接刷第 N 只 Boss，用来覆盖 Boss 立绘 / 阶段技能渲染路径。
+        // -Dab.boss=N 直接刷第 N 只 Boss，用来覆盖 Boss 立绘 / 阶段技能渲染路径；
+        // -Dab.serpent=1 直接刷骨蛇（小 Boss），用来覆盖多节蛇身的旋转绘制路径。
         if (smokeFrames > 0) {
             int pick = HeroClass.WIZARD;
             String cls = System.getProperty("ab.class");
@@ -246,6 +247,10 @@ public final class GameApp extends Application {
                 if (tier >= 0 && tier < 4) {
                     world.spawnBoss(tier);
                 }
+            }
+            String ser = System.getProperty("ab.serpent");
+            if (ser != null && !ser.isBlank()) {
+                world.spawnBoneSerpent();
             }
         }
 

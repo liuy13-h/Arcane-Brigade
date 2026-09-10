@@ -1,5 +1,8 @@
 package com.arcanebrigade.core;
 
+import com.arcanebrigade.core.enemy.BoneSerpent;
+import com.arcanebrigade.core.enemy.EnemyStats;
+
 /**
  * 无界面冒烟测试 + 性能压测 + 元素反应验证 + D3 升级链路验证。
  *
@@ -14,6 +17,7 @@ package com.arcanebrigade.core;
  *   java -cp core/target/classes com.arcanebrigade.core.HeadlessSmoke [帧数] upgrade    D3 升级链路：自动选升级跑 N 秒
  *   java -cp core/target/classes com.arcanebrigade.core.HeadlessSmoke [帧数] stage      D4 场景/障碍/阶段/Boss：越阶段边界 + 显式刷 Boss
  *   java -cp core/target/classes com.arcanebrigade.core.HeadlessSmoke [帧数] classes   四职业：各生成巫师/战士/弓箭手/召唤师，验证技能开火、抽卡与宠物
+ *   java -cp core/target/classes com.arcanebrigade.core.HeadlessSmoke [帧数] serpent   骨蛇（小 Boss）：共享血池 / 定长骨链 / "∞"轨迹 / 朝向玩家
  *   java -cp core/target/classes com.arcanebrigade.core.HeadlessSmoke [帧数] debug      逐步诊断
  */
 public final class HeadlessSmoke {
@@ -21,7 +25,7 @@ public final class HeadlessSmoke {
     private HeadlessSmoke() {}
 
     /**
-     * 压测用的敌人数量。刻意与 Balance.MAX_ENEMIES 解耦：
+     * 压测用的敌人数量。刻意与 EnemyStats.MAX_ENEMIES 解耦：
      * MAX_ENEMIES 是平衡数值（会随玩法调小），压测量要保证足够盯住性能回退。
      */
     private static final int STRESS_ENEMIES = 900;
@@ -54,6 +58,11 @@ public final class HeadlessSmoke {
 
         if ("classes".equalsIgnoreCase(mode)) {
             runClasses(frames);
+            return;
+        }
+
+        if ("serpent".equalsIgnoreCase(mode)) {
+            verifySerpent();
             return;
         }
         // 压测专用：血池拉到极大，避免玩家阵亡打断观察（真实对局的生死交给 iframe + 复活令牌）
@@ -135,7 +144,7 @@ public final class HeadlessSmoke {
         System.out.printf("耗时 %.0f ms，平均每帧 %.3f ms（帧预算 %.2f ms，占比 %.1f%%）%n",
                 totalMs, perFrame, budget, perFrame / budget * 100);
         System.out.printf("预热后敌人 %d，结束敌人 %d（压测量 %d，玩法上限 %d）%n",
-                warmEnemies, w.enemyCount(), STRESS_ENEMIES, Balance.MAX_ENEMIES);
+                warmEnemies, w.enemyCount(), STRESS_ENEMIES, EnemyStats.MAX_ENEMIES);
         System.out.printf("存活实体 %d，累计击杀 %d，池高水位 %d / %d%n",
                 w.liveCount(), w.killCount(), w.highWater(), World.MAX);
 
@@ -366,10 +375,10 @@ public final class HeadlessSmoke {
                 lastBoss = b;
             }
             // 记录玩家升到每个 Boss 触发等级的时间点，用来评估等级曲线节奏
-            if (lvlIdx < Balance.BOSS_LEVELS.length
-                    && w.playerLevel() >= Balance.BOSS_LEVELS[lvlIdx]) {
+            if (lvlIdx < EnemyStats.BOSS_LEVELS.length
+                    && w.playerLevel() >= EnemyStats.BOSS_LEVELS[lvlIdx]) {
                 System.out.printf("  达到 Lv.%d  t=%.1fs  场上敌人 %d%n",
-                        Balance.BOSS_LEVELS[lvlIdx], w.time(), w.enemyCount());
+                        EnemyStats.BOSS_LEVELS[lvlIdx], w.time(), w.enemyCount());
                 lvlIdx++;
             }
             maxObstacles = Math.max(maxObstacles, w.obstacleCount());
@@ -379,7 +388,7 @@ public final class HeadlessSmoke {
 
         // 显式刷 Boss，跑 30 秒，确认预警圈 / 召唤路径稳定
         if (w.bossId() < 0) {
-            w.spawnBoss(Balance.BOSS_HP_TIERS.length - 1);
+            w.spawnBoss(EnemyStats.BOSS_HP_TIERS.length - 1);
         }
         int bossIdAtSpawn = w.bossId();
         for (int i = 0; i < 1800; i++) {
@@ -395,8 +404,8 @@ public final class HeadlessSmoke {
         System.out.printf("到达阶段 %d，最大障碍数 %d（安全圈外生成），峰值敌人 %d，结束敌人 %d%n",
                 lastStage, maxObstacles, maxEnemies, w.enemyCount());
         System.out.printf("等级表 Boss 登场次数 %d / %d，结束时 Lv.%d，血量成长系数 t=%.0fs 时 %.1fx%n",
-                bossSeen, Balance.BOSS_LEVELS.length, w.playerLevel(),
-                w.time(), Balance.enemyHpScale(w.time()));
+                bossSeen, EnemyStats.BOSS_LEVELS.length, w.playerLevel(),
+                w.time(), EnemyStats.enemyHpScale(w.time()));
         System.out.printf("显式 Boss id=%d，30 秒后 %s%n",
                 bossIdAtSpawn, bossGone ? "已被击杀（阶段技能路径已覆盖）" : "仍存活");
         System.out.println("OK：场景 / 障碍 / 阶段 / Boss 代码路径无异常");
@@ -407,6 +416,166 @@ public final class HeadlessSmoke {
      * 跑一段时间后确认各系技能都能正常开火、击杀，且按职业抽卡不抛异常。
      * 召唤师额外验证：宠物按节奏成批刷新、数量封顶、不会跑出拴绳范围。
      */
+    /**
+     * 骨蛇（小 Boss）定向验证。
+     *
+     * 这条蛇是全场唯一"一个怪、多个实体"的实现，而且它出错的形态**都不会崩**——
+     * 蛇散架、身体叠成一坨、每节各算各的血、头不朝玩家，跑再久也只是一条难看的蛇。
+     * 所以光"跑 3600 帧不抛异常"是盯不住它的，这里逐条断言四条设计约束：
+     *   1) 共享血池——打身体掉的是头的血，且整条蛇只算一次击杀；
+     *   2) 定长骨链——相邻两节的间距恒为设计值（HEAD_GAP / SPACING）；
+     *   3) "∞"轨迹——头必须**穿过玩家中心**（8 字的关键特征；绕圈跑的话
+     *      头到玩家的距离永远不会小于轨迹半径）；
+     *   4) 头朝玩家——用美术的"朝上"反推出前向向量，与"指向玩家"点乘应为 1。
+     */
+    private static void verifySerpent() {
+        World w = new World(777L);
+        int wid = w.spawnWizard(0f, 0f);
+        w.maxHp[wid] = 1_000_000f;
+        w.hp[wid] = 1_000_000f;
+        // 玩家全程不开火：否则弹幕会把蛇打死，测不到完整的"∞"周期
+        for (int s = 0; s < Loadout.SLOTS; s++) {
+            w.setSpell(wid, s, Spells.NONE);
+        }
+        InputCommand in = new InputCommand();
+
+        w.spawnBoneSerpent();
+        int head = w.bossId();
+        int n = w.serpentSegmentCount();
+        assertTrue(head >= 0, "骨蛇登场后 bossId 指向头节点");
+        assertTrue(n == EnemyStats.SERPENT_SEGMENTS,
+                "整条蛇实体数 " + n + "（期望 " + EnemyStats.SERPENT_SEGMENTS + "）");
+        assertTrue(w.serpentActive(), "serpentActive() 为真");
+        assertTrue(EnemyStats.SERPENT_NAME.equals(w.bossName()),
+                "血条标题取到小 Boss 名字（实际 \"" + w.bossName() + "\"）");
+
+        int[] seg = new int[n];
+        for (int s = 0; s < n; s++) {
+            seg[s] = w.serpentSegment(s);
+            assertTrue(w.alive[seg[s]] && w.variant[seg[s]] == EnemyStats.V_SERPENT,
+                    "第 " + s + " 节是存活的 V_SERPENT");
+            assertTrue(w.serpent[seg[s]] == head, "第 " + s + " 节登记的头节点是 " + head);
+        }
+
+        // ---- 共享血池：打身体，掉的是头的血 ----
+        int bodyIdx = n / 2;
+        float before = w.hp[head];
+        w.damage(seg[bodyIdx], 100f);
+        float after = w.hp[head];
+        assertTrue(Math.abs((before - after) - 100f) < 1e-3f,
+                "打第 " + bodyIdx + " 节 100 点，头节点血池 " + before + " -> " + after);
+
+        // ---- 同一帧内多节被同一发 AoE 罩住，只结算一次 ----
+        // 骨蛇有 12 个实体，火球爆炸半径里往往同时站好几节；逐节转发会让一发
+        // 打出 12 倍伤害（实测把小 Boss 从 23 秒压到 4 秒内被秒）。跨帧不受影响。
+        // 先推一步：上面那发也是在同一帧里结算的，不推时间的话这三下会被
+        // "同帧去重"一起挡掉，测出来是 0 而不是 30。
+        w.step(Balance.FIXED_STEP, in);
+        float aoeBefore = w.hp[head];
+        w.damage(seg[1], 30f);
+        w.damage(seg[2], 30f);
+        w.damage(seg[3], 30f);
+        float aoeAfter = w.hp[head];
+        assertTrue(Math.abs((aoeBefore - aoeAfter) - 30f) < 1e-3f,
+                "同帧三节各挨 30 点，血池只掉一发（" + aoeBefore + " -> " + aoeAfter + "）");
+
+        // ---- 跑 30 秒（SERPENT_OMEGA=1.0，约 4.8 个完整"∞"），全程量骨链与轨迹 ----
+        float minDist = Float.MAX_VALUE;
+        float maxDist = 0f;
+        float minX = 0f;
+        float maxX = 0f;
+        float minGapRatio = Float.MAX_VALUE;
+        float maxGapRatio = 0f;
+        float worstFacing = 1f;
+        boolean finite = true;
+        long t0 = System.nanoTime();
+        int frames = 1800;
+        for (int i = 0; i < frames; i++) {
+            w.hp[wid] = w.maxHp[wid];   // 玩家不死，专测蛇
+            w.step(Balance.FIXED_STEP, in);
+
+            // 玩家 -> 头 的向量；头的前向应当与它反向（头在玩家对面看着玩家）
+            float hx = w.x[head] - w.x[wid];
+            float hy = w.y[head] - w.y[wid];
+            finite &= Float.isFinite(hx) && Float.isFinite(hy);
+            float hd = (float) Math.sqrt(hx * hx + hy * hy);
+            minDist = Math.min(minDist, hd);
+            maxDist = Math.max(maxDist, hd);
+            minX = Math.min(minX, hx);
+            maxX = Math.max(maxX, hx);
+
+            for (int s = 1; s < n; s++) {
+                float gap = (s == 1) ? EnemyStats.SERPENT_HEAD_GAP : EnemyStats.SERPENT_SPACING;
+                float d = dist(w.x[seg[s]], w.y[seg[s]], w.x[seg[s - 1]], w.y[seg[s - 1]]);
+                minGapRatio = Math.min(minGapRatio, d / gap);
+                maxGapRatio = Math.max(maxGapRatio, d / gap);
+            }
+
+            // 头的前向 = 把"朝上"的精灵按 segmentAngle 转过去：(sin θ, -cos θ)
+            if (hd > 1f) {
+                float th = BoneSerpent.segmentAngle(w, 0);
+                float fx = (float) Math.sin(th);
+                float fy = (float) -Math.cos(th);
+                // 与"头指向玩家"（即 -(hx,hy)）点乘
+                float dot = -(fx * hx + fy * hy) / hd;
+                worstFacing = Math.min(worstFacing, dot);
+            }
+        }
+        long t1 = System.nanoTime();
+        assertTrue(finite, "整段模拟中头节点坐标始终有限（未出现 NaN/Inf）");
+
+        System.out.println("=== 骨蛇（小 Boss）验证 ===");
+        System.out.printf("模拟 %d 帧 = %.1f 秒，耗时 %.0f ms%n",
+                frames, frames * Balance.FIXED_STEP, (t1 - t0) / 1e6);
+        System.out.printf("整条蛇 %d 节（头 1 + 身体 %d + 尾 1），场上敌人 %d%n",
+                n, EnemyStats.SERPENT_BODY, w.enemyCount());
+        System.out.printf("头到玩家的距离：最近 %.0f（横半径 %.0f）最远 %.0f；x 摆幅 %.0f .. %.0f%n",
+                minDist, EnemyStats.SERPENT_LOOP_R, maxDist, minX, maxX);
+        System.out.printf("相邻节间距 / 设计值：%.2f .. %.2f（1.00 = 完全吻合）%n",
+                minGapRatio, maxGapRatio);
+        System.out.printf("头朝向玩家：最差点乘 %.4f（1.0000 = 一直正对）%n", worstFacing);
+
+        // "∞"的关键特征是穿过中心：绕圈跑的话最近距离会一直 >= 轨迹半径
+        assertTrue(minDist < EnemyStats.SERPENT_LOOP_R * 0.35f,
+                "头穿过玩家中心（最近 " + minDist + " < " + (EnemyStats.SERPENT_LOOP_R * 0.35f) + "），说明是 8 字不是圆圈");
+        assertTrue(maxDist > EnemyStats.SERPENT_LOOP_R * 0.75f,
+                "头甩得开（最远 " + maxDist + "），没有缩成一坨");
+        assertTrue(minX < -EnemyStats.SERPENT_LOOP_R * 0.5f && maxX > EnemyStats.SERPENT_LOOP_R * 0.5f,
+                "轨迹跨越玩家两侧（x " + minX + " .. " + maxX + "）");
+        assertTrue(minGapRatio > 0.6f && maxGapRatio < 1.8f,
+                "骨链保持定长（比值 " + minGapRatio + " .. " + maxGapRatio + "）");
+        assertTrue(worstFacing > 0.99f, "头始终朝向玩家（最差 " + worstFacing + "）");
+
+        // ---- 整条一起死：只算一次击杀、回收 12 个实体 ----
+        int killsBefore = w.killCount();
+        int enemiesBefore = w.enemyCount();
+        w.damage(head, w.hp[head] + 1f);
+        assertTrue(!w.alive[head], "血池清零后头节点死亡");
+        assertTrue(w.bossId() < 0, "骨蛇倒下后 bossId 清空（不会留个死 Boss 占着 HUD）");
+        // 注意不能按 id 查存活：despawn 掉的节立刻被战利品宝石回收了（掉的 4 颗宝石
+        // 就占着其中 4 个 id），所以这里要按"还剩几条 V_SERPENT"来数。
+        int residue = 0;
+        for (int e = 0; e < w.highWater(); e++) {
+            if (w.alive[e] && w.kind[e] == World.KIND_ENEMY && w.variant[e] == EnemyStats.V_SERPENT) {
+                residue++;
+            }
+        }
+        assertTrue(residue == 0, "整条蛇一起散架（残留 " + residue + " 节）");
+        assertTrue(w.killCount() - killsBefore == 1, "整条蛇只算一次击杀");
+        assertTrue(enemiesBefore - w.enemyCount() == EnemyStats.SERPENT_SEGMENTS,
+                "一次击杀回收 " + EnemyStats.SERPENT_SEGMENTS + " 个实体，没有重复计数或漏回收");
+
+        System.out.println("OK：骨蛇共享血池 / 定长骨链 / \"∞\"轨迹 / 朝向玩家 全部通过");
+    }
+
+    private static void assertTrue(boolean cond, String msg) {
+        if (!cond) {
+            System.out.println("!! 失败：" + msg);
+            System.exit(1);
+        }
+        System.out.println("  [OK] " + msg);
+    }
+
     private static void runClasses(int frames) {
         int n = HeroClass.COUNT - 1;
         World w = new World(20260908L);

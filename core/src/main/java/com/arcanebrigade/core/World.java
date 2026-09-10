@@ -1,5 +1,9 @@
 package com.arcanebrigade.core;
 
+import com.arcanebrigade.core.enemy.EnemyAI;
+import com.arcanebrigade.core.enemy.EnemyStats;
+import com.arcanebrigade.core.enemy.WaveDirector;
+
 import java.util.Random;
 
 /**
@@ -37,13 +41,7 @@ public final class World {
     /** 预警圈：先在地上显示 telegraph 秒，到期对玩家与敌人爆炸 */
     public static final int ZONE_WARNING = 4;
 
-    /** 敌人变体。普通怪不做特殊行为，其余按类型分派 */
-    public static final int V_NORMAL = 0;
-    public static final int V_ELITE  = 1;   // 精英：大血厚甲，带护盾
-    public static final int V_THIEF  = 2;   // 小偷：偷地上宝石，不攻击
-    public static final int V_RANGED = 3;   // 远程：保持距离发射弹幕
-    public static final int V_SPLIT  = 4;   // 分裂：死亡裂成数只
-    public static final int V_BOSS   = 5;   // Boss：多阶段
+    /** 敌人变体标签（EnemyStats.V_NORMAL 等）已移到 com.arcanebrigade.core.enemy.EnemyStats */
 
     /**
      * FX 子类型。为了不再为特效开新数组，借用现有字段：
@@ -103,6 +101,20 @@ public final class World {
     public final float[] enemyShield = new float[MAX];
     /** 小偷携带的宝石数，死亡时翻倍掉落 */
     public final float[] carry = new float[MAX];
+    /** 跳跳史莱姆：剩余腾空时间（秒）。>0 = 空中，<=0 = 落地蓄力 */
+    public final float[] airT = new float[MAX];
+    /** 跳跳史莱姆：当前视觉跳跃高度（世界单位 ≈ 像素）。渲染层据此抬升精灵、压影子 */
+    public final float[] hopH = new float[MAX];
+
+    // ---- 骨蛇（V_SERPENT，小 Boss）----
+    /**
+     * 骨蛇每一节归属的**头节点 id**（头节点存自己）。非骨蛇恒为 -1。
+     *
+     * 骨蛇是"一个怪、十二个实体"：每节都是普通 KIND_ENEMY（所以索敌、碰撞、
+     * 弹幕命中、空间哈希全部照旧白嫖），但血量只有一份，存在头节点上。
+     * damage() 靠这张表把任意一节的挨打转发到头——玩家打头打身子一个价。
+     */
+    public final int[] serpent = new int[MAX];
 
     // ---- 元素与状态 ----
     /** 附着的元素 id（Element.*）。目前只挂在敌人身上 */
@@ -131,6 +143,18 @@ public final class World {
     private final IntList wizards = new IntList(8);
     /** 存活宠物列表，每帧重建。数量个位数，重建比维护增删更不容易出错 */
     private final IntList minions = new IntList(16);
+    /**
+     * 骨蛇的节链，**按顺序**存放（0 = 头，末尾 = 尾），生成时一次填好。
+     * 渲染与链式跟随都要"第 n 节"，而 SoA 只有 id 没有顺序——靠这张表补上。
+     * 场上同时最多一条骨蛇（WaveDirector 等上一条倒下才刷下一条）。
+     */
+    private final IntList serpentSegments = new IntList(EnemyStats.SERPENT_SEGMENTS);
+    /**
+     * 骨蛇上一次结算伤害的**世界时间戳**，用于"一帧只挨一次打"。
+     * time 每步递增一个 FIXED_STEP，同一帧内的多次 damage() 拿到的是同一个值，
+     * 所以相等即同帧。初值 -1f 永远不会等于正常时间，无需在生成时重置。
+     */
+    private float serpentHitT = -1f;
     private int enemiesAlive;
     private int kills;
 
@@ -239,9 +263,10 @@ public final class World {
         stunT[id] = 0f;
         kx[id] = 0f;
         ky[id] = 0f;
-        variant[id] = V_NORMAL;
+        variant[id] = EnemyStats.V_NORMAL;
         enemyShield[id] = 0f;
         carry[id] = 0f;
+        serpent[id] = -1;
         summonT[id] = 0f;
         slot[id] = 0;
         liveCount++;
@@ -253,9 +278,20 @@ public final class World {
             return;
         }
         alive[id] = false;
+        // 骨蛇：头一死，整条散架。身体/尾巴走 despawn（不计击杀、不掉宝石），
+        // 所以一条蛇只算一次击杀、只掉一次战利品。
+        if (variant[id] == EnemyStats.V_SERPENT && serpent[id] == id) {
+            for (int s = 0; s < serpentSegments.size(); s++) {
+                int seg = serpentSegments.get(s);
+                if (seg != id && seg >= 0 && alive[seg] && serpent[seg] == id) {
+                    despawn(seg);
+                }
+            }
+            serpentSegments.clear();
+        }
         if (id == bossId) {
             // 击败最后一只 Boss = 通关。前几只倒下只清标记，不打断对局。
-            if (bossTier == Balance.BOSS_LEVELS.length - 1) {
+            if (bossTier == EnemyStats.BOSS_LEVELS.length - 1) {
                 victory = true;
                 summary = snapshot(true, firstWizard());
             }
@@ -265,7 +301,8 @@ public final class World {
         if (k == KIND_ENEMY) {
             enemiesAlive--;
             kills++;
-            if (variant[id] == V_BOSS) {
+            // 骨蛇按 Boss 计（否则它的击杀会混进"普通击杀"里，结算数字对不上）
+            if (variant[id] == EnemyStats.V_BOSS || variant[id] == EnemyStats.V_SERPENT) {
                 bossKills++;
             }
             healWarriorsOnKill();
@@ -273,7 +310,7 @@ public final class World {
                 killListener.onKill(id, x[id], y[id], meta[id]);
             }
             int v = variant[id];
-            if (v == V_THIEF) {
+            if (v == EnemyStats.V_THIEF) {
                 // 小偷：掉落携带的 2 倍宝石（至少 1 个）
                 int drop = Math.max(1, (int) (carry[id] * 2f));
                 for (int g = 0; g < drop; g++) {
@@ -281,20 +318,27 @@ public final class World {
                     spawnXpGem(x[id] + (float) Math.cos(a) * 14f,
                             y[id] + (float) Math.sin(a) * 14f, Balance.GEM_VALUE);
                 }
-            } else if (v == V_SPLIT) {
+            } else if (v == EnemyStats.V_SPLIT) {
                 // 分裂：死亡裂成数只普通子代，HP 按比例缩小（子代不再分裂）
-                int childHp = (int) (maxHp[id] * Balance.SPLIT_HP_MUL);
-                for (int s = 0; s < Balance.SPLIT_COUNT; s++) {
+                int childHp = (int) (maxHp[id] * EnemyStats.SPLIT_HP_MUL);
+                for (int s = 0; s < EnemyStats.SPLIT_COUNT; s++) {
                     float a = rng.nextFloat() * (float) (Math.PI * 2);
                     int cid = spawnEnemy(x[id] + (float) Math.cos(a) * 22f,
-                            y[id] + (float) Math.sin(a) * 22f, meta[id], V_NORMAL);
+                            y[id] + (float) Math.sin(a) * 22f, meta[id], EnemyStats.V_NORMAL);
                     if (cid >= 0) {
                         maxHp[cid] = childHp;
                         hp[cid] = childHp;
-                        r[cid] *= Balance.SPLIT_RADIUS_MUL;
+                        r[cid] *= EnemyStats.SPLIT_RADIUS_MUL;
                     }
                 }
                 spawnXpGem(x[id], y[id], Balance.GEM_VALUE);
+            } else if (v == EnemyStats.V_SERPENT) {
+                // 小 Boss：一圈宝石铺开，别全叠在一个点上
+                for (int g = 0; g < EnemyStats.SERPENT_GEM_DROP; g++) {
+                    float a = (float) (Math.PI * 2) * g / EnemyStats.SERPENT_GEM_DROP;
+                    spawnXpGem(x[id] + (float) Math.cos(a) * 30f,
+                            y[id] + (float) Math.sin(a) * 30f, Balance.GEM_VALUE);
+                }
             } else {
                 spawnXpGem(x[id], y[id], Balance.GEM_VALUE);
             }
@@ -364,7 +408,7 @@ public final class World {
     }
 
     public int spawnEnemy(float sx, float sy) {
-        return spawnEnemy(sx, sy, rng.nextInt(3), V_NORMAL);
+        return spawnEnemy(sx, sy, rng.nextInt(3), EnemyStats.V_NORMAL);
     }
 
     /**
@@ -372,43 +416,56 @@ public final class World {
      * 变体的数值修正（精英 / 小偷 / 远程 / 分裂）集中在这里，不在逻辑里散落。
      */
     public int spawnEnemy(float sx, float sy, int baseType, int variant) {
-        int id = alloc(KIND_ENEMY, sx, sy, Balance.ENEMY_RADIUS, TEAM_ENEMY);
+        int id = alloc(KIND_ENEMY, sx, sy, EnemyStats.ENEMY_RADIUS, TEAM_ENEMY);
         if (id < 0) {
             return -1;
         }
         this.variant[id] = variant;
         meta[id] = baseType;
 
-        float hp0 = Balance.ENEMY_HP;
-        float sp0 = Balance.ENEMY_SPEED;
-        float dm0 = Balance.ENEMY_DAMAGE;
-        if (variant == V_ELITE) {
-            hp0 *= Balance.ELITE_HP_MUL;
-            sp0 *= Balance.ELITE_SPEED_MUL;
-            dm0 *= Balance.ELITE_DMG_MUL;
-        } else if (variant == V_THIEF) {
-            hp0 = Balance.THIEF_HP;
-            sp0 = Balance.THIEF_SPEED;
+        float hp0 = EnemyStats.ENEMY_HP;
+        float sp0 = EnemyStats.ENEMY_SPEED;
+        float dm0 = EnemyStats.ENEMY_DAMAGE;
+        if (variant == EnemyStats.V_ELITE) {
+            hp0 *= EnemyStats.ELITE_HP_MUL;
+            sp0 *= EnemyStats.ELITE_SPEED_MUL;
+            dm0 *= EnemyStats.ELITE_DMG_MUL;
+        } else if (variant == EnemyStats.V_THIEF) {
+            hp0 = EnemyStats.THIEF_HP;
+            sp0 = EnemyStats.THIEF_SPEED;
             dm0 = 0f;       // 小偷不主动攻击玩家
-        } else if (variant == V_RANGED) {
-            hp0 = Balance.RANGED_HP;
-            sp0 = Balance.RANGED_SPEED;
+        } else if (variant == EnemyStats.V_RANGED) {
+            hp0 = EnemyStats.RANGED_HP;
+            sp0 = EnemyStats.RANGED_SPEED;
             dm0 = 0f;       // 伤害来自弹幕而非接触
+        } else if (variant == EnemyStats.V_SLIME) {
+            hp0 = EnemyStats.SLIME_HP;
+            sp0 = EnemyStats.SLIME_HOP_SPEED;   // speed 存的是腾空水平速度
+            dm0 = EnemyStats.SLIME_DAMAGE;
         }
         // 血量随时间成长：怪的数量砍掉后，难度主要由这条曲线承担。
         // 统一在这里乘，避免每个生成点各乘一次导致叠加。
         // Boss 不吃这条曲线——它有自己的 BOSS_HP_TIERS 分档。
-        float scale = (variant == V_BOSS) ? 1f : Balance.enemyHpScale(time);
+        float scale = (variant == EnemyStats.V_BOSS) ? 1f : EnemyStats.enemyHpScale(time);
         maxHp[id] = hp0 * scale;
         hp[id] = maxHp[id];
         speed[id] = sp0;
         dmg[id] = dm0;
-        if (variant == V_ELITE) {
+        if (variant == EnemyStats.V_ELITE) {
             // 护盾也跟着涨，但涨幅封顶，否则后期精英变成打不破的壳
-            enemyShield[id] = Balance.ELITE_SHIELD * Math.min(scale, 6f);
+            enemyShield[id] = EnemyStats.ELITE_SHIELD * Math.min(scale, 6f);
         }
-        // RANGED 用 cd 当发射计时器；其余接触伤害由 updateEnemies 维护 cd
-        cd[id] = (variant == V_RANGED) ? Balance.RANGED_CD : 0f;
+        if (variant == EnemyStats.V_SLIME) {
+            // 跳跳史莱姆比普通小怪大一圈（与主角相近略小），一出生就落在地面蓄力，
+            // 初始蓄力随机化，避免全场同时起跳。
+            r[id] = EnemyStats.SLIME_RADIUS;
+            airT[id] = 0f;
+            hopH[id] = 0f;
+            cd[id] = EnemyStats.SLIME_REST_MIN
+                    + rng.nextFloat() * (EnemyStats.SLIME_REST_MAX - EnemyStats.SLIME_REST_MIN);
+        }
+        // RANGED 用 cd 当发射计时器；其余接触伤害由 EnemyAI 维护 cd
+        cd[id] = (variant == EnemyStats.V_RANGED) ? EnemyStats.RANGED_CD : cd[id];
         enemiesAlive++;
         return id;
     }
@@ -521,8 +578,8 @@ public final class World {
             return;
         }
         float ang = rng.nextFloat() * (float) (Math.PI * 2);
-        float dist = Balance.SPAWN_RING_IN
-                + rng.nextFloat() * (Balance.SPAWN_RING_OUT - Balance.SPAWN_RING_IN);
+        float dist = EnemyStats.SPAWN_RING_IN
+                + rng.nextFloat() * (EnemyStats.SPAWN_RING_OUT - EnemyStats.SPAWN_RING_IN);
         float sx = x[w] + (float) Math.cos(ang) * dist;
         float sy = y[w] + (float) Math.sin(ang) * dist;
 
@@ -530,8 +587,8 @@ public final class World {
         if (id < 0) {
             return;
         }
-        // 血量成长已经在 spawnEnemy 里按 Balance.enemyHpScale(time) 统一乘过
-        speed[id] = Balance.ENEMY_SPEED * (0.85f + rng.nextFloat() * 0.35f);
+        // 血量成长已经在 spawnEnemy 里按 EnemyStats.enemyHpScale(time) 统一乘过
+        speed[id] = EnemyStats.ENEMY_SPEED * (0.85f + rng.nextFloat() * 0.35f);
     }
 
     /** 在屏幕外环形生成一只指定变体的敌人（WaveDirector 分派用） */
@@ -541,8 +598,8 @@ public final class World {
             return;
         }
         float ang = rng.nextFloat() * (float) (Math.PI * 2);
-        float dist = Balance.SPAWN_RING_IN
-                + rng.nextFloat() * (Balance.SPAWN_RING_OUT - Balance.SPAWN_RING_IN);
+        float dist = EnemyStats.SPAWN_RING_IN
+                + rng.nextFloat() * (EnemyStats.SPAWN_RING_OUT - EnemyStats.SPAWN_RING_IN);
         float sx = clampCoord(x[w] + (float) Math.cos(ang) * dist);
         float sy = clampCoord(y[w] + (float) Math.sin(ang) * dist);
         // 变体数值（精英×6 / 小偷 / 远程）与时间成长都在 spawnEnemy 里定好
@@ -561,25 +618,103 @@ public final class World {
         int w = firstWizard();
         float tx = (w >= 0) ? x[w] : 0f;
         float ty = (w >= 0) ? y[w] : 0f;
-        int t = Math.max(0, Math.min(tier, Balance.BOSS_HP_TIERS.length - 1));
+        int t = Math.max(0, Math.min(tier, EnemyStats.BOSS_HP_TIERS.length - 1));
         float ang = rng.nextFloat() * (float) (Math.PI * 2);
-        float sx = clampCoord(tx + (float) Math.cos(ang) * Balance.BOSS_SPAWN_DIST);
-        float sy = clampCoord(ty + (float) Math.sin(ang) * Balance.BOSS_SPAWN_DIST);
-        int id = spawnEnemy(sx, sy, rng.nextInt(3), V_BOSS);
+        float sx = clampCoord(tx + (float) Math.cos(ang) * EnemyStats.BOSS_SPAWN_DIST);
+        float sy = clampCoord(ty + (float) Math.sin(ang) * EnemyStats.BOSS_SPAWN_DIST);
+        int id = spawnEnemy(sx, sy, rng.nextInt(3), EnemyStats.V_BOSS);
         if (id < 0) {
             return;
         }
-        maxHp[id] = Balance.BOSS_HP_TIERS[t];
+        maxHp[id] = EnemyStats.BOSS_HP_TIERS[t];
         hp[id] = maxHp[id];
-        speed[id] = Balance.BOSS_SPEED;
-        r[id] = Balance.BOSS_RADIUS;
-        dmg[id] = Balance.BOSS_DMG_TIERS[t];
+        speed[id] = EnemyStats.BOSS_SPEED;
+        r[id] = EnemyStats.BOSS_RADIUS;
+        dmg[id] = EnemyStats.BOSS_DMG_TIERS[t];
         // 护盾按档位递增：后面的 Boss 先得破壳才能掉血
-        enemyShield[id] = Balance.ELITE_SHIELD * (1f + t * 0.6f);
+        enemyShield[id] = EnemyStats.ELITE_SHIELD * (1f + t * 0.6f);
         bossId = id;
         bossTier = t;
-        bossWarningTimer = Balance.WARNING_TELEGRAPH + 1.5f;
-        bossSummonTimer = Balance.BOSS_SUMMON_INTERVAL;
+        bossWarningTimer = EnemyStats.WARNING_TELEGRAPH + 1.5f;
+        bossSummonTimer = EnemyStats.BOSS_SUMMON_INTERVAL;
+    }
+
+    /**
+     * 生成骨蛇（小 Boss）：头 + SERPENT_BODY 节身体 + 尾，共 SERPENT_SEGMENTS 个实体。
+     *
+     * 这是全场唯一的"多实体怪"。之所以不做成一个实体加一堆偏移，是因为那样
+     * 索敌、弹幕命中、空间哈希、障碍碰撞全都要为它写特例；拆成十二个普通敌人后，
+     * 这些系统一行都不用改，代价只是下面这份归属表（serpent[]）和一次伤害转发。
+     *
+     * 血量只存在头节点上（enemyShield 同理），头节点就是 bossId——所以 HUD 血条
+     * 不用改就能显示这条蛇的总血量。bossTier 记 -1 表示"小 Boss"：不算通关、
+     * 不走阶段技能，但名字与血条照常显示。
+     *
+     * 出生时整条蛇沿一条直线铺开（头在最前），一露面就是完整的蛇形，不会先叠成一坨。
+     */
+    public void spawnBoneSerpent() {
+        int w = firstWizard();
+        float tx = (w >= 0) ? x[w] : 0f;
+        float ty = (w >= 0) ? y[w] : 0f;
+        float ang = rng.nextFloat() * (float) (Math.PI * 2);
+        float dirX = (float) Math.cos(ang);
+        float dirY = (float) Math.sin(ang);
+        float hx = clampCoord(tx + dirX * EnemyStats.SERPENT_SPAWN_DIST);
+        float hy = clampCoord(ty + dirY * EnemyStats.SERPENT_SPAWN_DIST);
+
+        serpentSegments.clear();
+        int head = -1;
+        float travel = 0f;   // 已铺开的长度：头的间距单独一档，之后按节距累加
+        for (int s = 0; s < EnemyStats.SERPENT_SEGMENTS; s++) {
+            int id = spawnEnemy(clampCoord(hx - dirX * travel), clampCoord(hy - dirY * travel),
+                    0, EnemyStats.V_SERPENT);
+            if (id < 0) {
+                break;   // 实体池满：能造几节算几节，剩下的靠链式跟随自然补不上（极少见）
+            }
+            meta[id] = s;
+            serpent[id] = (head >= 0) ? head : id;
+            if (head < 0) {
+                head = id;
+                maxHp[id] = EnemyStats.SERPENT_HP;
+                hp[id] = maxHp[id];
+                dmg[id] = EnemyStats.SERPENT_DMG;
+                r[id] = EnemyStats.SERPENT_HEAD_RADIUS;
+                speed[id] = EnemyStats.SERPENT_SPEED;
+                cd[id] = 0f;
+            } else {
+                // 身体/尾巴共用血池：数值同步一份，渲染与调试看到的血量才一致
+                maxHp[id] = maxHp[head];
+                hp[id] = hp[head];
+                r[id] = EnemyStats.SERPENT_BODY_RADIUS;
+                dmg[id] = EnemyStats.SERPENT_DMG;
+                speed[id] = 0f;      // 位置由链式跟随推导，不走通用移动
+                cd[id] = 0f;
+            }
+            serpentSegments.add(id);
+            travel += (s == 0) ? EnemyStats.SERPENT_HEAD_GAP : EnemyStats.SERPENT_SPACING;
+        }
+        if (head < 0) {
+            return;
+        }
+        bossId = head;
+        bossTier = -1;                      // -1 = 小 Boss
+        bossWarningTimer = EnemyStats.WARNING_TELEGRAPH;
+        bossSummonTimer = EnemyStats.BOSS_SUMMON_INTERVAL;
+    }
+
+    /** 本帧是否有一条骨蛇在场上 */
+    public boolean serpentActive() {
+        return bossId >= 0 && variant[bossId] == EnemyStats.V_SERPENT;
+    }
+
+    /** 骨蛇节数（等于 SERPENT_SEGMENTS，除非实体池满被截断） */
+    public int serpentSegmentCount() {
+        return serpentSegments.size();
+    }
+
+    /** 骨蛇第 n 节（0 = 头，末尾 = 尾）。越界返回 -1 */
+    public int serpentSegment(int n) {
+        return (n >= 0 && n < serpentSegments.size()) ? serpentSegments.get(n) : -1;
     }
 
     // ------------------------------------------------------------------
@@ -602,7 +737,7 @@ public final class World {
         updateSummoners(dt);      // 召唤师：到点召唤一批宠物
         specialPassiveTick(dt);
         director.update(this, dt);
-        updateEnemies(dt);
+        EnemyAI.update(this, dt); // 敌怪 AI：追击 / 小偷 / 远程 / 跳跳史莱姆统一走这里
         updateMinions(dt);        // 宠物 AI：护主 / 听指挥 / 拴绳
         if (bossId >= 0) {
             updateBossPhase(dt);  // Boss 阶段技能（预警圈 / 召唤）
@@ -807,183 +942,8 @@ public final class World {
         }
     }
 
-    private void updateEnemies(float dt) {
-        for (int i = 0; i < high; i++) {
-            if (kind[i] != KIND_ENEMY || !alive[i]) {
-                continue;
-            }
-            // 被眩晕：不动也不打，但击退位移照常结算（看起来才像被炸飞）
-            if (stunT[i] > 0f) {
-                x[i] += kx[i] * dt;
-                y[i] += ky[i] * dt;
-                continue;
-            }
-
-            int v = variant[i];
-            if (v == V_THIEF) {
-                updateThief(i, dt);
-                continue;
-            }
-            if (v == V_RANGED) {
-                updateRanged(i, dt);
-                continue;
-            }
-            // 其余（普通 / 精英 / 分裂 / Boss）走下方通用追击 + 接触伤害
-
-            // 追击目标含宠物：宠物挡在怪和玩家之间时，怪会先啃宠物——这就是"护主"的实质
-            int target = nearestPlayerUnit(x[i], y[i]);
-            if (target < 0) {
-                continue;
-            }
-            // 冰霜减速
-            float slow = (elem[i] == Element.FROST)
-                    ? Math.min(elemP[i], Balance.ELEM_FROST_MAX_SLOW) : 0f;
-            float moveSpeed = speed[i] * (1f - slow);
-
-            float dx = x[target] - x[i];
-            float dy = y[target] - y[i];
-            float len = (float) Math.sqrt(dx * dx + dy * dy);
-            if (len > 1e-3f) {
-                vx[i] = dx / len * moveSpeed;
-                vy[i] = dy / len * moveSpeed;
-            }
-
-            // 同类分离力：不做这一步，几百只怪会叠成一个点，手感全毁。
-            float sepX = 0f;
-            float sepY = 0f;
-            enemyHash.query(x[i], y[i], r[i] * 2.2f, scratch);
-            for (int n = 0; n < scratch.size(); n++) {
-                int o = scratch.get(n);
-                if (o == i || !alive[o] || kind[o] != KIND_ENEMY) {
-                    continue;
-                }
-                float ox = x[i] - x[o];
-                float oy = y[i] - y[o];
-                float d2 = ox * ox + oy * oy;
-                float minD = r[i] + r[o];
-                if (d2 > 1e-4f && d2 < minD * minD) {
-                    float d = (float) Math.sqrt(d2);
-                    float push = (minD - d) / minD;
-                    sepX += ox / d * push;
-                    sepY += oy / d * push;
-                }
-            }
-            // 必须夹紧到单位长度。怪堆在一起时会累加出 5~10 的合力，
-            // 不夹住就直接把怪弹飞出地图，表现为"刷出来的怪凭空消失"。
-            float sepLen = (float) Math.sqrt(sepX * sepX + sepY * sepY);
-            if (sepLen > 1f) {
-                sepX /= sepLen;
-                sepY /= sepLen;
-            }
-            x[i] += (vx[i] + sepX * moveSpeed * Balance.ENEMY_SEPARATION + kx[i]) * dt;
-            y[i] += (vy[i] + sepY * moveSpeed * Balance.ENEMY_SEPARATION + ky[i]) * dt;
-            resolveObstacles(i);   // 障碍碰撞推出（敌人也绕不过去）
-            clampToWorld(i);       // 敌人同样被棕色城墙挡在内侧，不会被挤飞出去
-
-            // 接触伤害
-            float ndx = x[target] - x[i];
-            float ndy = y[target] - y[i];
-            float nlen = (float) Math.sqrt(ndx * ndx + ndy * ndy);
-            if (nlen < r[i] + r[target]) {
-                cd[i] -= dt;
-                if (cd[i] <= 0f) {
-                    if (iframe[target] <= 0f) {
-                        damage(target, dmg[i]);
-                        // 无敌帧：宠物用固定短帧，玩家用职业基础 + 灵巧被动
-                        iframe[target] = (kind[target] == KIND_MINION)
-                                ? Balance.MINION_IFRAME : heroIframe(target);
-                    }
-                    cd[i] = Balance.ENEMY_ATTACK_CD;
-                }
-            }
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // 敌人变体行为
-    // ------------------------------------------------------------------
-
-    /** 小偷：追最近的宝石吸收（不攻击玩家），被击杀时掉落翻倍 */
-    private void updateThief(int id, float dt) {
-        if (stunT[id] > 0f) {
-            stunT[id] -= dt;
-            x[id] += kx[id] * dt;
-            y[id] += ky[id] * dt;
-            kx[id] *= (float) Math.exp(-Balance.KNOCKBACK_DECAY * dt);
-            ky[id] *= (float) Math.exp(-Balance.KNOCKBACK_DECAY * dt);
-            return;
-        }
-        int gem = nearestPickup(x[id], y[id]);
-        int target = nearestWizard(x[id], y[id]);
-        float tx, ty;
-        if (gem >= 0) {
-            tx = x[gem]; ty = y[gem];
-        } else if (target >= 0) {
-            tx = x[target]; ty = y[target];
-        } else {
-            return;
-        }
-        float dx = tx - x[id], dy = ty - y[id];
-        float len = (float) Math.sqrt(dx * dx + dy * dy);
-        if (len > 1e-3f) {
-            vx[id] = dx / len * speed[id];
-            vy[id] = dy / len * speed[id];
-        }
-        x[id] += vx[id] * dt;
-        y[id] += vy[id] * dt;
-        resolveObstacles(id);
-        clampToWorld(id);
-        if (gem >= 0) {
-            float gdx = x[gem] - x[id], gdy = y[gem] - y[id];
-            if (gdx * gdx + gdy * gdy <= Balance.THIEF_STEAL_RADIUS * Balance.THIEF_STEAL_RADIUS) {
-                carry[id] += 1f;
-                despawn(gem);
-            }
-        }
-    }
-
-    /** 远程怪：保持距离并向玩家发射弹幕 */
-    private void updateRanged(int id, float dt) {
-        if (stunT[id] > 0f) {
-            stunT[id] -= dt;
-            x[id] += kx[id] * dt;
-            y[id] += ky[id] * dt;
-            kx[id] *= (float) Math.exp(-Balance.KNOCKBACK_DECAY * dt);
-            ky[id] *= (float) Math.exp(-Balance.KNOCKBACK_DECAY * dt);
-            return;
-        }
-        int target = nearestWizard(x[id], y[id]);
-        if (target < 0) {
-            return;
-        }
-        float dx = x[target] - x[id], dy = y[target] - y[id];
-        float len = (float) Math.sqrt(dx * dx + dy * dy);
-        if (len > 1e-3f) {
-            float nx = dx / len, ny = dy / len;
-            float move;
-            if (len < Balance.RANGED_KEEP_DIST) {
-                move = -speed[id] * 0.8f;
-            } else if (len > Balance.RANGED_RANGE) {
-                move = speed[id] * 0.6f;
-            } else {
-                move = 0f;
-            }
-            vx[id] = nx * move;
-            vy[id] = ny * move;
-            x[id] += vx[id] * dt;
-            y[id] += vy[id] * dt;
-            resolveObstacles(id);
-            clampToWorld(id);   // 远程怪同样被边界挡住
-            cd[id] -= dt;
-            if (cd[id] <= 0f && len <= Balance.RANGED_RANGE) {
-                spawnProjectileEnemy(id, x[target], y[target]);
-                cd[id] = Balance.RANGED_CD;
-            }
-        }
-    }
-
     /** 敌方弹幕（远程怪 / Boss 用）：朝目标位置发射 */
-    private void spawnProjectileEnemy(int ownerId, float tx, float ty) {
+    public void spawnProjectileEnemy(int ownerId, float tx, float ty) {
         int id = alloc(KIND_PROJECTILE, x[ownerId], y[ownerId], 6f, TEAM_ENEMY);
         if (id < 0) {
             return;
@@ -994,9 +954,9 @@ public final class World {
             despawn(id);
             return;
         }
-        vx[id] = dx / len * Balance.RANGED_BOLT_SPD;
-        vy[id] = dy / len * Balance.RANGED_BOLT_SPD;
-        dmg[id] = Balance.RANGED_DMG;
+        vx[id] = dx / len * EnemyStats.RANGED_BOLT_SPD;
+        vy[id] = dy / len * EnemyStats.RANGED_BOLT_SPD;
+        dmg[id] = EnemyStats.RANGED_DMG;
         life[id] = 4f;
         owner[id] = ownerId;
         meta[id] = 0;
@@ -1008,15 +968,20 @@ public final class World {
         projTarget[id] = -1;
     }
 
-    /** Boss 阶段技能：预警圈 + 召唤。Boss 的追击与接触伤害由 updateEnemies 通用逻辑驱动 */
+    /** Boss 阶段技能：预警圈 + 召唤。Boss 的追击与接触伤害由 EnemyAI 通用逻辑驱动 */
     private void updateBossPhase(float dt) {
         int b = bossId;
         if (!alive[b]) {
             bossId = -1;
             return;
         }
+        // 小 Boss（骨蛇）没有阶段技能：它的压力来自"∞"折返本身就够密，
+        // 再叠预警圈会把战场塞满，反而看不清那条蛇在哪。
+        if (variant[b] == EnemyStats.V_SERPENT) {
+            return;
+        }
         float ratio = hp[b] / maxHp[b];
-        int phase = ratio > Balance.BOSS_PHASE2_HP ? 1 : (ratio > Balance.BOSS_PHASE3_HP ? 2 : 3);
+        int phase = ratio > EnemyStats.BOSS_PHASE2_HP ? 1 : (ratio > EnemyStats.BOSS_PHASE3_HP ? 2 : 3);
 
         bossWarningTimer -= dt;
         if (phase >= 2 && bossWarningTimer <= 0f) {
@@ -1029,17 +994,17 @@ public final class World {
         if (phase >= 3) {
             bossSummonTimer -= dt;
             if (bossSummonTimer <= 0f) {
-                for (int s = 0; s < Balance.BOSS_SUMMON_COUNT; s++) {
+                for (int s = 0; s < EnemyStats.BOSS_SUMMON_COUNT; s++) {
                     float a = rng.nextFloat() * (float) (Math.PI * 2);
                     int cid = spawnEnemy(x[b] + (float) Math.cos(a) * 70f,
-                            y[b] + (float) Math.sin(a) * 70f, rng.nextInt(3), V_NORMAL);
+                            y[b] + (float) Math.sin(a) * 70f, rng.nextInt(3), EnemyStats.V_NORMAL);
                     if (cid >= 0) {
                         // spawnEnemy 已按当前时间乘过成长系数，这里只给召唤物一点额外血量
                         maxHp[cid] *= 1.5f;
                         hp[cid] = maxHp[cid];
                     }
                 }
-                bossSummonTimer = Balance.BOSS_SUMMON_INTERVAL;
+                bossSummonTimer = EnemyStats.BOSS_SUMMON_INTERVAL;
             }
         }
     }
@@ -1062,7 +1027,7 @@ public final class World {
         if (id < 0) {
             return -1;
         }
-        float hp0 = Balance.ENEMY_HP * Balance.enemyHpScale(time) * Balance.MINION_HP_MUL;
+        float hp0 = EnemyStats.ENEMY_HP * EnemyStats.enemyHpScale(time) * Balance.MINION_HP_MUL;
         maxHp[id] = hp0;
         hp[id] = hp0;
         speed[id] = Balance.MINION_SPEED;
@@ -1247,7 +1212,7 @@ public final class World {
     }
 
     /** 玩家的"可攻击目标"：本体 + 宠物。宠物挡在路上就会被怪优先啃（护主的实质） */
-    private int nearestPlayerUnit(float sx, float sy) {
+    public int nearestPlayerUnit(float sx, float sy) {
         int best = -1;
         float bestScore = Float.MAX_VALUE;
         for (int n = 0; n < wizards.size(); n++) {
@@ -1282,12 +1247,12 @@ public final class World {
 
     /** 预警圈：先在地上显示 telegraph 秒，到期对玩家与敌人爆炸 */
     private void spawnWarning(float sx, float sy) {
-        spawnZone(ZONE_WARNING, sx, sy, Balance.WARNING_RADIUS,
-                Balance.WARNING_TELEGRAPH, Balance.WARNING_DAMAGE, Element.NONE, -1);
+        spawnZone(ZONE_WARNING, sx, sy, EnemyStats.WARNING_RADIUS,
+                EnemyStats.WARNING_TELEGRAPH, EnemyStats.WARNING_DAMAGE, Element.NONE, -1);
     }
 
     /** 把实体推出与之重叠的障碍物（玩家与敌人共用） */
-    private void resolveObstacles(int id) {
+    public void resolveObstacles(int id) {
         obstacleHash.query(x[id], y[id], r[id] + Balance.OBSTACLE_MAX_R, scratch2);
         for (int n = 0; n < scratch2.size(); n++) {
             int o = scratch2.get(n);
@@ -1308,7 +1273,7 @@ public final class World {
     }
 
     /** 把实体钳制在可玩区内（城墙内侧边缘，玩家 / 敌人共用） */
-    private void clampToWorld(int id) {
+    public void clampToWorld(int id) {
         float h = Balance.PLAY_HALF;
         if (x[id] < -h) {
             x[id] = -h;
@@ -1322,8 +1287,40 @@ public final class World {
         }
     }
 
+    /**
+     * 敌怪同类分离力（空间查询原语，供 EnemyAI 用）。
+     * 结果夹紧到单位长度后写入 out[0]=sepX, out[1]=sepY。
+     * 不做这一步，几百只怪会叠成一个点；不夹紧的话怪堆会累加出超大的合力把怪弹飞。
+     */
+    public void enemySeparation(int id, float[] out) {
+        out[0] = 0f;
+        out[1] = 0f;
+        enemyHash.query(x[id], y[id], r[id] * 2.2f, scratch);
+        for (int n = 0; n < scratch.size(); n++) {
+            int o = scratch.get(n);
+            if (o == id || !alive[o] || kind[o] != KIND_ENEMY) {
+                continue;
+            }
+            float ox = x[id] - x[o];
+            float oy = y[id] - y[o];
+            float d2 = ox * ox + oy * oy;
+            float minD = r[id] + r[o];
+            if (d2 > 1e-4f && d2 < minD * minD) {
+                float d = (float) Math.sqrt(d2);
+                float push = (minD - d) / minD;
+                out[0] += ox / d * push;
+                out[1] += oy / d * push;
+            }
+        }
+        float len = (float) Math.sqrt(out[0] * out[0] + out[1] * out[1]);
+        if (len > 1f) {
+            out[0] /= len;
+            out[1] /= len;
+        }
+    }
+
     /** 玩家受击无敌帧：按职业取基础值 + 灵巧被动加成 */
-    private float heroIframe(int wid) {
+    public float heroIframe(int wid) {
         Loadout lo = loadout[wid];
         int ck = (lo != null) ? lo.classKind : HeroClass.WIZARD;
         float add = (lo != null && lo.stats != null) ? lo.stats.iframeAdd : 0f;
@@ -1336,7 +1333,7 @@ public final class World {
     }
 
     /** 最近的经验宝石（小偷用） */
-    private int nearestPickup(float sx, float sy) {
+    public int nearestPickup(float sx, float sy) {
         int best = -1;
         float bestD2 = Float.MAX_VALUE;
         for (int i = 0; i < high; i++) {
@@ -1480,7 +1477,7 @@ public final class World {
             eleDur *= st.frostDurMul;
         }
 
-        enemyHash.query(x[caster], y[caster], def.arcRadius + Balance.MAX_TARGET_RADIUS, scratch);
+        enemyHash.query(x[caster], y[caster], def.arcRadius + EnemyStats.MAX_TARGET_RADIUS, scratch);
         for (int n = 0; n < scratch.size(); n++) {
             int e = scratch.get(n);
             if (!alive[e] || kind[e] != KIND_ENEMY) {
@@ -1558,7 +1555,7 @@ public final class World {
 
             if (team[i] == TEAM_PLAYER) {
                 // 玩家弹幕：只打敌人
-                enemyHash.query(x[i], y[i], r[i] + Balance.MAX_TARGET_RADIUS, scratch);
+                enemyHash.query(x[i], y[i], r[i] + EnemyStats.MAX_TARGET_RADIUS, scratch);
                 for (int n = 0; n < scratch.size(); n++) {
                     int e = scratch.get(n);
                     if (!alive[e] || kind[e] != KIND_ENEMY || e == lastHit[i]) {
@@ -1865,9 +1862,9 @@ public final class World {
             if (life[i] <= 0f) {
                 if (sub == ZONE_WARNING) {
                     // 预警圈到期：对玩家与敌人同时爆炸并击退（Boss 阶段技能）
-                    explode(x[i], y[i], r[i], Balance.WARNING_DAMAGE, Element.NONE,
-                            Balance.WARNING_KNOCKBACK);
-                    damagePlayersInRadius(x[i], y[i], r[i], Balance.WARNING_DAMAGE);
+                    explode(x[i], y[i], r[i], EnemyStats.WARNING_DAMAGE, Element.NONE,
+                            EnemyStats.WARNING_KNOCKBACK);
+                    damagePlayersInRadius(x[i], y[i], r[i], EnemyStats.WARNING_DAMAGE);
                 }
                 despawn(i);
                 continue;
@@ -1875,7 +1872,7 @@ public final class World {
             if (sub == ZONE_TRAP) {
                 // 钉刺陷阱：敌人进入即触发，伤害 + 眩晕 + 自毁
                 if (iframe[i] == 0f) {
-                    enemyHash.query(x[i], y[i], Balance.SPIKE_RADIUS + Balance.MAX_TARGET_RADIUS, scratch2);
+                    enemyHash.query(x[i], y[i], Balance.SPIKE_RADIUS + EnemyStats.MAX_TARGET_RADIUS, scratch2);
                     for (int n = 0; n < scratch2.size(); n++) {
                         int e = scratch2.get(n);
                         if (!alive[e] || kind[e] != KIND_ENEMY) {
@@ -1904,7 +1901,7 @@ public final class World {
                 continue;
             }
             cd[i] = 0f;
-            enemyHash.query(x[i], y[i], r[i] + Balance.MAX_TARGET_RADIUS, scratch2);
+            enemyHash.query(x[i], y[i], r[i] + EnemyStats.MAX_TARGET_RADIUS, scratch2);
             int ownerId = owner[i];
             Loadout olo = (ownerId >= 0) ? loadout[ownerId] : null;
             float dps = dmg[i];
@@ -1979,7 +1976,7 @@ public final class World {
                 lo.warCryTimer -= dt;
                 if (lo.warCryTimer <= 0f) {
                     lo.shield = Math.max(lo.shield, Balance.WARCRY_SHIELD);
-                    enemyHash.query(x[id], y[id], Balance.WARCRY_RADIUS + Balance.MAX_TARGET_RADIUS, scratch2);
+                    enemyHash.query(x[id], y[id], Balance.WARCRY_RADIUS + EnemyStats.MAX_TARGET_RADIUS, scratch2);
                     for (int k = 0; k < scratch2.size(); k++) {
                         int e = scratch2.get(k);
                         if (!alive[e] || kind[e] != KIND_ENEMY) {
@@ -2001,7 +1998,7 @@ public final class World {
                 lo.orbitingTimer -= dt;
                 if (lo.orbitingTimer <= 0f) {
                     float dps = Balance.ORBITING_DAMAGE * 2.5f;   // 8 / 0.4s = 20 dps
-                    enemyHash.query(x[id], y[id], Balance.ORBITING_RADIUS + Balance.MAX_TARGET_RADIUS, scratch2);
+                    enemyHash.query(x[id], y[id], Balance.ORBITING_RADIUS + EnemyStats.MAX_TARGET_RADIUS, scratch2);
                     for (int k = 0; k < scratch2.size(); k++) {
                         int e = scratch2.get(k);
                         if (!alive[e] || kind[e] != KIND_ENEMY) {
@@ -2153,7 +2150,7 @@ public final class World {
 
     /** 范围伤害 + 可选击退。用 scratch2，调用点都在 scratch 的遍历里 */
     private void explode(float ex, float ey, float radius, float damage, int element, float knockback) {        spawnFx(FX_BLAST, ex, ey, 0f, 0f, radius, 0.25f, element);
-        enemyHash.query(ex, ey, radius + Balance.MAX_TARGET_RADIUS, scratch2);
+        enemyHash.query(ex, ey, radius + EnemyStats.MAX_TARGET_RADIUS, scratch2);
         for (int n = 0; n < scratch2.size(); n++) {
             int e = scratch2.get(n);
             if (!alive[e] || kind[e] != KIND_ENEMY) {
@@ -2221,15 +2218,15 @@ public final class World {
         }
         float wx = x[w];
         float wy = y[w];
-        float lim2 = Balance.DESPAWN_RANGE * Balance.DESPAWN_RANGE;
+        float lim2 = EnemyStats.DESPAWN_RANGE * EnemyStats.DESPAWN_RANGE;
         for (int i = 0; i < high; i++) {
             if (kind[i] != KIND_ENEMY || !alive[i]) {
                 continue;
             }
             // Boss 不回收：它移速（52）远低于玩家（195），跑远了就被删掉的话
             // Boss 战会莫名其妙自己结束。由 updateBossPhase 负责它的生命周期。
-            if (i == bossId) {
-                continue;
+            if (i == bossId || variant[i] == EnemyStats.V_SERPENT) {
+                continue;   // 骨蛇的每一节都不回收：尾巴被判出局的话，蛇会自己掉尾巴
             }
             float dx = x[i] - wx;
             float dy = y[i] - wy;
@@ -2271,7 +2268,7 @@ public final class World {
         return best;
     }
 
-    private int nearestWizard(float sx, float sy) {
+    public int nearestWizard(float sx, float sy) {
         int best = -1;
         float bestD2 = Float.MAX_VALUE;
         for (int n = 0; n < wizards.size(); n++) {
@@ -2339,6 +2336,25 @@ public final class World {
     public void damage(int id, float amount) {
         if (id < 0 || !alive[id] || amount <= 0f) {
             return;
+        }
+        // 骨蛇全身共享血池：任意一节挨打都记在头节点上。
+        // 放在最前面转发，后面的元素增伤/护盾/扣血就全部以头为准——
+        // 这也是"打尾巴和打头一个价"的全部实现，没有第二处特例。
+        if (variant[id] == EnemyStats.V_SERPENT) {
+            int h = serpent[id];
+            if (h < 0 || !alive[h]) {
+                return;
+            }
+            // 同一帧内只结算一次：骨蛇有 12 个实体，一发火球的爆炸半径里
+            // 往往同时罩住好几节，逐节转发会让这一发打出 12 倍伤害
+            // （实测能把本该撑一分钟的小 Boss 压到 4 秒内被秒）。连锁闪电
+            // 在它自己身上来回弹也是同一个问题，一并被这行挡掉。
+            // 跨帧的持续输出不受影响，所以单发 DPS 手感不变。
+            if (serpentHitT == time) {
+                return;
+            }
+            serpentHitT = time;
+            id = h;
         }
         // 附着雷电的目标更脆
         float amt = (elem[id] == Element.SHOCK)
@@ -2415,6 +2431,11 @@ public final class World {
         return time;
     }
 
+    /** 同一份可重放随机源（EnemyAI 等子系统取随机抖动用，保证联机/回放一致） */
+    public float nextFloat() {
+        return rng.nextFloat();
+    }
+
     public int enemyCount() {
         return enemiesAlive;
     }
@@ -2487,8 +2508,12 @@ public final class World {
         if (bossId < 0) {
             return "";
         }
-        return (bossTier >= 0 && bossTier < Balance.BOSS_NAMES.length)
-                ? Balance.BOSS_NAMES[bossTier] : "Boss";
+        // 小 Boss 没有档位（bossTier == -1），名字直接取自变体，别掉进"Boss"兜底
+        if (variant[bossId] == EnemyStats.V_SERPENT) {
+            return EnemyStats.SERPENT_NAME;
+        }
+        return (bossTier >= 0 && bossTier < EnemyStats.BOSS_NAMES.length)
+                ? EnemyStats.BOSS_NAMES[bossTier] : "Boss";
     }
 
     /** 场上障碍物数量，冒烟测试验证场景生成用 */
