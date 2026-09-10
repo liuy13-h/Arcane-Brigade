@@ -1,6 +1,7 @@
 package com.arcanebrigade.client;
 
 import com.arcanebrigade.core.Balance;
+import com.arcanebrigade.core.ArenaMap;
 import com.arcanebrigade.core.Element;
 import com.arcanebrigade.core.HeroClass;
 import com.arcanebrigade.core.Loadout;
@@ -123,13 +124,22 @@ public final class Renderer {
         }
         updateCamera(w, alpha);
 
-        // 沙漠遗迹模板：先铺外部地面，再把沙地裁进城墙内侧，最后压上城墙
-        Color[] pal = STAGE_PAL[w.stage()];
-        gc.setFill(pal[0]);
-        gc.fillRect(0, 0, vw, vh);
-        drawGround(vw, vh, pal);
-        drawBoundary(vw, vh, pal);
-        drawObstacles(w, alpha, vw, vh);
+        Image battleMap = w.arenaMap().ordinal() < Sprites.battleMaps.length
+                ? Sprites.battleMaps[w.arenaMap().ordinal()] : null;
+        Color[] pal = arenaPalette(w.arenaMap(), w.stage());
+        if (battleMap != null) {
+            // 一张关卡图就是完整战场：固定镜头让美术中的墙体/岩石与逻辑坐标保持稳定。
+            gc.drawImage(battleMap, 0, 0, vw, vh);
+            gc.setFill(Color.color(0.02, 0.02, 0.05, 0.12));
+            gc.fillRect(0, 0, vw, vh);
+        } else {
+            gc.setFill(pal[0]);
+            gc.fillRect(0, 0, vw, vh);
+            drawGround(vw, vh, pal);
+            drawBoundary(vw, vh, pal);
+            drawObstacles(w, alpha, vw, vh);
+        }
+        drawArenaTraps(w, vw, vh);
         drawEventWorld(w, alpha, vw, vh);   // 战斗事件：封印裂隙圈 / 蘑菇 / 雕像（部分在 entities 里）
         drawEntities(w, alpha, vw, vh);
         drawHud(w, vw, vh);
@@ -168,6 +178,19 @@ public final class Renderer {
                 rgb(rock), rgb(rockL), rgb(rockD) };
     }
 
+    private static final Color[] LAVA_PAL = desertPal(0x171317, 0x3A302E, 0x4C3B35, 0x6E3024,
+            0x4A3B3A, 0x78564A, 0x21181A, 0xA44D26, 0x675A57, 0x9A7A63, 0x312625);
+    private static final Color[] CRYPT_PAL = desertPal(0x121720, 0x4E5861, 0x59646B, 0x313A43,
+            0x414B55, 0x74818B, 0x252C34, 0x7B7153, 0x5C6670, 0x95A0A9, 0x323940);
+
+    private static Color[] arenaPalette(ArenaMap map, int stage) {
+        return switch (map) {
+            case LAVA_DUNGEON -> LAVA_PAL;
+            case STONE_CRYPT -> CRYPT_PAL;
+            default -> STAGE_PAL[Math.max(0, Math.min(stage, STAGE_PAL.length - 1))];
+        };
+    }
+
     private static Color rgb(int v) {
         return Color.rgb((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF);
     }
@@ -180,6 +203,13 @@ public final class Renderer {
     }
 
     private void updateCamera(World w, float alpha) {
+        // 三张新地图均为单屏战场。镜头锁中心，玩家走位不会让地图图层与碰撞漂移。
+        if (w.arenaMap() != null) {
+            camX = 0;
+            camY = 0;
+            camReady = true;
+            return;
+        }
         if (w.wizardCount() == 0) {
             return;
         }
@@ -344,7 +374,7 @@ public final class Renderer {
         double top = camY - vh / 2;
         double right = left + vw;
         double bottom = top + vh;
-        Color[] pal = STAGE_PAL[w.stage()];
+        Color[] pal = arenaPalette(w.arenaMap(), w.stage());
         for (int i = 0; i < w.highWater(); i++) {
             if (!w.alive[i] || w.kind[i] != World.KIND_OBSTACLE) {
                 continue;
@@ -357,10 +387,44 @@ public final class Renderer {
             }
             double sx = rx - left;
             double sy = ry - top;
-            if (w.meta[i] == 3) {
+            if (w.arenaMap() == ArenaMap.DESERT_RUINS && w.meta[i] == 2) {
                 drawWell(sx, sy, rr, pal);
             } else {
                 drawBoulder(sx, sy, rr, i, pal);
+            }
+        }
+    }
+
+    /** 地图机关在实体下层绘制，预警颜色与伤害窗口颜色严格区分。 */
+    private void drawArenaTraps(World w, double vw, double vh) {
+        double left = camX - vw / 2;
+        double top = camY - vh / 2;
+        for (int i = 0; i < w.trapCount(); i++) {
+            ArenaMap.Trap trap = w.trap(i);
+            if (trap == null) continue;
+            double sx = trap.x() - left;
+            double sy = trap.y() - top;
+            if (sx + trap.radius() < 0 || sx - trap.radius() > vw || sy + trap.radius() < 0 || sy - trap.radius() > vh) continue;
+            boolean active = w.trapActive(i);
+            boolean warning = w.trapTelegraphing(i);
+            Color c = switch (trap.visual()) {
+                case 1 -> Color.rgb(255, 94, 40);      // 熔岩喷口
+                case 2 -> Color.rgb(110, 222, 255);    // 墓室机关
+                default -> Color.rgb(235, 186, 92);    // 流沙
+            };
+            double alpha = active ? 0.44 : warning ? 0.20 : 0.08;
+            gc.setFill(Color.color(c.getRed(), c.getGreen(), c.getBlue(), alpha));
+            gc.fillOval(sx - trap.radius(), sy - trap.radius(), trap.radius() * 2, trap.radius() * 2);
+            gc.setStroke(Color.color(c.getRed(), c.getGreen(), c.getBlue(), active ? 0.98 : warning ? 0.72 : 0.30));
+            gc.setLineWidth(active ? 3.0 : 1.5);
+            gc.strokeOval(sx - trap.radius(), sy - trap.radius(), trap.radius() * 2, trap.radius() * 2);
+            if (trap.visual() == 2 && active) {
+                gc.setStroke(Color.rgb(225, 235, 240, 0.9));
+                gc.setLineWidth(2);
+                for (int spike = -2; spike <= 2; spike++) {
+                    gc.strokeLine(sx + spike * 18, sy + trap.radius() * 0.45,
+                            sx + spike * 18 + 7, sy - trap.radius() * 0.45);
+                }
             }
         }
     }
@@ -1372,7 +1436,7 @@ public final class Renderer {
      */
     public void drawLobby(LobbyGeom g, double px, double py, int chosen, double t,
             int cardClass, double reveal, boolean showGuide, TaskSystem tasks,
-            TaskSystem.Category taskCategory, boolean taskOpen) {
+            TaskSystem.Category taskCategory, boolean taskOpen, ArenaMap arenaMap, boolean mapOpen) {
         double vw = canvas.getWidth();
         double vh = canvas.getHeight();
         double pulse = 0.5 + 0.5 * Math.sin(t * 2.4);
@@ -1401,6 +1465,7 @@ public final class Renderer {
         // ---- 左上角操作指引（可隐藏） ----
         drawLobbyGuide(showGuide);
         drawLobbyTasks(tasks, taskCategory, taskOpen);
+        drawLobbyMapSelect(arenaMap, mapOpen);
 
         // ---- 四个角色：均匀一字排开，站在同一脚底线上 ----
         // 立绘已由 Sprites 按整数倍预放大(×2, 最近邻)，这里按自然尺寸 1:1 绘制、
@@ -2335,6 +2400,68 @@ public final class Renderer {
             }
         }
         return 1;
+    }
+
+    // ------------------------------------------------------------------
+    // 大厅地图选择：左侧透明按钮与三张纯场景预览卡（不叠角色立绘）
+    // ------------------------------------------------------------------
+
+    public record MapSelectGeom(Rect toggle, Rect panel, Rect[] cards) {}
+
+    public static MapSelectGeom lobbyMapSelectGeom(double vw, double vh) {
+        double x = 16;
+        Rect toggle = new Rect(x, 198, 174, 34);
+        double w = Math.min(330, Math.max(286, vw * 0.265));
+        double y = 242;
+        Rect panel = new Rect(x, y, w, 3 * 86 + 56);
+        Rect[] cards = new Rect[ArenaMap.values().length];
+        for (int i = 0; i < cards.length; i++) cards[i] = new Rect(x + 10, y + 45 + i * 86, w - 20, 76);
+        return new MapSelectGeom(toggle, panel, cards);
+    }
+
+    private void drawLobbyMapSelect(ArenaMap selected, boolean open) {
+        MapSelectGeom g = lobbyMapSelectGeom(canvas.getWidth(), canvas.getHeight());
+        Rect toggle = g.toggle();
+        gc.setFill(Color.rgb(8, 7, 15, 0.52));
+        gc.fillRoundRect(toggle.x(), toggle.y(), toggle.w(), toggle.h(), 10, 10);
+        gc.setStroke(Color.rgb(132, 210, 235, 0.55));
+        gc.setLineWidth(1.1);
+        gc.strokeRoundRect(toggle.x(), toggle.y(), toggle.w(), toggle.h(), 10, 10);
+        drawTextSoft(gc, Font.font("Microsoft YaHei", FontWeight.BOLD, 13), toggle.x() + 58, toggle.y() + 22,
+                "◇ 地图", Color.rgb(181, 235, 250), null);
+        if (!open) return;
+        Rect panel = g.panel();
+        gc.setFill(Color.rgb(8, 7, 15, 0.72));
+        gc.fillRoundRect(panel.x(), panel.y(), panel.w(), panel.h(), 14, 14);
+        gc.setStroke(Color.rgb(132, 210, 235, 0.55));
+        gc.strokeRoundRect(panel.x(), panel.y(), panel.w(), panel.h(), 14, 14);
+        drawTextSoft(gc, Font.font("Microsoft YaHei", FontWeight.BOLD, 15), panel.x() + 17, panel.y() + 27,
+                "选择战场", Color.rgb(222, 245, 255), null);
+        ArenaMap[] maps = ArenaMap.values();
+        for (int i = 0; i < maps.length; i++) {
+            ArenaMap map = maps[i];
+            Rect card = g.cards()[i];
+            boolean isSelected = map == selected;
+            Color accent = map == ArenaMap.LAVA_DUNGEON ? Color.rgb(255, 119, 62)
+                    : map == ArenaMap.STONE_CRYPT ? Color.rgb(135, 214, 238) : Color.rgb(232, 187, 101);
+            gc.setFill(Color.color(accent.getRed(), accent.getGreen(), accent.getBlue(), isSelected ? 0.23 : 0.09));
+            gc.fillRoundRect(card.x(), card.y(), card.w(), card.h(), 10, 10);
+            gc.setStroke(Color.color(accent.getRed(), accent.getGreen(), accent.getBlue(), isSelected ? 0.94 : 0.42));
+            gc.setLineWidth(isSelected ? 2.2 : 1.0);
+            gc.strokeRoundRect(card.x(), card.y(), card.w(), card.h(), 10, 10);
+            // 预览只绘制关卡本身，绝不把大厅角色压到地图图面上。
+            Image preview = i < Sprites.mapPreviews.length ? Sprites.mapPreviews[i] : null;
+            if (preview != null) {
+                gc.drawImage(preview, card.x() + 10, card.y() + 12, 72, 52);
+            } else {
+                gc.setFill(Color.color(accent.getRed(), accent.getGreen(), accent.getBlue(), 0.32));
+                gc.fillRoundRect(card.x() + 10, card.y() + 12, 72, 52, 7, 7);
+            }
+            drawTextSoft(gc, Font.font("Microsoft YaHei", FontWeight.BOLD, 13), card.x() + 96, card.y() + 29,
+                    map.displayName(), Color.WHITE, null);
+            drawTextSoft(gc, Font.font("Microsoft YaHei", 11), card.x() + 96, card.y() + 49,
+                    map.playStyle() + " · " + map.hazardHint(), Color.rgb(210, 215, 226), null);
+        }
     }
 
     // ------------------------------------------------------------------

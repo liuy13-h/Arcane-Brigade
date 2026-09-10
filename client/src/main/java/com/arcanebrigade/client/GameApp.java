@@ -1,6 +1,7 @@
 package com.arcanebrigade.client;
 
 import com.arcanebrigade.core.HeroClass;
+import com.arcanebrigade.core.ArenaMap;
 import com.arcanebrigade.core.InputCommand;
 import com.arcanebrigade.core.Loadout;
 import com.arcanebrigade.core.Upgrades;
@@ -72,6 +73,9 @@ public final class GameApp extends Application {
     /** 左侧任务栏：任务分类与展开状态。 */
     private boolean lobbyTasksOpen;
     private TaskSystem.Category lobbyTaskCategory = TaskSystem.Category.DAILY;
+    /** 大厅地图选择：选择后传给 BattleSession，在出征前重建对应关卡。 */
+    private ArenaMap lobbyArenaMap = ArenaMap.DESERT_RUINS;
+    private boolean lobbyMapOpen;
     /** 入局时冻结模拟并展示任务简报五秒。 */
     private double taskBriefSeconds;
     private int observedKills;
@@ -190,9 +194,25 @@ public final class GameApp extends Application {
                 double vw = renderer.getCanvasWidth();
                 double vh = renderer.getCanvasHeight();
                 TaskSystem.TaskView[] views = tasks.tasks(lobbyTaskCategory);
+                Renderer.MapSelectGeom mg = Renderer.lobbyMapSelectGeom(vw, vh);
+                if (mg.toggle().hit(e.getX(), e.getY())) {
+                    lobbyMapOpen = !lobbyMapOpen;
+                    if (lobbyMapOpen) lobbyTasksOpen = false;
+                    return;
+                }
+                if (lobbyMapOpen) {
+                    for (int i = 0; i < mg.cards().length; i++) {
+                        if (mg.cards()[i].hit(e.getX(), e.getY())) {
+                            lobbyArenaMap = ArenaMap.values()[i];
+                            battle.selectArenaMap(lobbyArenaMap);
+                            return;
+                        }
+                    }
+                }
                 Renderer.TaskGeom tg = Renderer.lobbyTaskGeom(vw, vh, views.length);
                 if (tg.toggle().hit(e.getX(), e.getY())) {
                     lobbyTasksOpen = !lobbyTasksOpen;
+                    if (lobbyTasksOpen) lobbyMapOpen = false;
                     return;
                 }
                 if (lobbyTasksOpen) {
@@ -323,7 +343,7 @@ public final class GameApp extends Application {
                     if (drawNow) {
                         renderer.setFps(fps[0]);
                         renderer.drawLobby(g, lx, ly, lobbyChoice, lobbyAnimT, cardClass, cardReveal,
-                                lobbyGuide, tasks, lobbyTaskCategory, lobbyTasksOpen);
+                                lobbyGuide, tasks, lobbyTaskCategory, lobbyTasksOpen, lobbyArenaMap, lobbyMapOpen);
                         if (lobbySmokeFrames > 0 && ++lobbyRendered >= lobbySmokeFrames) {
                             System.out.printf("[lobby] 渲染 %d 帧完成（大厅），退出%n", lobbyRendered);
                             Platform.exit();

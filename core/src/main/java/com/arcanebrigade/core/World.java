@@ -142,6 +142,8 @@ public final class World {
 
     private float time;
     private final Random rng;
+    /** 本局锁定的单屏关卡；所有碰撞与陷阱由这一份关卡数据驱动。 */
+    private final ArenaMap arenaMap;
     private final SpatialHash enemyHash = new SpatialHash(64f);
     /** 障碍物空间哈希。障碍是静态的，只在场景切换时整体重建，所以每帧只查询不重建 */
     private final SpatialHash obstacleHash = new SpatialHash(64f);
@@ -219,7 +221,12 @@ public final class World {
     private KillListener killListener;
 
     public World(long seed) {
+        this(seed, ArenaMap.DESERT_RUINS);
+    }
+
+    public World(long seed, ArenaMap arenaMap) {
         this.rng = new Random(seed);
+        this.arenaMap = (arenaMap == null) ? ArenaMap.DESERT_RUINS : arenaMap;
     }
 
     // ------------------------------------------------------------------
@@ -592,8 +599,8 @@ public final class World {
         float ang = rng.nextFloat() * (float) (Math.PI * 2);
         float dist = Balance.SPAWN_RING_IN
                 + rng.nextFloat() * (Balance.SPAWN_RING_OUT - Balance.SPAWN_RING_IN);
-        float sx = clampCoord(x[w] + (float) Math.cos(ang) * dist);
-        float sy = clampCoord(y[w] + (float) Math.sin(ang) * dist);
+        float sx = clampX(x[w] + (float) Math.cos(ang) * dist);
+        float sy = clampY(y[w] + (float) Math.sin(ang) * dist);
         // 变体数值（精英×6 / 小偷 / 远程）与时间成长都在 spawnEnemy 里定好
         spawnEnemy(sx, sy, rng.nextInt(3), variant);
     }
@@ -612,8 +619,8 @@ public final class World {
         float ty = (w >= 0) ? y[w] : 0f;
         int t = Math.max(0, Math.min(tier, Balance.BOSS_HP_TIERS.length - 1));
         float ang = rng.nextFloat() * (float) (Math.PI * 2);
-        float sx = clampCoord(tx + (float) Math.cos(ang) * Balance.BOSS_SPAWN_DIST);
-        float sy = clampCoord(ty + (float) Math.sin(ang) * Balance.BOSS_SPAWN_DIST);
+        float sx = clampX(tx + (float) Math.cos(ang) * Balance.BOSS_SPAWN_DIST);
+        float sy = clampY(ty + (float) Math.sin(ang) * Balance.BOSS_SPAWN_DIST);
         int id = spawnEnemy(sx, sy, rng.nextInt(3), V_BOSS);
         if (id < 0) {
             return;
@@ -661,13 +668,14 @@ public final class World {
         updateProjectiles(dt);
         updatePickups(dt);
         updateZones(dt);
+        updateArenaTraps();
         updateFx(dt);
         cullDistant();
     }
 
     /**
-     * 阶段推进：按时间切换场景主题，切阶段时清空旧障碍、生成新障碍。
-     * 玩家首次出现时生成第 0 阶段障碍。
+     * 阶段仍负责波次节奏，但关卡本体不再随阶段随机重刷：一张地图就是一整局
+     * 固定的单屏战场，玩家可以学习掩体和机关的位置。
      */
     private void updateStage(float dt) {
         if (!obstaclesGenerated) {
@@ -682,8 +690,6 @@ public final class World {
                 && stageTimer >= Balance.STAGE_DURATIONS[stage]) {
             stageTimer -= Balance.STAGE_DURATIONS[stage];
             stage++;
-            clearObstacles();
-            generateObstacles(stage);
         }
     }
 
@@ -703,39 +709,50 @@ public final class World {
     }
 
     /**
-     * 生成某阶段的障碍物布局。围绕玩家散布，排除安全圈，避免出生即卡死。
-     * 模板风格：沙漠遗迹——岩石 / 碎石堆 / 枯灌，另在散布中段放一口石井地标。
-     * 全部钳制在城墙内侧，不让岩石压到边界装饰上。
+     * 生成作者摆放的障碍物。这里特意不使用随机数：地图图像、碰撞、投射物遮挡
+     * 三者必须一一对应，不能再出现“画面里是石柱，实际碰撞在别处”的情况。
      */
     private void generateObstacles(int stage) {
-        int w = firstWizard();
-        float cx = (w >= 0) ? x[w] : 0f;
-        float cy = (w >= 0) ? y[w] : 0f;
         obstacleHash.beginFrame();
-        float lim = Balance.PLAY_HALF - 34f;   // 城墙内侧再留出走位空间，岩石不贴墙
-        int n = Balance.OBSTACLE_COUNT_MIN
-                + rng.nextInt(Balance.OBSTACLE_COUNT_MAX - Balance.OBSTACLE_COUNT_MIN + 1);
-        for (int k = 0; k < n; k++) {
-            float ang = rng.nextFloat() * (float) (Math.PI * 2);
-            // 距离：安全圈之外到散布半径之内，避免全堆在一起
-            float dist = Balance.OBSTACLE_SAFE_RADIUS
-                    + rng.nextFloat() * (Balance.OBSTACLE_SPREAD - Balance.OBSTACLE_SAFE_RADIUS);
-            float ox = clampCoord(cx + (float) Math.cos(ang) * dist);
-            float oy = clampCoord(cy + (float) Math.sin(ang) * dist);
-            ox = Math.max(-lim, Math.min(lim, ox));
-            oy = Math.max(-lim, Math.min(lim, oy));
-            float r = Balance.OBSTACLE_R_MIN
-                    + rng.nextFloat() * (Balance.OBSTACLE_R_MAX - Balance.OBSTACLE_R_MIN);
-            int type = rng.nextInt(3);   // 0/1/2 三种视觉，渲染层按 stage 上色
-            spawnObstacle(ox, oy, r, type);
+        for (ArenaMap.Obstacle obstacle : arenaMap.obstacles()) {
+            spawnObstacle(obstacle.x(), obstacle.y(), obstacle.radius(), obstacle.visual());
         }
-        // 地标石井（type 3）：每阶段一座，放在散布半径中段，纯装饰但有真实碰撞
-        float wang = rng.nextFloat() * (float) (Math.PI * 2);
-        float wdist = Balance.OBSTACLE_SAFE_RADIUS
-                + (Balance.OBSTACLE_SPREAD - Balance.OBSTACLE_SAFE_RADIUS) * 0.55f;
-        float wx = Math.max(-lim, Math.min(lim, clampCoord(cx + (float) Math.cos(wang) * wdist)));
-        float wy = Math.max(-lim, Math.min(lim, clampCoord(cy + (float) Math.sin(wang) * wdist)));
-        spawnObstacle(wx, wy, 58f, 3);
+    }
+
+    /** 机关的四拍循环：预警 → 伤害窗口 → 恢复。只对玩家/宠物结算，避免环境自行清场。 */
+    private void updateArenaTraps() {
+        for (ArenaMap.Trap trap : arenaMap.traps()) {
+            if (!trap.active(time)) {
+                continue;
+            }
+            damageTrapTargets(trap.x(), trap.y(), trap.radius(), trap.damage());
+        }
+    }
+
+    private void damageTrapTargets(float tx, float ty, float radius, float amount) {
+        for (int n = 0; n < wizards.size(); n++) {
+            int id = wizards.get(n);
+            if (!alive[id] || iframe[id] > 0f || !inCircle(id, tx, ty, radius)) {
+                continue;
+            }
+            damage(id, amount);
+            iframe[id] = heroIframe(id);
+        }
+        for (int n = 0; n < minions.size(); n++) {
+            int id = minions.get(n);
+            if (!alive[id] || iframe[id] > 0f || !inCircle(id, tx, ty, radius)) {
+                continue;
+            }
+            damage(id, amount);
+            iframe[id] = Balance.MINION_IFRAME;
+        }
+    }
+
+    private boolean inCircle(int id, float cx, float cy, float radius) {
+        float dx = x[id] - cx;
+        float dy = y[id] - cy;
+        float rr = radius + r[id];
+        return dx * dx + dy * dy <= rr * rr;
     }
 
     private int spawnObstacle(float sx, float sy, float radius, int type) {
@@ -845,8 +862,8 @@ public final class World {
         // 事件中心：离玩家一小段距离，避免直接压在玩家脸上
         float ang = rng.nextFloat() * (float) (Math.PI * 2);
         float dist = 260f + rng.nextFloat() * 260f;
-        eventX = clampCoord(x[w] + (float) Math.cos(ang) * dist);
-        eventY = clampCoord(y[w] + (float) Math.sin(ang) * dist);
+        eventX = clampX(x[w] + (float) Math.cos(ang) * dist);
+        eventY = clampY(y[w] + (float) Math.sin(ang) * dist);
         eventProgress = 0f;
         eventIds.clear();
 
@@ -859,8 +876,8 @@ public final class World {
             for (int s = 0; s < Balance.STATUE_COUNT; s++) {
                 float a = rng.nextFloat() * (float) (Math.PI * 2);
                 float d = 70f + rng.nextFloat() * 150f;
-                int id = spawnEnemy(clampCoord(eventX + (float) Math.cos(a) * d),
-                        clampCoord(eventY + (float) Math.sin(a) * d), 0, V_STATUE);
+                int id = spawnEnemy(clampX(eventX + (float) Math.cos(a) * d),
+                        clampY(eventY + (float) Math.sin(a) * d), 0, V_STATUE);
                 if (id >= 0) {
                     eventIds.add(id);
                 }
@@ -871,8 +888,8 @@ public final class World {
             for (int m = 0; m < Balance.MUSHROOM_COUNT; m++) {
                 float a = rng.nextFloat() * (float) (Math.PI * 2);
                 float d = 60f + rng.nextFloat() * 360f;
-                int id = spawnMushroom(clampCoord(eventX + (float) Math.cos(a) * d),
-                        clampCoord(eventY + (float) Math.sin(a) * d));
+                int id = spawnMushroom(clampX(eventX + (float) Math.cos(a) * d),
+                        clampY(eventY + (float) Math.sin(a) * d));
                 if (id >= 0) {
                     eventIds.add(id);
                 }
@@ -1262,8 +1279,8 @@ public final class World {
     public int spawnMinion(int ownerId, int slotIndex) {
         float ang = (float) (Math.PI * 2) * slotIndex / Math.max(1, Balance.SUMMON_COUNT);
         int id = alloc(KIND_MINION,
-                clampCoord(x[ownerId] + (float) Math.cos(ang) * 34f),
-                clampCoord(y[ownerId] + (float) Math.sin(ang) * 34f),
+                clampX(x[ownerId] + (float) Math.cos(ang) * 34f),
+                clampY(y[ownerId] + (float) Math.sin(ang) * 34f),
                 Balance.MINION_RADIUS, TEAM_PLAYER);
         if (id < 0) {
             return -1;
@@ -1515,16 +1532,17 @@ public final class World {
 
     /** 把实体钳制在可玩区内（城墙内侧边缘，玩家 / 敌人共用） */
     private void clampToWorld(int id) {
-        float h = Balance.PLAY_HALF;
-        if (x[id] < -h) {
-            x[id] = -h;
-        } else if (x[id] > h) {
-            x[id] = h;
+        float hx = arenaMap.halfWidth() - r[id];
+        float hy = arenaMap.halfHeight() - r[id];
+        if (x[id] < -hx) {
+            x[id] = -hx;
+        } else if (x[id] > hx) {
+            x[id] = hx;
         }
-        if (y[id] < -h) {
-            y[id] = -h;
-        } else if (y[id] > h) {
-            y[id] = h;
+        if (y[id] < -hy) {
+            y[id] = -hy;
+        } else if (y[id] > hy) {
+            y[id] = hy;
         }
     }
 
@@ -1536,9 +1554,13 @@ public final class World {
         return HeroClass.baseIframe(ck) + add;
     }
 
-    /** 把单个坐标钳制到可玩区内（生成点用，避免怪刷进棕色城墙再被 clamp 瞬移） */
-    private static float clampCoord(float v) {
-        return Math.max(-Balance.PLAY_HALF, Math.min(Balance.PLAY_HALF, v));
+    /** 单屏地图的生成点钳制，横纵边界与固定镜头比例一致。 */
+    private float clampX(float v) {
+        return Math.max(-arenaMap.halfWidth(), Math.min(arenaMap.halfWidth(), v));
+    }
+
+    private float clampY(float v) {
+        return Math.max(-arenaMap.halfHeight(), Math.min(arenaMap.halfHeight(), v));
     }
 
     /** 最近的经验宝石（小偷用） */
@@ -2629,6 +2651,30 @@ public final class World {
 
     public float time() {
         return time;
+    }
+
+    /** 本局选中的关卡；客户端只读它来画同一套障碍物与机关预警。 */
+    public ArenaMap arenaMap() {
+        return arenaMap;
+    }
+
+    public int trapCount() {
+        return arenaMap.traps().length;
+    }
+
+    public ArenaMap.Trap trap(int index) {
+        ArenaMap.Trap[] traps = arenaMap.traps();
+        return (index >= 0 && index < traps.length) ? traps[index] : null;
+    }
+
+    public boolean trapTelegraphing(int index) {
+        ArenaMap.Trap trap = trap(index);
+        return trap != null && trap.telegraphing(time);
+    }
+
+    public boolean trapActive(int index) {
+        ArenaMap.Trap trap = trap(index);
+        return trap != null && trap.active(time);
     }
 
     public int enemyCount() {
