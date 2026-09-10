@@ -389,6 +389,7 @@ public final class GameApp extends Application {
 
                 // 胜利：冻结模拟，罩层结算。模拟一旦停了就不再推进，直到按 R 重开
                 if (world.victory()) {
+                    GameAudio.stopBattleBgm();   // 通关：让位给结算画面，不再循环战斗曲
                     renderer.setFps(fps[0]);
                     renderer.draw(world, 0f);
                     renderer.drawVictory(world, canvas.getWidth(), canvas.getHeight());
@@ -402,6 +403,7 @@ public final class GameApp extends Application {
                 // 阵亡：同样冻结模拟，弹结算战报，点「继续」或按 R 回大厅。
                 // 之前玩家倒下后没有任何终局状态，游戏会一直空转却永远不结束。
                 if (world.defeat()) {
+                    GameAudio.stopBattleBgm();   // 阵亡：同上，冻结模拟时不再放战斗曲
                     renderer.setFps(fps[0]);
                     renderer.draw(world, 0f);
                     renderer.drawDefeatOverlay(world, canvas.getWidth(), canvas.getHeight());
@@ -411,6 +413,10 @@ public final class GameApp extends Application {
                     }
                     return;
                 }
+
+                // 战斗 BGM 跟着 Boss 走：Boss 在场放它专属的登场音乐，Boss 倒下换回普通战斗曲。
+                // setBattleMusic 内部只在曲目变化时才重起播放器，逐帧调用无额外开销。
+                GameAudio.setBattleMusic(world.bossTier());
 
                 boolean upgradePaused = world.wizardCount() > 0
                         && world.pendingChoices(world.wizard(0)) > 0;
@@ -469,6 +475,7 @@ public final class GameApp extends Application {
         lobbyPosInit = false;    // 首帧按出生点落位
         cardClass = 0;
         cardReveal = 0;
+        GameAudio.stopBattleBgm();      // 从战斗退回大厅（阵亡结算 / 重开）时收掉战斗曲
         GameAudio.stopMenuBgm();        // 离开主界面
         GameAudio.startLobbyBgm();      // 大厅主音乐循环
         pressed.clear();
@@ -735,7 +742,8 @@ public final class GameApp extends Application {
         manualPause = false;
         closeDetail();    // 进战斗前也清一次（防御性）
         GameAudio.stopMenuBgm();  // 出征 / 战斗冒烟都离开主界面
-        GameAudio.stopLobbyBgm(); // 战斗中暂时没有 BGM
+        GameAudio.stopLobbyBgm(); // 出大厅，交棒给战斗 BGM
+        GameAudio.setBattleMusic(-1);   // 开局先上普通战斗曲，Boss 登场时再换
         pressed.clear();
     }
 
