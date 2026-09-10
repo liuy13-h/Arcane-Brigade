@@ -1,11 +1,11 @@
 package com.arcanebrigade.client;
 
-import com.arcanebrigade.core.Balance;
 import com.arcanebrigade.core.HeroClass;
 import com.arcanebrigade.core.InputCommand;
 import com.arcanebrigade.core.Loadout;
 import com.arcanebrigade.core.Upgrades;
 import com.arcanebrigade.core.World;
+import com.arcanebrigade.client.battle.BattleSession;
 import javafx.animation.AnimationTimer;
 import javafx.application.Application;
 import javafx.application.Platform;
@@ -29,16 +29,14 @@ import java.util.Set;
  */
 public final class GameApp extends Application {
 
-    private static final double STEP = Balance.FIXED_STEP;
-    /** 单帧最多补几步逻辑，防止卡顿后出现"死亡螺旋" */
-    private static final int MAX_STEPS = 5;
     /** 大厅里化身移动速度(px/s) */
     private static final double LOBBY_SPEED = 300.0;
 
     private final Set<KeyCode> pressed = EnumSet.noneOf(KeyCode.class);
     private final InputCommand input = new InputCommand();
 
-    private World world;
+    /** 战斗生命周期与固定步长只由这个边界对象管理。 */
+    private BattleSession battle;
     private Renderer renderer;
     private Stage stage;
 
@@ -73,8 +71,6 @@ public final class GameApp extends Application {
 
     /** 鼠标左键是否按住（战斗阶段用于宠物指挥 + 手动开火） */
     private boolean mouseDown;
-    /** ESC 手动暂停（战斗阶段） */
-    private boolean manualPause;
 
     @Override
     public void start(Stage stage) {
@@ -102,7 +98,7 @@ public final class GameApp extends Application {
         GameConfig.load();   // 音量 / 显示玩家 ID / 显示模式 / 分辨率 / 帧率（含首次生成玩家 ID）
         Sprites.load();
 
-        world = new World(20260907L);
+        battle = new BattleSession(20260907L);
 
         Canvas canvas = new Canvas(1280, 720);
         Pane root = new Pane(canvas);
@@ -127,19 +123,15 @@ public final class GameApp extends Application {
             pressed.add(e.getCode());
             // 战斗阶段：ESC 手动暂停；R 键在胜利后重开，在升级面板弹出时重抽
             if (e.getCode() == KeyCode.ESCAPE) {
-                if (!world.victory()) {
-                    manualPause = !manualPause;
-                }
+                battle.toggleManualPause();
                 return;
             }
             if (e.getCode() == KeyCode.R) {
-                if (world.victory()) {
+                if (battle.world().victory()) {
                     restart();
                     return;
                 }
-                if (world.wizardCount() > 0 && world.pendingChoices(world.wizard(0)) > 0) {
-                    world.rerollChoices(world.wizard(0));
-                }
+                battle.rerollUpgradeChoices();
             }
         });
         scene.setOnKeyReleased(e -> pressed.remove(e.getCode()));
@@ -244,7 +236,7 @@ public final class GameApp extends Application {
             if (bt != null && !bt.isBlank()) {
                 int tier = Integer.parseInt(bt);
                 if (tier >= 0 && tier < 4) {
-                    world.spawnBoss(tier);
+                    battle.spawnBossForSmoke(tier);
                 }
             }
         }
@@ -256,7 +248,6 @@ public final class GameApp extends Application {
 
         final long[] last = { System.nanoTime() };
         final long[] lastDraw = { System.nanoTime() };
-        final double[] acc = { 0.0 };
         final double[] fps = { 60.0 };
 
         new AnimationTimer() {
@@ -312,6 +303,7 @@ public final class GameApp extends Application {
 
                 // ---- 正式战斗阶段（逻辑推进与画面刷新解耦） ----
                 renderer.setMouse(mouseX, mouseY);
+                World world = battle.world();
 
                 // 胜利：冻结模拟，罩层结算。模拟一旦停了就不再推进，直到按 R 重开
                 if (world.victory()) {
@@ -325,42 +317,26 @@ public final class GameApp extends Application {
                     return;
                 }
 
-                boolean upgradePaused = world.wizardCount() > 0
-                        && world.pendingChoices(world.wizard(0)) > 0;
-                boolean paused = manualPause || upgradePaused;
-                if (!paused) {
-                    acc[0] += dt;
-                    int steps = 0;
-                    while (acc[0] >= STEP && steps < MAX_STEPS) {
-                        readInput();
-                        world.step((float) STEP, input);
-                        acc[0] -= STEP;
-                        steps++;
-                    }
-                    if (steps == MAX_STEPS) {
-                        acc[0] = 0.0;
-                    }
-                } else {
-                    acc[0] = 0.0;   // 暂停时不累积
-                }
+                boolean upgradePaused = battle.hasPendingUpgrade();
+                readInput();
+                float alpha = battle.advance(dt, input);
 
                 if (!drawNow) {
                     return;
                 }
-                renderer.setPaused(manualPause);
+                renderer.setPaused(battle.isManualPaused());
                 renderer.setFps(fps[0]);
-                renderer.draw(world, (float) (acc[0] / STEP));
+                renderer.draw(world, alpha);
 
                 // 升级面板始终叠加在画面最上层
                 if (upgradePaused) {
-                    int wid = world.wizard(0);
-                    Loadout lo = world.loadout(wid);
+                    Loadout lo = battle.playerLoadout();
                     if (lo != null) {
-                        Upgrades.Choice[] cs = world.peekChoices(wid);
+                        Upgrades.Choice[] cs = battle.pendingChoices();
                         renderer.drawUpgradePanel(cs, lo.rerolls,
                                 canvas.getWidth(), canvas.getHeight());
                     }
-                } else if (manualPause) {
+                } else if (battle.isManualPaused()) {
                     renderer.drawPauseOverlay(canvas.getWidth(), canvas.getHeight());
                 }
 
@@ -628,11 +604,10 @@ public final class GameApp extends Application {
         if (!inTitle && !inLobby) {
             return;                       // 已在战斗中，忽略重复触发
         }
-        world.spawnWizard(0f, 0f, classKind);
+        battle.start(classKind);
         inTitle = false;
         inLobby = false;
         overlay = Renderer.OVER_NONE;
-        manualPause = false;
         GameAudio.stopMenuBgm();  // 出征 / 战斗冒烟都离开主界面
         GameAudio.stopLobbyBgm(); // 战斗中暂时没有 BGM
         pressed.clear();
@@ -640,8 +615,7 @@ public final class GameApp extends Application {
 
     /** 胜利后重开：换一个种子重建世界，回到准备大厅重新选人 */
     private void restart() {
-        world = new World(System.nanoTime());
-        manualPause = false;
+        battle.reset(System.nanoTime());
         lobbyChoice = 0;
         renderedFrames = 0;
         enterLobby();
@@ -652,6 +626,7 @@ public final class GameApp extends Application {
      * 命中区域：3 个等宽矩形，y 范围 vh*0.32 .. vh*0.32 + 220。
      */
     private void handleChoiceClick(double mx, double my) {
+        World world = battle.world();
         if (world.wizardCount() == 0) {
             return;
         }
@@ -674,7 +649,7 @@ public final class GameApp extends Application {
         for (int i = 0; i < cs.length; i++) {
             double bx = x0 + i * (cardW + gap);
             if (mx >= bx && mx <= bx + cardW && my >= y0 && my <= y0 + cardH) {
-                world.applyChoice(wid, i);
+                battle.chooseUpgrade(i);
                 return;
             }
         }
@@ -699,7 +674,7 @@ public final class GameApp extends Application {
 
         // 开火：手动模式下按住鼠标左键，朝鼠标世界坐标开火
         input.buttons = 0;
-        if (!world.isAutoFire() && mouseDown) {
+        if (!battle.world().isAutoFire() && mouseDown) {
             input.buttons |= InputCommand.BUTTON_FIRE;
         }
         // 指挥：按住鼠标左键就是给宠物下令（与开火模式无关，自动开火时也能指挥）

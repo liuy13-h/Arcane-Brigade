@@ -54,10 +54,14 @@ del /q "%TEMP%\ab_core_src.txt" "%TEMP%\ab_client_src.txt" >nul 2>nul
 
 :run
 set "CP=%COREOUT%;%CLIENTOUT%;%FB%;%FG%;%FC%;%FM%"
+rem Keep JavaFX shader/cache files and the game's local settings inside the build output.
+rem This also makes the launcher work in restricted environments where C:\ is not writable.
+set "RUNTIME_HOME=%CD%\client\target\runtime-home"
+if not exist "%RUNTIME_HOME%" mkdir "%RUNTIME_HOME%"
 echo Launching Arcane Brigade ...
 set "SMK="
 if defined AB_SMOKE set "SMK=-Dab.smoke=%AB_SMOKE%"
-"%JAVAEXE%" -Dfile.encoding=UTF-8 -Dsun.java2d.dpiaware=true %SMK% -cp "%CP%" com.arcanebrigade.client.GameLauncher
+"%JAVAEXE%" -Dfile.encoding=UTF-8 -Dsun.java2d.dpiaware=true "-Duser.home=%RUNTIME_HOME%" "-Djavafx.cachedir=%RUNTIME_HOME%\.openjfx" %SMK% -cp "%CP%" com.arcanebrigade.client.GameLauncher
 set "RC=%ERRORLEVEL%"
 endlocal & exit /b %RC%
 
