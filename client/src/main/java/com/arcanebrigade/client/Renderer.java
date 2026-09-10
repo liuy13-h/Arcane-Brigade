@@ -103,6 +103,18 @@ public final class Renderer {
         return new double[] { vw - w - 40, vh - h - 60, w, h };
     }
 
+    /** 暂停菜单「继续战斗」按钮矩形 [x, y, w, h]。GameApp 命中判定与绘制共用 */
+    public static double[] pauseResumeRect(double vw, double vh) {
+        double w = 200, h = 48;
+        return new double[] { vw / 2 - w - 16, vh * 0.56, w, h };
+    }
+
+    /** 暂停菜单「退出结算」按钮矩形 [x, y, w, h]。GameApp 命中判定与绘制共用 */
+    public static double[] pauseQuitRect(double vw, double vh) {
+        double w = 200, h = 48;
+        return new double[] { vw / 2 + 16, vh * 0.56, w, h };
+    }
+
     public void draw(World w, float alpha) {
         double vw = canvas.getWidth();
         double vh = canvas.getHeight();
@@ -118,9 +130,11 @@ public final class Renderer {
         drawGround(vw, vh, pal);
         drawBoundary(vw, vh, pal);
         drawObstacles(w, alpha, vw, vh);
+        drawEventWorld(w, alpha, vw, vh);   // 战斗事件：封印裂隙圈 / 蘑菇 / 雕像（部分在 entities 里）
         drawEntities(w, alpha, vw, vh);
         drawHud(w, vw, vh);
         drawBossBar(w, vw);
+        drawEventHud(w, vw, vh);            // 事件进度条 + 完成横幅（最上层）
     }
 
     /**
@@ -457,6 +471,8 @@ public final class Renderer {
                 case World.KIND_ENEMY -> {
                     if (w.variant[i] == World.V_BOSS) {
                         drawBossSprite(w, i, sx, sy);
+                    } else if (w.variant[i] == World.V_STATUE) {
+                        drawStatue(sx, sy, rr);
                     } else {
                         gc.drawImage(Sprites.enemies[w.meta[i] % Sprites.enemies.length], sx - 16, sy - 16);
                     }
@@ -489,13 +505,15 @@ public final class Renderer {
                     gc.drawImage(img, sx - img.getWidth() / 2, sy - img.getHeight() / 2);
                 }
                 case World.KIND_PICKUP -> {
-                    if (w.meta[i] == 1) {
+                    if (w.meta[i] == World.PICKUP_CHEST) {
                         // 宝箱
                         gc.setFill(Color.rgb(255, 215, 80, 0.95));
                         gc.fillOval(sx - 8, sy - 8, 16, 16);
                         gc.setStroke(Color.rgb(180, 130, 30));
                         gc.setLineWidth(2);
                         gc.strokeOval(sx - 8, sy - 8, 16, 16);
+                    } else if (w.meta[i] == World.PICKUP_MUSHROOM) {
+                        drawMushroom(sx, sy, w.time());
                     } else {
                         gc.drawImage(Sprites.gem, sx - 7, sy - 7);
                     }
@@ -533,6 +551,44 @@ public final class Renderer {
             gc.setFill(Color.rgb(150, 60, 70));
             gc.fillOval(sx - w.r[i], sy - w.r[i], w.r[i] * 2, w.r[i] * 2);
         }
+    }
+
+    /** 战斗事件「摧毁雕像」：灰色石像，底座 + 柱身 + 裂纹，可被摧毁 */
+    private void drawStatue(double sx, double sy, double rr) {
+        double h = rr * 2.6;
+        // 底座
+        gc.setFill(Color.rgb(96, 88, 84));
+        gc.fillRoundRect(sx - rr * 0.9, sy - h * 0.12, rr * 1.8, h * 0.22, 4, 4);
+        // 柱身（梯形近似）
+        gc.setFill(Color.rgb(150, 142, 138));
+        gc.fillRoundRect(sx - rr * 0.62, sy - h, rr * 1.24, h * 0.88, 5, 5);
+        gc.setFill(Color.rgb(120, 114, 110));
+        gc.fillRoundRect(sx - rr * 0.62, sy - h, rr * 1.24, h * 0.5, 5, 5);
+        // 裂纹
+        gc.setStroke(Color.rgb(70, 66, 64, 0.9));
+        gc.setLineWidth(1.5);
+        gc.strokeLine(sx - rr * 0.2, sy - h * 0.8, sx + rr * 0.1, sy - h * 0.55);
+        gc.strokeLine(sx + rr * 0.1, sy - h * 0.55, sx - rr * 0.05, sy - h * 0.3);
+        // 头部
+        gc.setFill(Color.rgb(168, 158, 152));
+        gc.fillOval(sx - rr * 0.4, sy - h - rr * 0.35, rr * 0.8, rr * 0.7);
+    }
+
+    /** 战斗事件「采集蘑菇」：红顶白点的蘑菇 */
+    private void drawMushroom(double sx, double sy, float time) {
+        double bob = Math.sin(time * 3.0) * 1.5;
+        // 菌柄
+        gc.setFill(Color.rgb(230, 214, 180));
+        gc.fillRoundRect(sx - 4, sy - 10 + bob, 8, 14, 3, 3);
+        // 菌盖
+        gc.setFill(Color.rgb(210, 70, 70));
+        gc.fillArc(sx - 12, sy - 18 + bob, 24, 16, 0, 180, javafx.scene.shape.ArcType.ROUND);
+        gc.fillRect(sx - 12, sy - 10 + bob, 24, 3);
+        // 白点
+        gc.setFill(Color.rgb(250, 240, 230));
+        gc.fillOval(sx - 7, sy - 15 + bob, 3, 3);
+        gc.fillOval(sx + 3, sy - 14 + bob, 3, 3);
+        gc.fillOval(sx - 1, sy - 16 + bob, 3, 3);
     }
 
     /** 敌人身上的元素状态：一圈元素色的环；被眩晕时环变成断续的白色 */
@@ -710,6 +766,99 @@ public final class Renderer {
             gc.strokeLine(cx, cy - r, cx, cy + r);
             gc.strokeOval(cx - r, cy - r, r * 2, r * 2);
         }
+    }
+
+    /** 战斗事件的世界层绘制：封印裂隙圈（蘑菇/雕像由 drawEntities 负责） */
+    private void drawEventWorld(World w, float alpha, double vw, double vh) {
+        if (w.eventType() != Balance.EVENT_RIFT) {
+            return;
+        }
+        double left = camX - vw / 2;
+        double top = camY - vh / 2;
+        double sx = w.eventX() - left;
+        double sy = w.eventY() - top;
+        double rr = Balance.RIFT_RADIUS;
+        if (sx + rr < 0 || sx - rr > vw || sy + rr < 0 || sy - rr > vh) {
+            return;
+        }
+        float ratio = Math.min(1f, w.eventProgress() / Math.max(1f, w.eventGoal()));
+        // 脉动：随世界时间呼吸，圈内闪烁紫光
+        double pulse = 1.0 + Math.sin(w.time() * 4.0) * 0.02;
+        double pr = rr * pulse;
+
+        // 圈内半透明填充（紫），越接近完成越亮
+        gc.setFill(Color.rgb(120, 70, 220, 0.16 + ratio * 0.18));
+        gc.fillOval(sx - pr, sy - pr, pr * 2, pr * 2);
+        // 外圈
+        gc.setStroke(Color.rgb(170, 120, 255, 0.9));
+        gc.setLineWidth(3);
+        gc.strokeOval(sx - pr, sy - pr, pr * 2, pr * 2);
+        // 进度弧（顶部起，顺时针）
+        gc.setStroke(Color.rgb(235, 210, 255, 0.95));
+        gc.setLineWidth(5);
+        gc.strokeArc(sx - pr, sy - pr, pr * 2, pr * 2, -90, -360 * ratio, javafx.scene.shape.ArcType.OPEN);
+        // 圆心提示
+        gc.setFont(Font.font("Microsoft YaHei", FontWeight.BOLD, 13));
+        gc.setFill(Color.rgb(235, 215, 255));
+        drawTextSoft(gc, Font.font("Microsoft YaHei", FontWeight.BOLD, 13), sx, sy - rr - 14,
+                "封印裂隙", Color.rgb(235, 215, 255), Color.rgb(30, 10, 50));
+    }
+
+    /** 战斗事件的 HUD：顶部居中进度条 + 完成横幅提示 */
+    private void drawEventHud(World w, double vw, double vh) {
+        String name = w.eventName();
+        if (name.isEmpty()) {
+            // 没有进行中事件时，若刚完成则显示横幅
+            if (w.eventBannerT() > 0f) {
+                drawEventBanner(vw, vh, "任务完成 +经验");
+            }
+            return;
+        }
+        // 顶部居中进度条
+        double bw = 360, bh = 22;
+        double bx = vw / 2 - bw / 2, by = 60;
+        float ratio = Math.min(1f, w.eventProgress() / Math.max(1f, w.eventGoal()));
+        gc.setFill(Color.rgb(12, 10, 18, 0.72));
+        gc.fillRoundRect(bx - 4, by - 4, bw + 8, bh + 8, 8, 8);
+        gc.setFill(Color.rgb(28, 22, 40, 0.9));
+        gc.fillRoundRect(bx, by, bw, bh, 6, 6);
+        gc.setFill(Color.rgb(150, 110, 240));
+        gc.fillRect(bx + 3, by + 3, (bw - 6) * ratio, bh - 6);
+
+        String label;
+        if (w.eventType() == Balance.EVENT_RIFT) {
+            label = String.format("封印裂隙：在圈内坚持 %.0f / %.0f 秒",
+                    w.eventProgress(), w.eventGoal());
+        } else if (w.eventType() == Balance.EVENT_STATUE) {
+            label = String.format("摧毁雕像：%d / %d",
+                    (int) w.eventProgress(), (int) w.eventGoal());
+        } else {
+            label = String.format("采集蘑菇：%d / %d",
+                    (int) w.eventProgress(), (int) w.eventGoal());
+        }
+        gc.setFont(Font.font("Microsoft YaHei", FontWeight.BOLD, 14));
+        double tw = measureWidth(gc.getFont(), label);
+        gc.setFill(Color.rgb(245, 238, 255));
+        gc.fillText(label, vw / 2 - tw / 2, by - 8);
+
+        if (w.eventBannerT() > 0f) {
+            drawEventBanner(vw, vh, "任务完成 +经验");
+        }
+    }
+
+    private void drawEventBanner(double vw, double vh, String text) {
+        Font f = Font.font("Microsoft YaHei", FontWeight.BOLD, 26);
+        double tw = measureWidth(f, text);
+        double bw = tw + 48, bh = 50;
+        double bx = vw / 2 - bw / 2, by = vh * 0.30;
+        gc.setFill(Color.rgb(20, 14, 34, 0.9));
+        gc.fillRoundRect(bx, by, bw, bh, 12, 12);
+        gc.setStroke(Color.rgb(190, 150, 255, 0.9));
+        gc.setLineWidth(2);
+        gc.strokeRoundRect(bx, by, bw, bh, 12, 12);
+        gc.setFont(f);
+        gc.setFill(Color.rgb(255, 226, 150));
+        gc.fillText(text, bx + 24, by + bh / 2 + 9);
     }
 
     /** Boss 血条：顶部居中，显示血量 + 护盾 */
@@ -990,7 +1139,7 @@ public final class Renderer {
      * 各人显示高度 = 其放大后的自然高度（约 42~50px）。此值仅在美术资源缺失时
      * 当作排版占位高度。
      */
-    /** 手动暂停罩层：半透明蒙版 + "已暂停"提示。由 GameApp 在手动暂停时调用 */
+    /** 手动暂停罩层：半透明蒙版 + "已暂停"提示 + 继续战斗/退出结算按钮。由 GameApp 在手动暂停时调用 */
     public void drawPauseOverlay(double vw, double vh) {
         gc.setFill(Color.rgb(10, 8, 18, 0.55));
         gc.fillRect(0, 0, vw, vh);
@@ -1002,8 +1151,37 @@ public final class Renderer {
 
         gc.setFont(Font.font("Microsoft YaHei", 15));
         gc.setFill(Color.rgb(170, 170, 190));
-        tw = measurerLayout("按 ESC 或点击左上角按钮继续", Font.font("Microsoft YaHei", 15));
-        gc.fillText("按 ESC 或点击左上角按钮继续", vw / 2 - tw / 2, vh * 0.42 + 40);
+        tw = measurerLayout("按 ESC 或点击按钮", Font.font("Microsoft YaHei", 15));
+        gc.fillText("按 ESC 或点击按钮", vw / 2 - tw / 2, vh * 0.42 + 40);
+
+        // 「继续战斗」按钮
+        double[] rb = pauseResumeRect(vw, vh);
+        boolean rHover = mouseX >= rb[0] && mouseX <= rb[0] + rb[2]
+                && mouseY >= rb[1] && mouseY <= rb[1] + rb[3];
+        gc.setFill(rHover ? Color.rgb(46, 88, 66) : Color.rgb(30, 46, 44));
+        gc.fillRoundRect(rb[0], rb[1], rb[2], rb[3], 10, 10);
+        gc.setStroke(Color.rgb(130, 220, 170, rHover ? 1.0 : 0.75));
+        gc.setLineWidth(rHover ? 2.2 : 1.5);
+        gc.strokeRoundRect(rb[0], rb[1], rb[2], rb[3], 10, 10);
+        Font bf = Font.font("Microsoft YaHei", FontWeight.BOLD, 17);
+        gc.setFont(bf);
+        gc.setFill(Color.rgb(225, 245, 232));
+        gc.fillText("继续战斗", rb[0] + rb[2] / 2 - measureWidth(bf, "继续战斗") / 2,
+                rb[1] + rb[3] / 2 + 6);
+
+        // 「退出结算」按钮
+        double[] qb = pauseQuitRect(vw, vh);
+        boolean qHover = mouseX >= qb[0] && mouseX <= qb[0] + qb[2]
+                && mouseY >= qb[1] && mouseY <= qb[1] + qb[3];
+        gc.setFill(qHover ? Color.rgb(96, 54, 48) : Color.rgb(52, 38, 44));
+        gc.fillRoundRect(qb[0], qb[1], qb[2], qb[3], 10, 10);
+        gc.setStroke(Color.rgb(235, 150, 130, qHover ? 1.0 : 0.75));
+        gc.setLineWidth(qHover ? 2.2 : 1.5);
+        gc.strokeRoundRect(qb[0], qb[1], qb[2], qb[3], 10, 10);
+        gc.setFont(bf);
+        gc.setFill(Color.rgb(245, 225, 220));
+        gc.fillText("退出结算", qb[0] + qb[2] / 2 - measureWidth(bf, "退出结算") / 2,
+                qb[1] + qb[3] / 2 + 6);
     }
 
     /** 胜利结算画面：半透明罩层 + 战报。由 GameApp 在 world.victory() 时调用 */
@@ -1044,26 +1222,28 @@ public final class Renderer {
         gc.fillRect(0, 0, vw, vh);
 
         // ---- 标题 ----
+        World.Summary s = w.summary();
+        boolean aband = (s != null && s.abandoned);
         Font titleF = Font.font("Microsoft YaHei", FontWeight.BOLD, 46);
-        String title = "阵  亡";
+        String title = aband ? "已 结 算" : "阵  亡";
         gc.setFont(titleF);
-        gc.setFill(Color.rgb(226, 96, 106));
+        gc.setFill(aband ? Color.rgb(210, 180, 130) : Color.rgb(226, 96, 106));
         gc.fillText(title, vw / 2 - measureWidth(titleF, title) / 2, vh * 0.20);
 
         Font subF = Font.font("Microsoft YaHei", 15);
-        String sub = "勇者倒下了，但奥术旅团的传说仍在延续";
+        String sub = aband ? "战斗提前结束，旅团从容撤退" : "勇者倒下了，但奥术旅团的传说仍在延续";
         gc.setFont(subF);
         gc.setFill(Color.rgb(198, 190, 200));
         gc.fillText(sub, vw / 2 - measureWidth(subF, sub) / 2, vh * 0.20 + 36);
 
         // ---- 战报面板 ----
-        World.Summary s = w.summary();
         int secs = (int) (s != null ? s.time : w.time());
         String[][] rows = {
                 { "存活时间", String.format("%d:%02d", secs / 60, secs % 60) },
                 { "最终等级", "Lv." + (s != null ? s.level : 1) },
                 { "击杀小怪", String.valueOf(s != null ? s.minionKills : w.minionKills()) },
                 { "击杀 BOSS", String.valueOf(s != null ? s.bossKills : w.bossKills()) },
+                { "战场任务", (s != null ? s.events : 0) + " / 3" },
                 { "主动技能", (s != null ? s.spells : 0) + " / 3" },
                 { "被动强化", (s != null ? s.passives : 0) + " 层" },
         };

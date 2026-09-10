@@ -125,15 +125,15 @@ public final class GameApp extends Application {
                 return;
             }
             pressed.add(e.getCode());
-            // 战斗阶段：ESC 手动暂停；R 键在胜利/阵亡后重开，在升级面板弹出时重抽
+            // 战斗阶段：ESC 手动暂停；R 键在胜利/阵亡/退出结算后重开，在升级面板弹出时重抽
             if (e.getCode() == KeyCode.ESCAPE) {
-                if (!world.victory() && !world.defeat()) {
+                if (!world.victory() && !world.defeat() && !world.abandoned()) {
                     manualPause = !manualPause;
                 }
                 return;
             }
             if (e.getCode() == KeyCode.R) {
-                if (world.victory() || world.defeat()) {
+                if (world.victory() || world.defeat() || world.abandoned()) {
                     restart();
                     return;
                 }
@@ -325,14 +325,14 @@ public final class GameApp extends Application {
                     return;
                 }
 
-                // 阵亡：同样冻结模拟，弹结算战报，点「继续」或按 R 回大厅。
+                // 阵亡 / 主动退出结算：同样冻结模拟，弹结算战报，点「继续」或按 R 回大厅。
                 // 之前玩家倒下后没有任何终局状态，游戏会一直空转却永远不结束。
-                if (world.defeat()) {
+                if (world.defeat() || world.abandoned()) {
                     renderer.setFps(fps[0]);
                     renderer.draw(world, 0f);
                     renderer.drawDefeatOverlay(world, canvas.getWidth(), canvas.getHeight());
                     if (smokeFrames > 0 && ++renderedFrames >= smokeFrames) {
-                        System.out.printf("[smoke] 阵亡结算，渲染 %d 帧完成，退出%n", renderedFrames);
+                        System.out.printf("[smoke] 结算画面，渲染 %d 帧完成，退出%n", renderedFrames);
                         Platform.exit();
                     }
                     return;
@@ -675,8 +675,8 @@ public final class GameApp extends Application {
         double vw = renderer.getCanvasWidth();
         double vh = renderer.getCanvasHeight();
 
-        // 1) 阵亡结算：右下角「继续」回到准备大厅
-        if (world.defeat()) {
+        // 1) 阵亡 / 退出结算：右下角「继续」回到准备大厅
+        if (world.defeat() || world.abandoned()) {
             if (hit(Renderer.continueButtonRect(vw, vh), mx, my)) {
                 restart();
             }
@@ -686,18 +686,32 @@ public final class GameApp extends Application {
             return;                      // 胜利画面只认 R 键
         }
 
-        // 2) HUD 按钮：开火模式切换（自动 / 手动）
+        // 2) 手动暂停菜单：「继续战斗」/「退出结算」
+        if (manualPause) {
+            if (hit(Renderer.pauseResumeRect(vw, vh), mx, my)) {
+                manualPause = false;
+                return;
+            }
+            if (hit(Renderer.pauseQuitRect(vw, vh), mx, my)) {
+                world.abandon();          // 主动结束本局 → 结算画面 → 继续回大厅
+                manualPause = false;
+                return;
+            }
+            return;                       // 暂停菜单内点击其它区域不响应
+        }
+
+        // 3) HUD 按钮：开火模式切换（自动 / 手动）
         if (hit(Renderer.fireButtonRect(vw, vh), mx, my)) {
             world.setAutoFire(!world.isAutoFire());
             return;
         }
-        // 3) HUD 按钮：暂停 / 继续
+        // 4) HUD 按钮：暂停 / 继续
         if (hit(Renderer.pauseButtonRect(vw, vh), mx, my)) {
             manualPause = !manualPause;
             return;
         }
 
-        // 4) 升级三选一
+        // 5) 升级三选一
         if (world.wizardCount() == 0) {
             return;
         }

@@ -278,7 +278,7 @@ public final class Balance {
      * 同样的时间点，一个吃满经验的玩家和一个挂机的玩家该面对的 Boss 强度不该一样。
      * 到等级但上一只还活着时不会叠加，会等它倒下再上（见 WaveDirector）。
      */
-    public static final int[]   BOSS_LEVELS   = { 4, 8, 12, 16 };
+    public static final int[]   BOSS_LEVELS   = { 5, 10, 15, 20 };
     public static final String[] BOSS_NAMES   = { "石心巨像", "熔岩领主", "霜寂君王", "终焉之影" };
     /** 每只 Boss 的血池。第一只别太肉，5 分钟时的 build 打得动 */
     public static final float[] BOSS_HP_TIERS = { 2000f, 4200f, 7200f, 13000f };
@@ -306,6 +306,27 @@ public final class Balance {
     /** 召唤：每 interval 秒在自身周围召唤 count 只小怪 */
     public static final float BOSS_SUMMON_INTERVAL = 6f;
     public static final int   BOSS_SUMMON_COUNT    = 4;
+
+    // ---- 战斗事件（小任务） ----
+    /** 三个事件的触发时间（秒）：2 分钟 / 5 分钟 / 8 分钟 */
+    public static final float[] EVENT_TIMES  = { 120f, 300f, 480f };
+    public static final String[] EVENT_NAMES = { "封印裂隙", "摧毁雕像", "采集蘑菇" };
+    /** 各事件完成后的经验奖励：按当前升级所需经验的倍率发放（越靠后越丰厚） */
+    public static final float[] EVENT_XP_MUL = { 0.8f, 1.2f, 1.8f };
+    /** 事件类型 id（World.eventType() 返回） */
+    public static final int EVENT_RIFT = 1;
+    public static final int EVENT_STATUE = 2;
+    public static final int EVENT_MUSHROOM = 3;
+    /** 封印裂隙：圈半径 + 需要在圈内累计坚持的秒数 */
+    public static final float RIFT_RADIUS     = 140f;
+    public static final float RIFT_HOLD_TIME  = 18f;
+    /** 摧毁雕像：数量 + 单只基础血量（再乘时间成长曲线） */
+    public static final int   STATUE_COUNT    = 3;
+    public static final float STATUE_HP       = 220f;
+    public static final float STATUE_RADIUS   = 26f;
+    /** 采集蘑菇：数量 + 存活时长（秒） */
+    public static final int   MUSHROOM_COUNT  = 8;
+    public static final float MUSHROOM_LIFE   = 120f;
 
     // ---- 世界 ----
     public static final float FIXED_STEP     = 1f / 60f;
