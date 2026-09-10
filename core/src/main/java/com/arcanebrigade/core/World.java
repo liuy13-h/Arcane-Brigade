@@ -188,6 +188,19 @@ public final class World {
     /** 事件生成的雕像 / 蘑菇实体 id，用于清理与统计 */
     private final IntList eventIds = new IntList(16);
 
+    // ---- 5 关 Boss：奶娃（玩家等级触发，场地中央） ----
+    private int milkyId = -1;
+    private boolean milkySpawned;
+    private float milkyStompCd;
+    private float milkyLaughCd;
+    /** 奶娃施法状态：0=移动/待机，1=蓄力踩地，2=捧腹大笑 */
+    private int milkyCast;
+    private float milkyCastT;
+    /** true=朝右（用右向动画/镜像判断） */
+    private boolean milkyFaceRight;
+    /** 踩地动画是否用镜像版（玩家在左侧时） */
+    private boolean milkyMirror;
+
     /**
      * 玩家的指挥指令：鼠标点击（或按住）时记下世界坐标。
      * 宠物的第一优先级是"朝这里进攻"，有效期 MINION_ORDER_TIME 秒，
@@ -287,6 +300,9 @@ public final class World {
                 summary = snapshot(true, false, firstWizard());
             }
             bossId = -1;   // Boss 倒下：清掉阶段技能标记，下一帧 updateBossPhase 也会兜底
+        }
+        if (id == milkyId) {
+            milkyId = -1;  // 奶娃血量归零：消失（客户端据此停掉专属 BGM）
         }
         int k = kind[id];
         if (k == KIND_ENEMY) {
@@ -656,6 +672,13 @@ public final class World {
         updateMinions(dt);        // 宠物 AI：护主 / 听指挥 / 拴绳
         if (bossId >= 0) {
             updateBossPhase(dt);  // Boss 阶段技能（预警圈 / 召唤）
+        }
+        // 奶娃：玩家等级达到 MILKY_LEVEL 时从场地中央刷新，之后走自己的状态机
+        if (!milkySpawned && firstWizard() >= 0 && playerLevel() >= Balance.MILKY_LEVEL) {
+            spawnMilky();
+        }
+        if (milkyId >= 0) {
+            updateMilky(dt);
         }
         castSpells(dt, in);
         updateProjectiles(dt);
@@ -1246,6 +1269,135 @@ public final class World {
                     }
                 }
                 bossSummonTimer = Balance.BOSS_SUMMON_INTERVAL;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 5 关 Boss：奶娃
+    // ------------------------------------------------------------------
+
+    /** 在场地中央生成奶娃。属性取 Balance.MILKY_*，不带护盾。 */
+    private void spawnMilky() {
+        int id = spawnEnemy(0f, 0f, 0, V_BOSS);
+        if (id < 0) {
+            return;
+        }
+        maxHp[id] = Balance.MILKY_HP;
+        hp[id] = maxHp[id];
+        speed[id] = Balance.MILKY_SPEED;
+        r[id] = Balance.MILKY_RADIUS;
+        dmg[id] = Balance.MILKY_DMG;
+        enemyShield[id] = 0f;
+        milkyId = id;
+        milkySpawned = true;
+        milkyStompCd = Balance.MILKY_STOMP_CD;
+        milkyLaughCd = Balance.MILKY_LAUGH_CD;
+        milkyCast = 0;
+        milkyCastT = 0f;
+        milkyFaceRight = true;
+        milkyMirror = false;
+    }
+
+    /**
+     * 奶娃行为：靠近玩家才起手；施法期间原地不动。
+     * 技能一「蓄力踩地」→ 朝玩家所在侧的半圆，伤害 50；
+     * 技能二「捧腹大笑」→ 半血以下才用，圆形大范围伤害 100，频率低。
+     * 未施法时的追击由通用 updateEnemies 按 speed 驱动。
+     */
+    private void updateMilky(float dt) {
+        int m = milkyId;
+        if (!alive[m]) {
+            milkyId = -1;
+            return;
+        }
+        int w = firstWizard();
+        if (w < 0) {
+            return;
+        }
+        float dx = x[w] - x[m];
+        float dy = y[w] - y[m];
+        milkyFaceRight = dx >= 0f;
+
+        if (milkyStompCd > 0f) {
+            milkyStompCd -= dt;
+        }
+        if (milkyLaughCd > 0f) {
+            milkyLaughCd -= dt;
+        }
+
+        if (milkyCast != 0) {
+            speed[m] = 0f;      // 释放技能期间无法移动
+            dmg[m] = 0f;        // 施法中也不造成接触伤害
+            milkyCastT += dt;
+            float dur = (milkyCast == 2) ? Balance.MILKY_LAUGH_CAST : Balance.MILKY_STOMP_CAST;
+            if (milkyCastT >= dur) {
+                if (milkyCast == 2) {
+                    damagePlayersInRadius(x[m], y[m], Balance.MILKY_LAUGH_RANGE,
+                            Balance.MILKY_LAUGH_DMG);
+                    milkyLaughCd = Balance.MILKY_LAUGH_CD;
+                } else {
+                    damagePlayersInSemicircle(x[m], y[m], Balance.MILKY_STOMP_RANGE,
+                            Balance.MILKY_STOMP_DMG, milkyFaceRight ? 1 : -1);
+                    milkyStompCd = Balance.MILKY_STOMP_CD;
+                }
+                milkyCast = 0;
+                milkyCastT = 0f;
+            }
+            return;
+        }
+
+        speed[m] = Balance.MILKY_SPEED;
+        dmg[m] = Balance.MILKY_DMG;
+
+        boolean near = dx * dx + dy * dy
+                <= Balance.MILKY_TRIGGER_RANGE * Balance.MILKY_TRIGGER_RANGE;
+        if (!near) {
+            return;
+        }
+        boolean half = hp[m] <= maxHp[m] * Balance.MILKY_LAUGH_HP;
+        if (half && milkyLaughCd <= 0f) {
+            milkyCast = 2;
+            milkyCastT = 0f;
+        } else if (milkyStompCd <= 0f) {
+            milkyCast = 1;
+            milkyCastT = 0f;
+            milkyMirror = !milkyFaceRight;   // 玩家在左侧 → 用镜像动画
+        }
+    }
+
+    /** 半圆范围伤害：side>=0 打右半侧，side<0 打左半侧（圆心 ex,ey） */
+    private void damagePlayersInSemicircle(float ex, float ey, float radius, float dmg, int side) {
+        for (int n = 0; n < wizards.size(); n++) {
+            int wz = wizards.get(n);
+            if (!alive[wz]) {
+                continue;
+            }
+            float dx = x[wz] - ex;
+            float dy = y[wz] - ey;
+            if (side >= 0 ? dx < 0f : dx > 0f) {
+                continue;
+            }
+            float rr = radius + r[wz];
+            if (dx * dx + dy * dy <= rr * rr && iframe[wz] <= 0f) {
+                damage(wz, dmg);
+                iframe[wz] = heroIframe(wz);
+            }
+        }
+        for (int n = 0; n < minions.size(); n++) {
+            int mi = minions.get(n);
+            if (!alive[mi]) {
+                continue;
+            }
+            float dx = x[mi] - ex;
+            float dy = y[mi] - ey;
+            if (side >= 0 ? dx < 0f : dx > 0f) {
+                continue;
+            }
+            float rr = radius + r[mi];
+            if (dx * dx + dy * dy <= rr * rr && iframe[mi] <= 0f) {
+                damage(mi, dmg);
+                iframe[mi] = Balance.MINION_IFRAME;
             }
         }
     }
@@ -2440,7 +2592,7 @@ public final class World {
             }
             // Boss 不回收：它移速（52）远低于玩家（195），跑远了就被删掉的话
             // Boss 战会莫名其妙自己结束。由 updateBossPhase 负责它的生命周期。
-            if (i == bossId) {
+            if (i == bossId || i == milkyId) {
                 continue;
             }
             // 雕像事件靶子不回收：玩家跑远了任务就永远完不成
@@ -2629,6 +2781,57 @@ public final class World {
 
     public float time() {
         return time;
+    }
+
+    // ---- 5 关 Boss 奶娃（客户端渲染 / 音乐用） ----
+
+    /** 冒烟 / 调试用：立即刷新奶娃（忽略等级条件） */
+    public void forceSpawnMilky() {
+        if (!milkySpawned) {
+            spawnMilky();
+        }
+    }
+
+    /** 奶娃实体 id；-1 表示不在场 */
+    public int milkyId() {
+        return milkyId;
+    }
+
+    /** 奶娃是否在场且存活 */
+    public boolean milkyAlive() {
+        return milkyId >= 0 && alive[milkyId];
+    }
+
+    /** 奶娃施法状态：0=移动/待机，1=蓄力踩地，2=捧腹大笑 */
+    public int milkyCast() {
+        return milkyCast;
+    }
+
+    /** 当前施法已进行时间 / 总时长（渲染动画进度用） */
+    public float milkyCastT() {
+        return milkyCastT;
+    }
+
+    public float milkyCastDur() {
+        return (milkyCast == 2) ? Balance.MILKY_LAUGH_CAST : Balance.MILKY_STOMP_CAST;
+    }
+
+    /** true=奶娃朝右（决定用哪套行走动画） */
+    public boolean milkyFaceRight() {
+        return milkyFaceRight;
+    }
+
+    /** 踩地动画是否用镜像版（玩家在左侧时为 true） */
+    public boolean milkyMirror() {
+        return milkyMirror;
+    }
+
+    public float milkyX() {
+        return milkyId >= 0 ? x[milkyId] : 0f;
+    }
+
+    public float milkyY() {
+        return milkyId >= 0 ? y[milkyId] : 0f;
     }
 
     public int enemyCount() {

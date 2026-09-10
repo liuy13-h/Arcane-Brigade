@@ -54,7 +54,7 @@ dir /s /b core\src\main\java\*.java > "%TEMP%\ab_core_src.txt"
 if errorlevel 1 goto :fail
 
 set "M2=%USERPROFILE%\.m2\repository"
-set "FXCP=%M2%\org\openjfx\javafx-controls\21.0.12\javafx-controls-21.0.12.jar;%M2%\org\openjfx\javafx-graphics\21.0.12\javafx-graphics-21.0.12.jar;%M2%\org\openjfx\javafx-base\21.0.12\javafx-base-21.0.12.jar"
+set "FXCP=%M2%\org\openjfx\javafx-controls\21.0.12\javafx-controls-21.0.12.jar;%M2%\org\openjfx\javafx-graphics\21.0.12\javafx-graphics-21.0.12.jar;%M2%\org\openjfx\javafx-base\21.0.12\javafx-base-21.0.12.jar;%M2%\org\openjfx\javafx-media\21.0.12\javafx-media-21.0.12-win.jar"
 dir /s /b client\src\main\java\*.java > "%TEMP%\ab_client_src.txt"
 "%JAVAC_EXE%" -encoding UTF-8 -cp "core\target\classes;%FXCP%" -d client\target\classes @"%TEMP%\ab_client_src.txt"
 if errorlevel 1 goto :fail

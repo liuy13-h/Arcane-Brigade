@@ -60,6 +60,18 @@ public final class Sprites {
     public static Image enemyBolt;
     public static Image gem;
 
+    // ---- 5 关 Boss 奶娃：血条头像 + 四套动作 GIF ----
+    /** 奶娃血条右侧头像（与血条等高显示） */
+    public static Image milkyPortrait;
+    /** 向左行走 / 向右行走（两张独立动图） */
+    public static GifDecoder.Animation milkyWalkLeft;
+    public static GifDecoder.Animation milkyWalkRight;
+    /** 蓄力踩地（单次）与其镜像版，按玩家在左/右选用 */
+    public static GifDecoder.Animation milkyStomp;
+    public static GifDecoder.Animation milkyStompMirror;
+    /** 捧腹大笑（半血以下的技能二） */
+    public static GifDecoder.Animation milkyLaugh;
+
     /** 快照需要节点挂在 Scene 下才可靠，用一个离屏容器兜着 */
     private static final Group OFFSCREEN = new Group();
     private static final Scene OFFSCREEN_SCENE = new Scene(OFFSCREEN, 1, 1);
@@ -112,6 +124,35 @@ public final class Sprites {
         enemyBolt = bake(22, 22, g -> paintBolt(g,
                 Color.rgb(255, 225, 225), Color.rgb(255, 80, 70), Color.rgb(140, 8, 18)));
         gem = bake(14, 14, Sprites::paintGem);
+
+        // 奶娃素材（resources/sprites/milky/）：原图是白底方图，统一抠背景成透明底
+        milkyPortrait = knockoutBackground(loadImage("milky/portrait.jpg"));
+        milkyWalkLeft = knockAnim(loadAnim("milky/walk_left.gif"));
+        milkyWalkRight = knockAnim(loadAnim("milky/walk_right.gif"));
+        milkyStomp = knockAnim(loadAnim("milky/stomp.gif"));
+        milkyStompMirror = knockAnim(loadAnim("milky/stomp_mirror.gif"));
+        milkyLaugh = knockAnim(loadAnim("milky/laugh.gif"));
+    }
+
+    /** 把整段 GIF 的每一帧都抠掉背景 */
+    private static GifDecoder.Animation knockAnim(GifDecoder.Animation a) {
+        if (a == null) {
+            return null;
+        }
+        Image[] fs = new Image[a.frames.length];
+        for (int i = 0; i < fs.length; i++) {
+            fs[i] = knockoutBackground(a.frames[i]);
+        }
+        return new GifDecoder.Animation(fs, a.delays);
+    }
+
+    /** 解码 resources/sprites 下的 GIF 动画；缺失/解码失败返回 null */
+    private static GifDecoder.Animation loadAnim(String name) {
+        try (InputStream in = res(name)) {
+            return GifDecoder.decode(in);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /** 职业形象 + 走动动画。形象裁边 ×2 放大，任一缺失都用程序化绘制兜底 */

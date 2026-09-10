@@ -17,9 +17,12 @@ public final class GameAudio {
 
     private static final String MENU_FILE = "bgm_main.mp3";
     private static final String LOBBY_FILE = "bgm_lobby.mp3";
+    private static final String BOSS_FILE = "boss_milky.mp3";
 
     private static MediaPlayer menu;
     private static MediaPlayer lobby;
+    /** 5 关 Boss 奶娃在场时的专属循环音乐 */
+    private static MediaPlayer boss;
 
     private GameAudio() {}
 
@@ -49,12 +52,26 @@ public final class GameAudio {
         lobby = null;
     }
 
+    /** 奶娃出场：开始循环播放其专属 BGM（若已在播则重来） */
+    public static void startBossBgm() {
+        release(boss);
+        boss = start(BOSS_FILE);
+        refreshVolume();
+    }
+
+    /** 奶娃血量归零消失：停止专属 BGM */
+    public static void stopBossBgm() {
+        release(boss);
+        boss = null;
+    }
+
     /** 音量配置变化后调用：所有在播的 BGM 统一用 总音量 × BGM 音量 */
     public static void refreshVolume() {
         double v = (GameConfig.volume(GameConfig.VOL_MASTER) / 100.0)
                 * (GameConfig.volume(GameConfig.VOL_BGM) / 100.0);
         applyVolume(menu, v);
         applyVolume(lobby, v);
+        applyVolume(boss, v);
     }
 
     /** 建好一个无限循环的 MediaPlayer（不设错误即失败时置空） */

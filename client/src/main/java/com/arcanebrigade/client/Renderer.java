@@ -15,6 +15,7 @@ import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.image.Image;
 import javafx.scene.paint.Color;
 import javafx.scene.paint.CycleMethod;
+import javafx.scene.shape.ArcType;
 import javafx.scene.paint.LinearGradient;
 import javafx.scene.paint.Stop;
 import javafx.scene.text.Font;
@@ -131,9 +132,11 @@ public final class Renderer {
         drawBoundary(vw, vh, pal);
         drawObstacles(w, alpha, vw, vh);
         drawEventWorld(w, alpha, vw, vh);   // 战斗事件：封印裂隙圈 / 蘑菇 / 雕像（部分在 entities 里）
+        drawMilkyTelegraph(w, vw, vh);      // 奶娃技能预警（地面层）
         drawEntities(w, alpha, vw, vh);
         drawHud(w, vw, vh);
         drawBossBar(w, vw);
+        drawMilkyBar(w, vw);                // 奶娃专属血条 + 头像
         drawEventHud(w, vw, vh);            // 事件进度条 + 完成横幅（最上层）
     }
 
@@ -469,7 +472,9 @@ public final class Renderer {
                     }
                 }
                 case World.KIND_ENEMY -> {
-                    if (w.variant[i] == World.V_BOSS) {
+                    if (i == w.milkyId()) {
+                        drawMilky(w, i, sx, sy);
+                    } else if (w.variant[i] == World.V_BOSS) {
                         drawBossSprite(w, i, sx, sy);
                     } else if (w.variant[i] == World.V_STATUE) {
                         drawStatue(sx, sy, rr);
@@ -477,7 +482,7 @@ public final class Renderer {
                         gc.drawImage(Sprites.enemies[w.meta[i] % Sprites.enemies.length], sx - 16, sy - 16);
                     }
                     drawEnemyStatus(w, i, sx, sy);
-                    if (w.hp[i] < w.maxHp[i]) {
+                    if (i != w.milkyId() && w.hp[i] < w.maxHp[i]) {
                         float f = Math.max(0f, w.hp[i] / w.maxHp[i]);
                         gc.setFill(Color.rgb(30, 12, 16));
                         gc.fillRect(sx - 13, sy - rr - 10, 26, 4);
@@ -914,6 +919,117 @@ public final class Renderer {
             gc.setFill(suffixFill);
             gc.fillText(suffix, x0 + mainW + 8, topY + height / 2 + suffixFont.getSize() * 0.36);
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 5 关 Boss 奶娃：动画 / 技能预警 / 专属血条
+    // ------------------------------------------------------------------
+
+    /** 奶娃当前该画的那一帧：按施法状态 / 朝向挑动画 */
+    private static Image milkyFrame(World w) {
+        int cast = w.milkyCast();
+        if (cast == 1) {
+            GifDecoder.Animation a = w.milkyMirror() ? Sprites.milkyStompMirror : Sprites.milkyStomp;
+            if (a != null) {
+                // 单次播放：进度到末尾就停在最后一帧
+                float t = Math.min(w.milkyCastT(), Math.max(0f, a.total - 0.001f));
+                return a.frameAt(t);
+            }
+        } else if (cast == 2) {
+            GifDecoder.Animation a = Sprites.milkyLaugh;
+            if (a != null) {
+                return a.frameAt(w.milkyCastT());
+            }
+        }
+        GifDecoder.Animation walk = w.milkyFaceRight() ? Sprites.milkyWalkRight : Sprites.milkyWalkLeft;
+        return (walk != null) ? walk.frameAt(w.time()) : null;
+    }
+
+    private void drawMilky(World w, int i, double sx, double sy) {
+        Image img = milkyFrame(w);
+        double size = w.r[i] * 2.6;
+        double cy = sy - size * 0.06;
+        gc.setFill(Color.rgb(0, 0, 0, 0.30));
+        gc.fillOval(sx - size * 0.30, sy - 5, size * 0.60, 10);
+        if (img != null) {
+            gc.drawImage(img, sx - size * 0.5, cy - size * 0.5, size, size);
+        } else {
+            gc.setFill(Color.rgb(235, 180, 200));
+            gc.fillOval(sx - w.r[i], cy - w.r[i], w.r[i] * 2, w.r[i] * 2);
+        }
+    }
+
+    /** 技能预警：踩地=朝玩家一侧的半圆；大笑=大圆。范围与 Config 一致，便于玩家躲避 */
+    private void drawMilkyTelegraph(World w, double vw, double vh) {
+        int id = w.milkyId();
+        int cast = w.milkyCast();
+        if (id < 0 || cast == 0) {
+            return;
+        }
+        double left = camX - vw / 2;
+        double top = camY - vh / 2;
+        double ex = w.milkyX() - left;
+        double ey = w.milkyY() - top;
+        float p = Math.min(1f, w.milkyCastT() / Math.max(0.001f, w.milkyCastDur()));
+        if (cast == 1) {
+            double rad = Balance.MILKY_STOMP_RANGE;
+            double start = w.milkyFaceRight() ? -90 : 90;   // 半圆朝玩家一侧
+            gc.setFill(Color.rgb(255, 90, 60, 0.16 + 0.16 * p));
+            gc.fillArc(ex - rad, ey - rad, rad * 2, rad * 2, start, 180, ArcType.ROUND);
+            gc.setStroke(Color.rgb(255, 130, 90, 0.85));
+            gc.setLineWidth(2.5);
+            gc.strokeArc(ex - rad, ey - rad, rad * 2, rad * 2, start, 180, ArcType.ROUND);
+        } else {
+            double rad = Balance.MILKY_LAUGH_RANGE;
+            gc.setFill(Color.rgb(255, 80, 90, 0.14 + 0.18 * p));
+            gc.fillOval(ex - rad, ey - rad, rad * 2, rad * 2);
+            gc.setStroke(Color.rgb(255, 120, 140, 0.9));
+            gc.setLineWidth(3);
+            gc.strokeOval(ex - rad, ey - rad, rad * 2, rad * 2);
+        }
+    }
+
+    /** 奶娃专属血条：顶部加高条（32px）+ 右端等高头像 */
+    private void drawMilkyBar(World w, double vw) {
+        int id = w.milkyId();
+        if (id < 0 || !w.alive[id]) {
+            return;
+        }
+        double bh = 32;
+        Image portrait = Sprites.milkyPortrait;
+        double pw = (portrait != null) ? bh * (portrait.getWidth() / portrait.getHeight()) : bh;
+        double bw = Math.min(680, vw - (pw + 40) - 80);
+        double total = bw + 10 + pw;
+        double bx = (vw - total) / 2;
+        // 若同屏还有按等级刷的 Boss，奶娃条下移，避免两条重叠
+        int bid = w.bossId();
+        double by = (bid >= 0 && w.alive[bid]) ? 54 : 16;
+
+        float f = Math.max(0f, w.hp[id] / w.maxHp[id]);
+        gc.setFill(Color.rgb(8, 6, 12, 0.85));
+        gc.fillRect(bx - 3, by - 3, bw + 6, bh + 6);
+        gc.setFill(Color.rgb(70, 24, 46));
+        gc.fillRect(bx, by, bw, bh);
+        gc.setFill(Color.rgb(255, 120, 170));
+        gc.fillRect(bx, by, bw * f, bh);
+        gc.setStroke(Color.rgb(255, 190, 220, 0.6));
+        gc.setLineWidth(1);
+        gc.strokeRect(bx, by, bw, bh);
+
+        // 头像：高度与血条一致，贴在血条右端
+        if (portrait != null) {
+            gc.drawImage(portrait, bx + bw + 10, by, pw, bh);
+            gc.setStroke(Color.rgb(255, 190, 220, 0.7));
+            gc.setLineWidth(1);
+            gc.strokeRect(bx + bw + 10, by, pw, bh);
+        }
+
+        gc.setFont(hudFont);
+        gc.setFill(Color.rgb(255, 200, 225));
+        gc.fillText("奶娃", bx, by - 6);
+        gc.setFill(Color.rgb(240, 220, 230));
+        String hpText = String.format("%.0f / %.0f", w.hp[id], w.maxHp[id]);
+        gc.fillText(hpText, bx + bw - measureWidth(hudFont, hpText), by - 6);
     }
 
     private void drawBossBar(World w, double vw) {

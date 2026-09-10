@@ -328,6 +328,29 @@ public final class Balance {
     public static final int   MUSHROOM_COUNT  = 8;
     public static final float MUSHROOM_LIFE   = 120f;
 
+    // ---- 5 关 Boss：奶娃（玩家等级达到 25 级时从场地中央刷新，独立技能组）----
+    /** 刷新条件：玩家等级达到该值 */
+    public static final int   MILKY_LEVEL         = 25;
+    public static final float MILKY_HP            = 8000f;
+    public static final float MILKY_SPEED         = 300f;
+    public static final float MILKY_RADIUS        = 48f;
+    /** 接触伤害（技能伤害另算） */
+    public static final float MILKY_DMG           = 18f;
+    /** 靠近玩家到这个距离才起手放技能 */
+    public static final float MILKY_TRIGGER_RANGE = 300f;
+    /** 技能一 · 蓄力踩地：朝玩家所在侧的半圆，范围大、伤害 50 */
+    public static final float MILKY_STOMP_RANGE   = 320f;
+    public static final float MILKY_STOMP_DMG     = 50f;
+    public static final float MILKY_STOMP_CD      = 4.5f;
+    public static final float MILKY_STOMP_CAST    = 1.2f;
+    /** 技能二 · 捧腹大笑：半血以下才会用，圆形大范围、伤害 100、频率较低 */
+    public static final float MILKY_LAUGH_RANGE   = 380f;
+    public static final float MILKY_LAUGH_DMG     = 100f;
+    public static final float MILKY_LAUGH_CD      = 10f;
+    public static final float MILKY_LAUGH_CAST    = 2.0f;
+    /** 触发大笑的血量比例（低于此值才会大笑） */
+    public static final float MILKY_LAUGH_HP      = 0.5f;
+
     // ---- 世界 ----
     public static final float FIXED_STEP     = 1f / 60f;
     /** 世界边界半宽：地图是 [-WORLD_HALF, +WORLD_HALF] 的方形区域 */
