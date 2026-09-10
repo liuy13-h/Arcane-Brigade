@@ -154,7 +154,7 @@ public final class World {
     private int bossId = -1;
     /** 当前 Boss 是第几只（BOSS_LEVELS 的下标），HUD 显示名字用 */
     private int bossTier;
-    /** 击败最后一只 Boss 后置位，客户端据此暂停并弹胜利画面 */
+    /** 击败奶娃（5 关 Boss）后置位，客户端据此暂停并弹胜利画面 */
     private boolean victory;
     /** 主控玩家阵亡后置位，客户端据此冻结并弹结算画面 */
     private boolean defeat;
@@ -294,15 +294,14 @@ public final class World {
         }
         alive[id] = false;
         if (id == bossId) {
-            // 击败最后一只 Boss = 通关。前几只倒下只清标记，不打断对局。
-            if (bossTier == Balance.BOSS_LEVELS.length - 1) {
-                victory = true;
-                summary = snapshot(true, false, firstWizard());
-            }
+            // 按等级刷的 Boss 现在只是中途精英：倒下只清阶段标记，不再结束对局
             bossId = -1;   // Boss 倒下：清掉阶段技能标记，下一帧 updateBossPhase 也会兜底
         }
         if (id == milkyId) {
             milkyId = -1;  // 奶娃血量归零：消失（客户端据此停掉专属 BGM）
+            // 结束规则之二：击败奶娃 = 通关
+            victory = true;
+            summary = snapshot(true, false, firstWizard());
         }
         int k = kind[id];
         if (k == KIND_ENEMY) {
@@ -2881,7 +2880,7 @@ public final class World {
         return bossId;
     }
 
-    /** 是否已击败最终 Boss（胜利判定）。一旦置位不会复位 */
+    /** 是否已击败奶娃 Boss（胜利判定）。一旦置位不会复位 */
     public boolean victory() {
         return victory;
     }
