@@ -38,3 +38,13 @@ desktop.ini
 *.log
 hs_err_pid*
 replay_pid*
+
+# ---- 运行/预览产物 ----
+preview/
+build.log
+
+# ---- WorkBuddy 项目数据（勿删，勿提交） ----
+.workbuddy/
+
+# ---- 一次性调试脚手架（离屏渲染/轴向校验等，非产品代码）----
+.tmpcheck/

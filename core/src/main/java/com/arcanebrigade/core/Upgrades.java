@@ -103,17 +103,13 @@ public final class Upgrades {
     }
 
     private static void addPassiveCandidates(Loadout lo, List<Cand> pool) {
-        boolean canAdd = lo.firstEmptyPassive() >= 0;
+        // 被动无上限：任何未满层的被动都可入池，不再受槽位约束
         for (int pid : Passives.all()) {
             PassiveDef d = Passives.get(pid);
             if (d == null) {
                 continue;
             }
-            int have = lo.passiveStacks(pid);
-            if (have >= d.maxStacks) {
-                continue;
-            }
-            if (!canAdd && have == 0) {
+            if (lo.passiveStacks(pid) >= d.maxStacks) {
                 continue;
             }
             pool.add(new Cand(KIND_PASSIVE, pid, d.rarity));

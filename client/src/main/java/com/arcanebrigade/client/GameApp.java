@@ -22,9 +22,10 @@ import java.util.Set;
 /**
  * 客户端入口。固定步长模拟 + 插值渲染。
  *
- * 流程：启动先进「准备大厅」(inLobby=true)。大厅是纯客户端轻量状态，不生成 core
- * World：WASD 自由走动、走上职业祭坛即选中职业、走进出征光门按 E 才 spawnWizard
- * 转入正式战斗。战斗阶段固定 60Hz 推进 World，渲染帧用 alpha 插值衔接。
+ * 流程：启动先进「标题主菜单」(inTitle=true)，点「开始游戏」进入「准备大厅」
+ * (inLobby=true)。大厅是纯客户端轻量状态，不生成 core World：WASD 自由走动、
+ * 走上职业祭坛即选中职业、走进出征光门按 E 才 spawnWizard 转入正式战斗。
+ * 战斗阶段固定 60Hz 推进 World，渲染帧用 alpha 插值衔接。
  */
 public final class GameApp extends Application {
 
@@ -46,17 +47,7 @@ public final class GameApp extends Application {
     private int dragSlider = -1;
     private double mouseX = -1000, mouseY = -1000;
 
-    // ---- 「角色背景」滚动框 与 「查看详情」弹层状态（选人卡/大厅） ----
-    /** 选人卡右栏背景滚动偏移（px），由滚轮更新 */
-    private double loreScroll;
-    /** 查看详情弹层的职业 id：0=关闭；>0 时弹层打开并淡入 */
-    private int detailClass;
-    /** 弹层正文滚动偏移（px） */
-    private double detailScroll;
-    /** 弹层淡入进度 0..1（打开时从 0 升至 1） */
-    private double detailFade;
-
-    /** 战斗冒烟帧数：-Dab.smoke=180 = 自动选巫师打 180 帧后退出（战斗路径回归） */
+    /** 战斗冒烟帧数：-Dab.smoke=180 = 自动选职业打 180 帧后退出（战斗路径回归） */
     private int smokeFrames = -1;
     private int renderedFrames;
     /** 大厅冒烟帧数：-Dab.lobbyFrames=150 = 只渲染大厅 150 帧后退出（大厅回归） */
@@ -79,6 +70,11 @@ public final class GameApp extends Application {
     private double cardReveal;
     /** 大厅左上角操作指引是否展开（可点「✕」收起，点「❖ 操作指引 ▸」展开） */
     private boolean lobbyGuide = true;
+
+    /** 鼠标左键是否按住（战斗阶段用于宠物指挥 + 手动开火） */
+    private boolean mouseDown;
+    /** ESC 手动暂停（战斗阶段） */
+    private boolean manualPause;
 
     @Override
     public void start(Stage stage) {
@@ -122,13 +118,6 @@ public final class GameApp extends Application {
             }
             if (inLobby) {
                 // 大厅阶段：WASD 靠 pressed 轮询移动；空格/E 先应答面前勇者的招募，其次光门出发
-                // 「查看详情」弹层打开时：ESC 关闭，其余按键不进入 pressed（国王/卡片全部冻结）
-                if (detailClass != 0) {
-                    if (e.getCode() == KeyCode.ESCAPE) {
-                        closeDetail();
-                    }
-                    return;
-                }
                 pressed.add(e.getCode());
                 if (e.getCode() == KeyCode.E || e.getCode() == KeyCode.SPACE) {
                     lobbyAction();
@@ -136,10 +125,21 @@ public final class GameApp extends Application {
                 return;
             }
             pressed.add(e.getCode());
-            // R 键在升级面板弹出时是重抽
-            if (e.getCode() == KeyCode.R && world.wizardCount() > 0
-                    && world.pendingChoices(world.wizard(0)) > 0) {
-                world.rerollChoices(world.wizard(0));
+            // 战斗阶段：ESC 手动暂停；R 键在胜利/阵亡后重开，在升级面板弹出时重抽
+            if (e.getCode() == KeyCode.ESCAPE) {
+                if (!world.victory() && !world.defeat()) {
+                    manualPause = !manualPause;
+                }
+                return;
+            }
+            if (e.getCode() == KeyCode.R) {
+                if (world.victory() || world.defeat()) {
+                    restart();
+                    return;
+                }
+                if (world.wizardCount() > 0 && world.pendingChoices(world.wizard(0)) > 0) {
+                    world.rerollChoices(world.wizard(0));
+                }
             }
         });
         scene.setOnKeyReleased(e -> pressed.remove(e.getCode()));
@@ -148,35 +148,11 @@ public final class GameApp extends Application {
             mouseX = e.getX();
             mouseY = e.getY();
         });
-        // 滚轮：详情弹层打开时滚档案正文；选人卡展开且悬停在卡面上时滚「角色背景」框
-        scene.setOnScroll(e -> {
-            double vw = renderer != null ? renderer.getCanvasWidth()
-                    : canvas.getWidth();
-            double vh = renderer != null ? renderer.getCanvasHeight()
-                    : canvas.getHeight();
-            double dy = e.getDeltaY();
-            if (dy == 0 || inTitle) {
-                return;
-            }
-            if (detailClass != 0) {
-                // 向上滚看上文（偏移减小）、向下滚看下文
-                detailScroll -= dy;
-                detailScroll = Math.max(0, detailScroll);
-                return;
-            }
-            if (inLobby && cardClass != 0 && cardReveal > 0.6 && mouseX >= 0) {
-                double cardX = vw - Renderer.classCardW(vw) - 12;
-                double panelTop = vh - 18 - Math.min(306, vh * 0.42) - 6;
-                boolean overCard = mouseX >= cardX - 8 && mouseX <= cardX + Renderer.classCardW(vw)
-                        && mouseY >= panelTop - 8 && mouseY <= vh - 8;
-                if (overCard) {
-                    loreScroll -= dy;
-                    loreScroll = Math.max(0, loreScroll);
-                }
-            }
-        });
-        // 音量滑块：按下即定位、按住拖动连续调节
+        // 音量滑块：按下即定位、按住拖动连续调节；同时记录左键按下状态供战斗阶段使用
         scene.setOnMousePressed(e -> {
+            if (e.getButton() == MouseButton.PRIMARY) {
+                mouseDown = true;
+            }
             if (e.getButton() != MouseButton.PRIMARY
                     || !inTitle || overlay != Renderer.OVER_SETTINGS) {
                 return;
@@ -194,6 +170,7 @@ public final class GameApp extends Application {
         });
         // 音量在拖动中不落盘，松开时写一次，避免拖动过程高频写配置
         scene.setOnMouseReleased(e -> {
+            mouseDown = false;
             if (dragSlider >= 0) {
                 GameConfig.save();
             }
@@ -211,30 +188,6 @@ public final class GameApp extends Application {
                 // 大厅里鼠标只用于指引的收起/展开，角色交互仍走空格/E
                 double vw = renderer.getCanvasWidth();
                 double vh = renderer.getCanvasHeight();
-                // 「查看详情」弹层打开：点 ✕ 或面板外 = 关闭；点在面板内不响应
-                if (detailClass != 0) {
-                    double[] p = Renderer.detailPanelRect(vw, vh);
-                    double[] c = Renderer.detailCloseRect(vw, vh);
-                    boolean inClose = e.getX() >= c[0] && e.getX() <= c[0] + c[2]
-                            && e.getY() >= c[1] && e.getY() <= c[1] + c[3];
-                    boolean inPanel = e.getX() >= p[0] && e.getX() <= p[0] + p[2]
-                            && e.getY() >= p[1] && e.getY() <= p[1] + p[3];
-                    if (inClose || !inPanel) {
-                        closeDetail();
-                    }
-                    return;
-                }
-                // 卡片展示中：点「查看详情」打开弹层（召唤师也可看档案）
-                if (cardClass != 0 && cardReveal > 0.9) {
-                    double[] b = Renderer.classDetailButton(vw, vh, cardReveal);
-                    if (e.getX() >= b[0] && e.getX() <= b[0] + b[2]
-                            && e.getY() >= b[1] && e.getY() <= b[1] + b[3]) {
-                        detailClass = cardClass;
-                        detailFade = 0;
-                        detailScroll = 0;
-                        return;
-                    }
-                }
                 Renderer.GuideGeom gg = Renderer.lobbyGuideGeom(vw, vh);
                 Renderer.Rect r = lobbyGuide ? gg.hide() : gg.open();
                 if (r.hit(e.getX(), e.getY())) {
@@ -242,7 +195,7 @@ public final class GameApp extends Application {
                 }
                 return;
             }
-            handleChoiceClick(e.getX(), e.getY());
+            handleBattleClick(e.getX(), e.getY());
         });
 
         this.stage = stage;
@@ -274,9 +227,31 @@ public final class GameApp extends Application {
             }
         }
 
-        // 战斗冒烟：跳过大厅，自动选巫师直接跑真实模拟+渲染路径做稳定性验证
+        // 战斗冒烟：跳过大厅，自动选职业直接跑真实模拟+渲染路径做稳定性验证。
+        // -Dab.class=N 可指定职业（默认巫师），用来覆盖各职业专属的渲染分支；
+        // -Dab.boss=N 直接刷第 N 只 Boss，用来覆盖 Boss 立绘 / 阶段技能渲染路径；
+        // -Dab.serpent=1 直接刷骨蛇（小 Boss），用来覆盖多节蛇身的旋转绘制路径。
         if (smokeFrames > 0) {
-            beginGame(HeroClass.WIZARD);
+            int pick = HeroClass.WIZARD;
+            String cls = System.getProperty("ab.class");
+            if (cls != null && !cls.isBlank()) {
+                int v = Integer.parseInt(cls);
+                if (v > 0 && v < HeroClass.COUNT) {
+                    pick = v;
+                }
+            }
+            beginGame(pick);
+            String bt = System.getProperty("ab.boss");
+            if (bt != null && !bt.isBlank()) {
+                int tier = Integer.parseInt(bt);
+                if (tier >= 0 && tier < 4) {
+                    world.spawnBoss(tier);
+                }
+            }
+            String ser = System.getProperty("ab.serpent");
+            if (ser != null && !ser.isBlank()) {
+                world.spawnBoneSerpent();
+            }
         }
 
         // 主界面 BGM：仍在标题（非冒烟直进大厅/战斗）时开始循环播放
@@ -300,7 +275,6 @@ public final class GameApp extends Application {
                 fps[0] += (1.0 / Math.max(dt, 1e-6) - fps[0]) * 0.08;
 
                 // 帧率上限只限制「画面刷新」：逻辑仍每帧按固定步长推进。
-                // 30=隔帧绘制；60=默认；120 受显示器刷新限制，高于实际刷新时等同不限。
                 double period = 1.0 / GameConfig.fpsCap;
                 boolean drawNow = (now - lastDraw[0]) / 1e9 >= period - 1e-9;
                 if (drawNow) {
@@ -329,11 +303,6 @@ public final class GameApp extends Application {
                     double vh = canvas.getHeight();
                     Renderer.LobbyGeom g = Renderer.geom(vw, vh);
                     stepLobby(dt, g);
-                    // 弹层淡入推进 + 滚动/弹层状态同步给渲染器（drawLobby 内部读取）
-                    if (detailClass != 0 && detailFade < 1) {
-                        detailFade = Math.min(1, detailFade + dt / 0.18);
-                    }
-                    renderer.setLobbyUi(loreScroll, detailClass, detailScroll, detailFade);
                     if (drawNow) {
                         renderer.setFps(fps[0]);
                         renderer.drawLobby(g, lx, ly, lobbyChoice, lobbyAnimT, cardClass, cardReveal,
@@ -347,8 +316,36 @@ public final class GameApp extends Application {
                 }
 
                 // ---- 正式战斗阶段（逻辑推进与画面刷新解耦） ----
-                boolean paused = world.wizardCount() > 0
+                renderer.setMouse(mouseX, mouseY);
+
+                // 胜利：冻结模拟，罩层结算。模拟一旦停了就不再推进，直到按 R 重开
+                if (world.victory()) {
+                    renderer.setFps(fps[0]);
+                    renderer.draw(world, 0f);
+                    renderer.drawVictory(world, canvas.getWidth(), canvas.getHeight());
+                    if (smokeFrames > 0 && ++renderedFrames >= smokeFrames) {
+                        System.out.printf("[smoke] 胜利画面，渲染 %d 帧完成，退出%n", renderedFrames);
+                        Platform.exit();
+                    }
+                    return;
+                }
+
+                // 阵亡：同样冻结模拟，弹结算战报，点「继续」或按 R 回大厅。
+                // 之前玩家倒下后没有任何终局状态，游戏会一直空转却永远不结束。
+                if (world.defeat()) {
+                    renderer.setFps(fps[0]);
+                    renderer.draw(world, 0f);
+                    renderer.drawDefeatOverlay(world, canvas.getWidth(), canvas.getHeight());
+                    if (smokeFrames > 0 && ++renderedFrames >= smokeFrames) {
+                        System.out.printf("[smoke] 阵亡结算，渲染 %d 帧完成，退出%n", renderedFrames);
+                        Platform.exit();
+                    }
+                    return;
+                }
+
+                boolean upgradePaused = world.wizardCount() > 0
                         && world.pendingChoices(world.wizard(0)) > 0;
+                boolean paused = manualPause || upgradePaused;
                 if (!paused) {
                     acc[0] += dt;
                     int steps = 0;
@@ -368,11 +365,12 @@ public final class GameApp extends Application {
                 if (!drawNow) {
                     return;
                 }
+                renderer.setPaused(manualPause);
                 renderer.setFps(fps[0]);
                 renderer.draw(world, (float) (acc[0] / STEP));
 
                 // 升级面板始终叠加在画面最上层
-                if (paused) {
+                if (upgradePaused) {
                     int wid = world.wizard(0);
                     Loadout lo = world.loadout(wid);
                     if (lo != null) {
@@ -380,6 +378,8 @@ public final class GameApp extends Application {
                         renderer.drawUpgradePanel(cs, lo.rerolls,
                                 canvas.getWidth(), canvas.getHeight());
                     }
+                } else if (manualPause) {
+                    renderer.drawPauseOverlay(canvas.getWidth(), canvas.getHeight());
                 }
 
                 if (smokeFrames > 0 && ++renderedFrames >= smokeFrames) {
@@ -396,12 +396,11 @@ public final class GameApp extends Application {
         inTitle = false;
         inLobby = true;
         overlay = Renderer.OVER_NONE;
-        closeDetail();    // 重进大厅清掉可能残留的档案弹层状态
         lobbyPosInit = false;    // 首帧按出生点落位
         cardClass = 0;
         cardReveal = 0;
         GameAudio.stopMenuBgm();        // 离开主界面
-        GameAudio.startLobbyBgm();      // 大厅主音乐（sans..mp3）循环
+        GameAudio.startLobbyBgm();      // 大厅主音乐循环
         pressed.clear();
     }
 
@@ -553,10 +552,6 @@ public final class GameApp extends Application {
 
     /** 大厅一帧：按 WASD 移动并夹紧在可走范围内，靠近角色即选中（含召唤师可高亮） */
     private void stepLobby(double dt, Renderer.LobbyGeom g) {
-        // 「查看详情」弹层打开：国王与卡片全部冻结，等待 ESC / 点 ✕ / 点面板外关闭
-        if (detailClass != 0) {
-            return;
-        }
         if (!lobbyPosInit) {
             // 国王从王座台阶出发：站在四人一字排开之上、出征光门之下的纵深
             double[] sp = g.kingSpawn();
@@ -592,7 +587,6 @@ public final class GameApp extends Application {
         if (want && cardClass != near) {
             cardClass = near;
             cardReveal = 0;
-            loreScroll = 0;      // 换人：背景框回到顶部
         }
         double target = want ? 1 : 0;
         double spd = dt / (want ? 0.30 : 0.22);   // 滑入略缓、缩回略快
@@ -625,16 +619,16 @@ public final class GameApp extends Application {
                 }
             }
         }
-        if (near != 0 && near != lobbyChoice && near != LobbyClass.SUMMONER) {
+        if (near != 0 && near != lobbyChoice) {
             lobbyChoice = near;           // 招募/改选：操控对象随之替换
             return;
         }
         tryDepart();
     }
 
-    /** 站在光门内且已选可出战职业 → 按 E/空格出发。召唤师尚未开放，选了也走不了 */
+    /** 站在光门内且已选可出战职业 → 按 E/空格出发。 */
     private void tryDepart() {
-        if (!inLobby || lobbyChoice == 0 || lobbyChoice == LobbyClass.SUMMONER) {
+        if (!inLobby || lobbyChoice == 0) {
             return;
         }
         Renderer.LobbyGeom g = Renderer.geom(
@@ -648,13 +642,6 @@ public final class GameApp extends Application {
     }
 
     /** 玩家确认职业：生成对应勇者，退出大厅/主菜单，正式开局 */
-    /** 关闭「查看详情」弹层：清空弹层状态（淡入进度归零，下次打开重新淡入） */
-    private void closeDetail() {
-        detailClass = 0;
-        detailFade = 0;
-        detailScroll = 0;
-    }
-
     private void beginGame(int classKind) {
         if (!inTitle && !inLobby) {
             return;                       // 已在战斗中，忽略重复触发
@@ -663,17 +650,59 @@ public final class GameApp extends Application {
         inTitle = false;
         inLobby = false;
         overlay = Renderer.OVER_NONE;
-        closeDetail();    // 进战斗前也清一次（防御性）
+        manualPause = false;
         GameAudio.stopMenuBgm();  // 出征 / 战斗冒烟都离开主界面
         GameAudio.stopLobbyBgm(); // 战斗中暂时没有 BGM
         pressed.clear();
     }
 
+    /** 胜利/阵亡后重开：换一个种子重建世界，回到准备大厅重新选人 */
+    private void restart() {
+        boolean auto = (world != null) && world.isAutoFire();   // 保留玩家的开火模式偏好
+        world = new World(System.nanoTime());
+        world.setAutoFire(auto);
+        manualPause = false;
+        lobbyChoice = 0;
+        renderedFrames = 0;
+        enterLobby();
+    }
+
     /**
-     * 鼠标点击命中三选一卡片。卡片尺寸和位置必须与 Renderer.drawUpgradePanel 严格一致。
-     * 命中区域：3 个等宽矩形，y 范围 vh*0.32 .. vh*0.32 + 220。
+     * 战斗阶段的点击派发：阵亡结算的「继续」按钮 → HUD 开火/暂停按钮 → 升级三选一卡片。
+     *
+     * 开火与暂停按钮此前只画不响应：这两个坐标只被 drawHud 用来绘制，命中判定从未写过，
+     * 点在按钮上毫无反应（暂停只能靠 ESC）。这里补上命中判定，坐标与 Renderer 共用同一组常量。
+     *
+     * 卡片尺寸和位置必须与 Renderer.drawUpgradePanel 严格一致：
+     * 命中区域 3 个等宽矩形，y 范围 vh*0.32 .. vh*0.32 + 220。
      */
-    private void handleChoiceClick(double mx, double my) {
+    private void handleBattleClick(double mx, double my) {
+        double vw = renderer.getCanvasWidth();
+        double vh = renderer.getCanvasHeight();
+
+        // 1) 阵亡结算：右下角「继续」回到准备大厅
+        if (world.defeat()) {
+            if (hit(Renderer.continueButtonRect(vw, vh), mx, my)) {
+                restart();
+            }
+            return;
+        }
+        if (world.victory()) {
+            return;                      // 胜利画面只认 R 键
+        }
+
+        // 2) HUD 按钮：开火模式切换（自动 / 手动）
+        if (hit(Renderer.fireButtonRect(vw, vh), mx, my)) {
+            world.setAutoFire(!world.isAutoFire());
+            return;
+        }
+        // 3) HUD 按钮：暂停 / 继续
+        if (hit(Renderer.pauseButtonRect(vw, vh), mx, my)) {
+            manualPause = !manualPause;
+            return;
+        }
+
+        // 4) 升级三选一
         if (world.wizardCount() == 0) {
             return;
         }
@@ -681,8 +710,6 @@ public final class GameApp extends Application {
         if (world.pendingChoices(wid) == 0) {
             return;
         }
-        double vw = renderer.getCanvasWidth();
-        double vh = renderer.getCanvasHeight();
         Upgrades.Choice[] cs = world.peekChoices(wid);
         if (cs == null) {
             return;
@@ -702,6 +729,11 @@ public final class GameApp extends Application {
         }
     }
 
+    /** 点 (mx,my) 是否落在 [x, y, w, h] 矩形内 */
+    private static boolean hit(double[] r, double mx, double my) {
+        return mx >= r[0] && mx <= r[0] + r[2] && my >= r[1] && my <= r[1] + r[3];
+    }
+
     private void readInput() {
         float dx = 0f;
         float dy = 0f;
@@ -718,5 +750,21 @@ public final class GameApp extends Application {
             dy += 1f;
         }
         input.set(dx, dy);
+
+        // 开火：手动模式下按住鼠标左键，朝鼠标世界坐标开火
+        input.buttons = 0;
+        if (!world.isAutoFire() && mouseDown) {
+            input.buttons |= InputCommand.BUTTON_FIRE;
+        }
+        // 指挥：按住鼠标左键就是给宠物下令（与开火模式无关，自动开火时也能指挥）
+        if (mouseDown) {
+            input.buttons |= InputCommand.BUTTON_ORDER;
+        }
+        double camX = renderer.getCamX();
+        double camY = renderer.getCamY();
+        double vw = renderer.getCanvasWidth();
+        double vh = renderer.getCanvasHeight();
+        input.aimX = (float) (camX + (mouseX - vw / 2));
+        input.aimY = (float) (camY + (mouseY - vh / 2));
     }
 }

@@ -19,11 +19,15 @@ public final class Balance {
     /** 战士无敌帧：明显削弱。战士有 15% 减伤 + 击杀回血，无需长时间无敌保护 */
     public static final float WARRIOR_IFRAME = 0.12f;
 
-    // ---- 战士 / 弓箭手（职业基础属性，设计文档第 2 节）----
+    // ---- 战士 / 弓箭手 / 召唤师（职业基础属性，设计文档第 2 节）----
     public static final float WARRIOR_HP    = 140f;
     public static final float WARRIOR_SPEED = 180f;
     public static final float ARCHER_HP     = 85f;
     public static final float ARCHER_SPEED  = 205f;
+    /** 召唤师：本体偏脆——他有 4 只宠物替他挨打，本体再厚就没弱点了 */
+    public static final float SUMMONER_HP    = 90f;
+    public static final float SUMMONER_SPEED = 185f;
+    public static final float SUMMONER_IFRAME = 0.32f;
 
     // ---- 职业特性（集中在这里，不在逻辑里散落）----
     /** 战士：受伤减免 15% */
@@ -34,6 +38,35 @@ public final class Balance {
     public static final float ARCHER_CRIT       = 0.10f;
     /** 巫师：法术伤害 +10% */
     public static final float WIZARD_SPELL_DMG  = 0.10f;
+
+    // ---- 召唤物（召唤师的宠物）----
+    /** 召唤间隔（秒）与每次召唤的数量。到点重新召唤一批，旧的被替换 */
+    public static final float SUMMON_INTERVAL = 10f;
+    public static final int   SUMMON_COUNT    = 4;
+    /** 宠物血 = 当前时间点的普通小怪血 × 该系数（用户要求 2 倍） */
+    public static final float MINION_HP_MUL       = 2f;
+    public static final float MINION_RADIUS       = 10f;
+    public static final float MINION_SPEED        = 215f;
+    public static final float MINION_DAMAGE       = 16f;
+    public static final float MINION_ATTACK_CD    = 0.6f;
+    /** 宠物受击无敌帧：比玩家短，但足以避免在怪堆里被同一帧打光 */
+    public static final float MINION_IFRAME       = 0.18f;
+    /** 活动范围：离召唤师超过这个距离就被强制拉回（用户要求"只能在身边一定范围活动"） */
+    public static final float MINION_LEASH        = 330f;
+    /** 护主：主人在这么近的范围内有敌人时，优先扑上去 */
+    public static final float MINION_GUARD_RANGE  = 260f;
+    /** 指挥：鼠标点击后，在点击点这么大范围内找敌人扑过去 */
+    public static final float MINION_ORDER_RANGE  = 460f;
+    /** 指挥有效期（秒）。按住鼠标会持续刷新，松手后还能生效这么久 */
+    public static final float MINION_ORDER_TIME   = 4f;
+    /** 无敌人时跟随主人保持的距离 */
+    public static final float MINION_FOLLOW_DIST  = 62f;
+    /**
+     * 敌人索敌时对宠物的距离偏置（>1）。
+     * 宠物要能"护主"拦住怪，但不能把仇恨全抢走——
+     * 否则玩家站在后面看戏，召唤师就变成挂机职业了。
+     */
+    public static final float MINION_THREAT_BIAS  = 1.35f;
 
     // ---- 元素状态 ----
     // 具体数值（DoT 强度、减速、时长）写在 Spells 表里的每个法术上，
@@ -64,50 +97,6 @@ public final class Balance {
 
     /** 击退速度的每秒衰减系数。太小会看到怪被推着滑行很远 */
     public static final float KNOCKBACK_DECAY = 6.0f;
-
-    // ---- 敌人 ----
-    public static final float ENEMY_RADIUS   = 12f;
-    /** 明显低于玩家的 195，保证"能逃但甩不干净"——低于 70 就会出现追不上的滑稽场面 */
-    public static final float ENEMY_SPEED    = 92f;
-    /** 碰撞查询时的最大目标半径，投射物搜索范围要按它放宽，否则边缘擦过会漏判 */
-    public static final float MAX_TARGET_RADIUS = 16f;
-    public static final float ENEMY_HP       = 26f;
-    public static final float ENEMY_DAMAGE   = 9f;
-    public static final float ENEMY_ATTACK_CD = 0.7f;
-    /** 分离力强度，相对移动速度。太大会散开成稀粥，太小会叠成一支穿云箭 */
-    public static final float ENEMY_SEPARATION = 0.75f;
-
-    // ---- 刷怪（本轮"减量"：数量压下来，难度交给下面的血量成长曲线）----
-    /** 场上敌人硬上限 */
-    public static final int   MAX_ENEMIES    = 220;
-    /** 软上限：开局场上只留这么多，随时间缓慢放开。看到的怪少了，但每只更硬 */
-    public static final int   SOFT_CAP_BASE     = 35;
-    public static final float SOFT_CAP_GROWTH   = 0.16f;   // 每秒增加的上限
-    public static final float SPAWN_BASE_RATE = 1.25f;  // 开局每秒刷几只
-    public static final float SPAWN_RAMP      = 0.0085f; // 每秒递增
-    /** 刷怪速率上限。不封顶的话 20 分钟时会变成几百只/秒的洪水 */
-    public static final float SPAWN_RATE_CAP  = 7.0f;
-    public static final float SPAWN_RING_IN   = 760f;   // 生成环内半径（屏幕外一点）
-    public static final float SPAWN_RING_OUT  = 900f;
-    public static final float DESPAWN_RANGE   = 1500f; // 超出这个距离直接回收
-
-    // ---- 敌人血量随时间成长（本轮核心：怪变少，但越往后越硬）----
-    /** 线性项：每秒 +1.8% */
-    public static final float ENEMY_HP_GROWTH_LINEAR = 0.018f;
-    /** 二次项：后期加速，让最后 5 分钟真的有压迫感 */
-    public static final float ENEMY_HP_GROWTH_QUAD   = 0.000010f;
-    /** 成长上限。不封顶后期会出现打不动的肉墙 */
-    public static final float ENEMY_HP_SCALE_CAP     = 32f;
-
-    /**
-     * 敌人血量 = 基础血 × 本系数（t = 游戏时间秒）。
-     * 参考值：300s≈7x、600s≈15x、900s≈25x、1200s≈32x（封顶）。
-     * 调难度改上面三个常量即可，公式集中在这里，不在逻辑里散落。
-     */
-    public static float enemyHpScale(float t) {
-        float s = 1f + t * ENEMY_HP_GROWTH_LINEAR + t * t * ENEMY_HP_GROWTH_QUAD;
-        return s > ENEMY_HP_SCALE_CAP ? ENEMY_HP_SCALE_CAP : s;
-    }
 
     // ---- 战斗基础 ----
     /** 暴击伤害倍率基准。致命一击 +35% 是在这个基础上加 */
@@ -215,62 +204,16 @@ public final class Balance {
     /** 碰撞查询时障碍的最大半径，障碍碰撞查询范围按它放宽 */
     public static final float OBSTACLE_MAX_R = 72f;
 
-    // ---- 敌人变体（D4）----
-    /** 精英：体型 ×6、速度 ×1.1、伤害 ×1.5，带一层护盾 */
-    public static final float ELITE_HP_MUL    = 6f;
-    public static final float ELITE_SPEED_MUL = 1.1f;
-    public static final float ELITE_DMG_MUL   = 1.5f;
-    public static final float ELITE_SHIELD    = 120f;
-    /** 小偷：偷地上的经验宝石，自身不攻击。击杀时掉落翻倍的宝石 */
-    public static final float THIEF_HP     = 40f;
-    public static final float THIEF_SPEED  = 130f;
-    public static final float THIEF_STEAL_RADIUS = 26f;   // 接触宝石即偷走的范围
-    /** 分裂怪：死亡时裂成几只，子代 HP 按比例缩小 */
-    public static final int   SPLIT_COUNT   = 3;
-    public static final float SPLIT_HP_MUL  = 0.45f;
-    public static final float SPLIT_RADIUS_MUL = 0.8f;
-    /** 远程怪：保持距离并向玩家发射弹幕 */
-    public static final float RANGED_HP       = 34f;
-    public static final float RANGED_SPEED    = 78f;
-    public static final float RANGED_DMG      = 14f;
-    public static final float RANGED_CD       = 2.2f;
-    public static final float RANGED_BOLT_SPD = 300f;
-    public static final float RANGED_RANGE    = 460f;
-    public static final float RANGED_KEEP_DIST = 280f;   // 保持的最小距离，太近就后退
-
-    // ---- Boss（本轮正式引入：每个阶段末尾一只，一局共 4 只）----
-    /** 登场时间点（秒）。与 STAGE_DURATIONS 对齐：每阶段末一只，1100s 是最终 Boss */
-    public static final float[] BOSS_TIMES    = { 300f, 600f, 900f, 1100f };
-    public static final String[] BOSS_NAMES   = { "石心巨像", "熔岩领主", "霜寂君王", "终焉之影" };
-    /** 每只 Boss 的血池。第一只别太肉，5 分钟时的 build 打得动 */
-    public static final float[] BOSS_HP_TIERS = { 2000f, 4200f, 7200f, 13000f };
-    /** 每只 Boss 的接触伤害 */
-    public static final float[] BOSS_DMG_TIERS = { 18f, 22f, 26f, 32f };
-    /** Boss 在场时普通刷怪速率的倍率：把舞台让给 Boss 战 */
-    public static final float BOSS_SPAWN_SUPPRESS = 0.35f;
-    /** Boss 生成距离。比普通刷怪环近，确保玩家能看见它压过来 */
-    public static final float BOSS_SPAWN_DIST     = 520f;
-
-    /** 兼容旧调用的基础血池，实际以 BOSS_HP_TIERS 为准 */
-    public static final float BOSS_HP         = 9000f;
-    public static final float BOSS_SPEED      = 52f;
-    public static final float BOSS_RADIUS     = 46f;
-    public static final float BOSS_DMG        = 22f;
-    public static final float BOSS_ATTACK_CD  = 0.9f;
-    /** 阶段切换的血量阈值（占总血量比例） */
-    public static final float BOSS_PHASE2_HP  = 0.66f;
-    public static final float BOSS_PHASE3_HP  = 0.33f;
-    /** 预警圈：先在地上画圈 telegraph 秒，然后爆炸，伤害玩家与敌人 */
-    public static final float WARNING_TELEGRAPH = 1.1f;
-    public static final float WARNING_RADIUS    = 95f;
-    public static final float WARNING_DAMAGE    = 38f;
-    public static final float WARNING_KNOCKBACK = 220f;
-    /** 召唤：每 interval 秒在自身周围召唤 count 只小怪 */
-    public static final float BOSS_SUMMON_INTERVAL = 6f;
-    public static final int   BOSS_SUMMON_COUNT    = 4;
+    // ---- 敌人 / 刷怪 / 变体 / Boss ----
+    // 全部敌怪数值见 com.arcanebrigade.core.enemy.EnemyStats，
+    // 敌怪行为见同包 EnemyAI，刷怪节奏见同包 WaveDirector。
 
     // ---- 世界 ----
     public static final float FIXED_STEP     = 1f / 60f;
-    /** 世界边界半宽：地图是 [-WORLD_HALF, +WORLD_HALF] 的方形区域，玩家/敌人/障碍都限制在内 */
+    /** 世界边界半宽：地图是 [-WORLD_HALF, +WORLD_HALF] 的方形区域 */
     public static final float WORLD_HALF     = 1600f;
+    /** 棕色城墙厚度：城墙（棕色部分）作为地图边界，其内侧边缘才是可走区域 */
+    public static final float WALL_THICKNESS = 56f;
+    /** 可玩区半宽 = 城墙内侧边缘。玩家/敌人/刷怪点都钳制在此，碰不到棕色城墙 */
+    public static final float PLAY_HALF      = WORLD_HALF - WALL_THICKNESS;
 }

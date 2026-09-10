@@ -37,6 +37,12 @@ public final class Spells {
     public static final int ARCHER_HOMING   = 15;  // 追踪箭
     public static final int ARCHER_RAIN     = 16;  // 箭雨
 
+    // ---- 召唤师技能池（本体输出平庸，强度在宠物身上）----
+    public static final int SUMMONER_BOLT    = 17;  // 秘能弹：起手，远程单体
+    public static final int SUMMONER_ORB     = 18;  // 秘能球：慢速大范围
+    public static final int SUMMONER_SPIRITS = 19;  // 灵体箭幕：穿透扇形
+    public static final int SUMMONER_PULSE   = 20;  // 秘法脉冲：近身爆发 + 击退
+
     // ---- 进化形态（战士 / 弓箭手）----
     public static final int WARRIOR_SLASH_EVO = 21; // 巨力斩（挥砍 + 力量训练）
     public static final int WHIRLWIND_EVO     = 22; // 龙卷斩（回旋斩 + 疾速）
@@ -125,6 +131,33 @@ public final class Spells {
                 .cooldown(1.40f).damage(12f).range(560f)
                 .speed(620f).boltRadius(5f)
                 .count(10).spread((float) Math.toRadians(80)).pierce(1)
+                .build();
+
+        // ---- 召唤师技能池（远程弹幕为主，靠宠物扛住近身）----
+        TABLE[SUMMONER_BOLT] = SpellDef.builder(SUMMONER_BOLT, "秘能弹", SpellDef.Form.PROJECTILE)
+                .cooldown(0.42f).damage(17f).range(640f)
+                .speed(500f).boltRadius(7f)
+                .element(Element.ARCANE)
+                .build();
+
+        TABLE[SUMMONER_ORB] = SpellDef.builder(SUMMONER_ORB, "秘能球", SpellDef.Form.PROJECTILE)
+                .cooldown(1.20f).damage(20f).range(600f)
+                .speed(300f).boltRadius(11f)
+                .aoeRadius(58f)
+                .element(Element.ARCANE)
+                .build();
+
+        TABLE[SUMMONER_SPIRITS] = SpellDef.builder(SUMMONER_SPIRITS, "灵体箭幕", SpellDef.Form.PROJECTILE)
+                .cooldown(0.95f).damage(13f).range(680f)
+                .speed(560f).boltRadius(6f)
+                .count(3).spread((float) Math.toRadians(30)).pierce(2)
+                .element(Element.ARCANE)
+                .build();
+
+        TABLE[SUMMONER_PULSE] = SpellDef.builder(SUMMONER_PULSE, "秘法脉冲", SpellDef.Form.MELEE_ARC)
+                .cooldown(1.10f).damage(24f).knockback(180f)
+                .arcRadius(120f).arcAngle((float) Math.toRadians(360))
+                .element(Element.ARCANE)
                 .build();
 
         // ---- 进化形态 ----
@@ -232,12 +265,18 @@ public final class Spells {
         return new int[] { ARCHER_ARROW, ARCHER_MULTISHOT, ARCHER_HOMING, ARCHER_RAIN };
     }
 
+    /** 召唤师可用池 */
+    public static int[] summonerPool() {
+        return new int[] { SUMMONER_BOLT, SUMMONER_ORB, SUMMONER_SPIRITS, SUMMONER_PULSE };
+    }
+
     /** 按职业取技能池，三选一抽卡用 */
     public static int[] poolForClass(int classKind) {
         return switch (classKind) {
-            case HeroClass.WARRIOR -> warriorPool();
-            case HeroClass.ARCHER  -> archerPool();
-            default                -> wizardPool();
+            case HeroClass.WARRIOR  -> warriorPool();
+            case HeroClass.ARCHER   -> archerPool();
+            case HeroClass.SUMMONER -> summonerPool();
+            default                 -> wizardPool();
         };
     }
 
@@ -248,6 +287,7 @@ public final class Spells {
                     PassiveDef.RARE;
             case ARCHER_RAIN -> PassiveDef.EPIC;
             case FIREBALL -> PassiveDef.RARE;
+            case SUMMONER_ORB, SUMMONER_SPIRITS, SUMMONER_PULSE -> PassiveDef.RARE;
             default -> PassiveDef.COMMON;
         };
     }
