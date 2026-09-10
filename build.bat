@@ -50,14 +50,25 @@ if not exist core\target\classes mkdir core\target\classes
 if not exist client\target\classes mkdir client\target\classes
 
 dir /s /b core\src\main\java\*.java > "%TEMP%\ab_core_src.txt"
-"%JAVAC_EXE%" -encoding UTF-8 -d core\target\classes @"%TEMP%\ab_core_src.txt"
+rem --release 17 pins the class file version to 61. Without it a JDK newer than
+rem 17 emits a higher version and IDEA (project SDK 17) rejects the build with
+rem "class file has wrong version 70.0, should be 61.0". run.bat does the same.
+"%JAVAC_EXE%" --release 17 -encoding UTF-8 -d core\target\classes @"%TEMP%\ab_core_src.txt"
 if errorlevel 1 goto :fail
 
 set "M2=%USERPROFILE%\.m2\repository"
-set "FXCP=%M2%\org\openjfx\javafx-controls\21.0.12\javafx-controls-21.0.12.jar;%M2%\org\openjfx\javafx-graphics\21.0.12\javafx-graphics-21.0.12.jar;%M2%\org\openjfx\javafx-base\21.0.12\javafx-base-21.0.12.jar;%M2%\org\openjfx\javafx-media\21.0.12\javafx-media-21.0.12-win.jar"
+rem Use the -win classifier jars. The plain javafx-*.jar artifacts carry no
+rem classes (the platform bits live in the classified ones), so compiling
+rem against them fails with "package javafx.scene.image does not exist".
+rem run.bat uses the same set - keep the two in sync.
+set "FXCP=%M2%\org\openjfx\javafx-controls\21.0.12\javafx-controls-21.0.12-win.jar;%M2%\org\openjfx\javafx-graphics\21.0.12\javafx-graphics-21.0.12-win.jar;%M2%\org\openjfx\javafx-base\21.0.12\javafx-base-21.0.12-win.jar;%M2%\org\openjfx\javafx-media\21.0.12\javafx-media-21.0.12-win.jar"
 dir /s /b client\src\main\java\*.java > "%TEMP%\ab_client_src.txt"
-"%JAVAC_EXE%" -encoding UTF-8 -cp "core\target\classes;%FXCP%" -d client\target\classes @"%TEMP%\ab_client_src.txt"
+"%JAVAC_EXE%" --release 17 -encoding UTF-8 -cp "core\target\classes;%FXCP%" -d client\target\classes @"%TEMP%\ab_client_src.txt"
 if errorlevel 1 goto :fail
+rem javac does NOT copy resources (art, walk GIFs, boss art, icon are all read
+rem from /sprites/... on the classpath), so sync them by hand here. The Maven
+rem path above already does this via maven-resources-plugin.
+if exist "client\src\main\resources" xcopy /e /i /y /q "client\src\main\resources\*" "client\target\classes\" >nul
 set "BUILT=1"
 
 :check

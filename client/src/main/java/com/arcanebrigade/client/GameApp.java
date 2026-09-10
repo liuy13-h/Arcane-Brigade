@@ -252,6 +252,19 @@ public final class GameApp extends Application {
                     world.spawnBoss(tier);
                 }
             }
+            // -Dab.level=N 直接把主控玩家等级拉到 N，用于覆盖骨蛇登场后的渲染路径
+            String lvl = System.getProperty("ab.level");
+            if (lvl != null && !lvl.isBlank()) {
+                int target = Integer.parseInt(lvl);
+                int wid = world.firstWizard();
+                com.arcanebrigade.core.Loadout lo = world.loadout(wid);
+                if (lo != null) {
+                    lo.level = target;
+                }
+                // 同时把血撑满：跑长时间冒烟时被骨蛇咬死会提前进结算，看不到骨蛇
+                world.maxHp[wid] = 99999f;
+                world.hp[wid] = 99999f;
+            }
         }
 
         // 主界面 BGM：仍在标题（非冒烟直进大厅/战斗）时开始循环播放

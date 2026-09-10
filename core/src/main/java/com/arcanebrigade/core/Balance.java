@@ -327,6 +327,15 @@ public final class Balance {
     /** 采集蘑菇：数量 + 存活时长（秒） */
     public static final int   MUSHROOM_COUNT  = 8;
     public static final float MUSHROOM_LIFE   = 120f;
+    /**
+     * 蘑菇直接撒在玩家周围的一圈上（内/外半径），而不是撒在事件中心外——
+     * 事件中心本身离玩家就有 260~520，再往外散布最远的一朵能到 900+ 单位，
+     * 玩家满地图乱撞也找不齐。角度按等分 + 轻微抖动，避免几朵叠在一起。
+     */
+    public static final float MUSHROOM_SPAWN_MIN = 130f;
+    public static final float MUSHROOM_SPAWN_MAX = 300f;
+    /** 蘑菇的吸附半径，比普通经验宝石大一圈——任务道具不该考验走位精度 */
+    public static final float MUSHROOM_PICKUP_RADIUS = 110f;
 
     // ---- 5 关 Boss：奶蛙（玩家等级达到 25 级时从场地中央刷新，独立技能组）----
     /** 刷新条件：玩家等级达到该值 */

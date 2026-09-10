@@ -2,6 +2,10 @@ package com.arcanebrigade.core;
 
 import java.util.Random;
 
+import com.arcanebrigade.core.enemy.BoneSerpent;
+import com.arcanebrigade.core.enemy.EnemyStats;
+import com.arcanebrigade.core.enemy.WaveDirector;
+
 /**
  * 世界模拟。这是整个游戏的权威状态，不依赖任何 UI 框架。
  *
@@ -45,6 +49,12 @@ public final class World {
     public static final int V_SPLIT  = 4;   // 分裂：死亡裂成数只
     public static final int V_BOSS   = 5;   // Boss：多阶段
     public static final int V_STATUE = 6;   // 战斗事件「摧毁雕像」：不移动不攻击的静态靶子
+    /**
+     * 骨蛇（小 Boss）：一个"怪"由多个实体拼成，全身共享一份血。
+     * id 取自 EnemyStats.V_SERPENT（7），这里再导出一次是为了让 World 的 switch
+     * 与其它变体写在一起，读代码时不必去 enemy 包里查号。
+     */
+    public static final int V_SERPENT = com.arcanebrigade.core.enemy.EnemyStats.V_SERPENT;
 
     /** 拾取物 meta 子类型 */
     public static final int PICKUP_GEM      = 0;
@@ -109,6 +119,14 @@ public final class World {
     public final float[] enemyShield = new float[MAX];
     /** 小偷携带的宝石数，死亡时翻倍掉落 */
     public final float[] carry = new float[MAX];
+    /**
+     * 骨蛇每一节归属的**头节点 id**（头节点存自己）。非骨蛇恒为 -1。
+     *
+     * 骨蛇是"一个怪、十二个实体"：每节都是普通 KIND_ENEMY（所以索敌、碰撞、
+     * 弹幕命中、空间哈希全部照旧白嫖），但血量只有一份，存在头节点上。
+     * damage() 靠这张表把任意一节的挨打转发到头——玩家打头打身子一个价。
+     */
+    public final int[] serpent = new int[MAX];
 
     // ---- 元素与状态 ----
     /** 附着的元素 id（Element.*）。目前只挂在敌人身上 */
@@ -139,6 +157,19 @@ public final class World {
     private final IntList minions = new IntList(16);
     private int enemiesAlive;
     private int kills;
+    /**
+     * 骨蛇的节链，**按顺序**存放（0 = 头，末尾 = 尾），生成时一次填好。
+     * 渲染与链式跟随都要"第 n 节"，而 SoA 只有 id 没有顺序——靠这张表补上。
+     * 场上同时最多一条骨蛇（WaveDirector 等上一条倒下才刷下一条）。
+     */
+    private final IntList serpentSegments =
+            new IntList(com.arcanebrigade.core.enemy.EnemyStats.SERPENT_SEGMENTS);
+    /**
+     * 骨蛇上一次结算伤害的**世界时间戳**，用于"一帧只挨一次打"。
+     * time 每步递增一个 FIXED_STEP，同一帧内的多次 damage() 拿到的是同一个值，
+     * 所以相等即同帧。初值 -1f 永远不会等于正常时间，无需在生成时重置。
+     */
+    private float serpentHitT = -1f;
 
     private float time;
     private final Random rng;
@@ -146,6 +177,91 @@ public final class World {
     /** 障碍物空间哈希。障碍是静态的，只在场景切换时整体重建，所以每帧只查询不重建 */
     private final SpatialHash obstacleHash = new SpatialHash(64f);
     private final WaveDirector director = new WaveDirector();
+
+    // ---- 骨蛇（lobby-king 引入的小 Boss，多段软体）----
+    /** 场上同时最多 N 条骨蛇，避免段数把实体池撑爆 */
+    public static final int MAX_BONE_SERPENT = 4;
+    /** 每条骨蛇的段数（含头尾），决定了 int[SEGMENT_COUNT] 的尺寸 */
+    public static final int BONE_SERPENT_SEG = BoneSerpent.SEGMENT_COUNT;
+    /** 当前在场骨蛇实例：head=-1 表示该槽空 */
+    private final int[] boneSerpentHead = new int[MAX_BONE_SERPENT];
+    {
+        // 槽位默认 -1（空），不用 Arrays.fill 也行，但显式一次更直观
+        for (int i = 0; i < MAX_BONE_SERPENT; i++) boneSerpentHead[i] = -1;
+    }
+    /**
+     * 每条骨蛇自己的段 id 列表（按 slot 索引）。每条蛇的段独立存，与 lobby-king
+     * 「一条共享 IntList」的设计不同——后者同时只能放一条在更新的蛇，多条并存会
+     * 互相覆盖。本字段让 MAX_BONE_SERPENT=4 条蛇能同时存活、同时被顺序更新。
+     */
+    private final IntList[] serpentSegsBySlot = new IntList[MAX_BONE_SERPENT];
+    /** 各段之间的历史位置（骨蛇的「拖尾」用）。每槽 int[BONE_SERPENT_SEG][HIST]，存 World.x/y 的副本 */
+    private final float[][][] serpentHistX = new float[MAX_BONE_SERPENT][BONE_SERPENT_SEG][BoneSerpent.HIST];
+    private final float[][][] serpentHistY = new float[MAX_BONE_SERPENT][BONE_SERPENT_SEG][BoneSerpent.HIST];
+
+    /**
+     * 当前正在被 BoneSerpent.update 处理的骨蛇段数组。
+     * 用作「更新上下文」——BoneSerpent.update 只接收 head 一个参数，不知道自己
+     * 是第几条蛇；让它读 w.serpentSegmentCount() / w.serpentSegment(n) 时，本字段
+     * 已经在 updateBoneSerpent(int slot) 开头被填好。
+     *
+     * 为什么不用 thread-local：World 是单线程的，而且同一帧里多条蛇是顺序更新的，
+     * 一个字段就够用。线程/上下文切换只会让代码复杂、不会带来性能。
+     */
+    private final int[] curSerpentSegs = new int[BONE_SERPENT_SEG];
+
+    /** 把槽 slot 的段快照到 curSerpentSegs，供 BoneSerpent.update 访问 */
+    private void setSerpentContext(int slot) {
+        IntList list = serpentSegsBySlot[slot];
+        int n = (list != null) ? Math.min(list.size(), BONE_SERPENT_SEG) : 0;
+        for (int i = 0; i < n; i++) {
+            curSerpentSegs[i] = list.get(i);
+        }
+        // 剩余槽位填 -1，BoneSerpent.followBody 看到 -1 会 skip
+        for (int i = n; i < BONE_SERPENT_SEG; i++) {
+            curSerpentSegs[i] = -1;
+        }
+    }
+
+    /** BoneSerpent.update 用：当前正在更新的骨蛇总段数 */
+    public int serpentSegmentCount() {
+        return BONE_SERPENT_SEG;
+    }
+
+    /** BoneSerpent.update 用：当前正在更新的骨蛇第 n 段的 enemies[] id（无效时返回 -1） */
+    public int serpentSegment(int n) {
+        if (n < 0 || n >= BONE_SERPENT_SEG) {
+            return -1;
+        }
+        int id = curSerpentSegs[n];
+        return (id >= 0 && alive[id]) ? id : -1;
+    }
+
+    /** 推进骨蛇 slot（由 updateEnemies 调用）。头死了就释放槽位 */
+    private void updateBoneSerpent(int slot, float dt) {
+        int head = boneSerpentHead[slot];
+        if (head < 0 || !alive[head] || serpent[head] != head) {
+            boneSerpentHead[slot] = -1;
+            return;
+        }
+        // head 死时 kill 会清掉自己槽位的段列表（serpentSegsBySlot[slot]），那时跳过
+        IntList list = serpentSegsBySlot[slot];
+        if (list == null || list.size() == 0) {
+            boneSerpentHead[slot] = -1;
+            if (bossId == head) {
+                bossId = -1;
+            }
+            return;
+        }
+        setSerpentContext(slot);
+        BoneSerpent.update(this, head, dt);
+        if (!alive[head]) {
+            boneSerpentHead[slot] = -1;
+            if (bossId == head) {
+                bossId = -1;
+            }
+        }
+    }
 
     // ---- 场景 / 阶段 ----
     private int stage;
@@ -282,6 +398,7 @@ public final class World {
         variant[id] = V_NORMAL;
         enemyShield[id] = 0f;
         carry[id] = 0f;
+        serpent[id] = -1;          // 非骨蛇：没有归属的头节点
         summonT[id] = 0f;
         slot[id] = 0;
         liveCount++;
@@ -293,6 +410,28 @@ public final class World {
             return;
         }
         alive[id] = false;
+        // 骨蛇：头一死，整条散架。身体/尾巴走 despawn（不计击杀、不掉宝石），
+        // 所以一条蛇只算一次击杀、只掉一次战利品。
+        if (variant[id] == V_SERPENT && serpent[id] == id) {
+            // 找出 head 所在的槽，把该槽的整条段列表都散架
+            int slot = -1;
+            for (int s2 = 0; s2 < MAX_BONE_SERPENT; s2++) {
+                if (boneSerpentHead[s2] == id) { slot = s2; break; }
+            }
+            if (slot >= 0) {
+                IntList list = serpentSegsBySlot[slot];
+                if (list != null) {
+                    for (int p = 0; p < list.size(); p++) {
+                        int seg = list.get(p);
+                        if (seg != id && seg >= 0 && alive[seg] && serpent[seg] == id) {
+                            despawn(seg);
+                        }
+                    }
+                    list.clear();
+                }
+                boneSerpentHead[slot] = -1;
+            }
+        }
         if (id == bossId) {
             // 按等级刷的 Boss 现在只是中途精英：倒下只清阶段标记，不再结束对局
             bossId = -1;   // Boss 倒下：清掉阶段技能标记，下一帧 updateBossPhase 也会兜底
@@ -307,7 +446,8 @@ public final class World {
         if (k == KIND_ENEMY) {
             enemiesAlive--;
             kills++;
-            if (variant[id] == V_BOSS) {
+            // 骨蛇按 Boss 计（否则它的击杀会混进"普通击杀"里，结算数字对不上）
+            if (variant[id] == V_BOSS || variant[id] == V_SERPENT) {
                 bossKills++;
             }
             healWarriorsOnKill();
@@ -315,7 +455,15 @@ public final class World {
                 killListener.onKill(id, x[id], y[id], meta[id]);
             }
             int v = variant[id];
-            if (v == V_THIEF) {
+            if (v == V_SERPENT) {
+                // 小 Boss：一圈宝石铺开，别全叠在一个点上
+                int drop = com.arcanebrigade.core.enemy.EnemyStats.SERPENT_GEM_DROP;
+                for (int g = 0; g < drop; g++) {
+                    float a = (float) (Math.PI * 2) * g / drop;
+                    spawnXpGem(x[id] + (float) Math.cos(a) * 30f,
+                            y[id] + (float) Math.sin(a) * 30f, Balance.GEM_VALUE);
+                }
+            } else if (v == V_THIEF) {
                 // 小偷：掉落携带的 2 倍宝石（至少 1 个）
                 int drop = Math.max(1, (int) (carry[id] * 2f));
                 for (int g = 0; g < drop; g++) {
@@ -646,6 +794,91 @@ public final class World {
         bossSummonTimer = Balance.BOSS_SUMMON_INTERVAL;
     }
 
+    /**
+     * 生成一条骨蛇（小 Boss）。在 WaveDirector 判定玩家等级到 SERPENT_LEVELS
+     * 且大 Boss 不在场时调用。
+     *
+     * 一条骨蛇是 N 个 V_SERPENT 敌人实体（头 / 身体×N / 尾），共享血池、共用 head id。
+     * 这里把段全塞进 slot 自己的 serpentSegsBySlot[slot]（按槽独立存），每段的 serpent[i]
+     * 都指向 head，这样 damage(id) 看到非头节点就把伤害转到头节点；kill(head) 时按 V_SERPENT
+     * 分支把整条蛇的段一并 despawn。head 自己也用 bossId 通道占位，从而和大 Boss 互斥。
+     *
+     * 段内沿主轴排开，让 followBody 立刻有合理的初值，避免开怪时蛇身"瞬移"到轨迹上。
+     */
+    public int spawnBoneSerpent() {
+        int slot = -1;
+        for (int i = 0; i < MAX_BONE_SERPENT; i++) {
+            if (boneSerpentHead[i] < 0) { slot = i; break; }
+        }
+        if (slot < 0) {
+            return -1;   // 槽位满了：现在最多 4 条并存，足够用了
+        }
+        int wiz = firstWizard();
+        if (wiz < 0) {
+            return -1;
+        }
+        float tx = x[wiz];
+        float ty = y[wiz];
+        float ang = rng.nextFloat() * (float) (Math.PI * 2);
+        float sx = clampCoord(tx + (float) Math.cos(ang) * EnemyStats.SERPENT_SPAWN_DIST);
+        float sy = clampCoord(ty + (float) Math.sin(ang) * EnemyStats.SERPENT_SPAWN_DIST);
+
+        // 给本槽建一个独立的段列表，理论上前一条已经死了（slot=-1 时不会到这）
+        IntList segList = serpentSegsBySlot[slot];
+        if (segList == null) {
+            segList = new IntList(BONE_SERPENT_SEG);
+            serpentSegsBySlot[slot] = segList;
+        } else {
+            segList.clear();
+        }
+        int head = -1;
+        for (int s = 0; s < BONE_SERPENT_SEG; s++) {
+            int id = alloc(KIND_ENEMY, sx + s * EnemyStats.SERPENT_SPACING, sy,
+                    (s == 0) ? EnemyStats.SERPENT_HEAD_RADIUS : EnemyStats.SERPENT_BODY_RADIUS,
+                    TEAM_ENEMY);
+            if (id < 0) {
+                // 池满了：把已分配的段散架
+                for (int p = 0; p < segList.size(); p++) {
+                    despawn(segList.get(p));
+                }
+                segList.clear();
+                boneSerpentHead[slot] = -1;
+                return -1;
+            }
+            // 头一节（s==0）作为 bossId 占位，让 spawnBoneSerpent 与 spawnBoss 天然互斥
+            if (s == 0) {
+                head = id;
+                boneSerpentHead[slot] = head;
+                bossId = head;            // 与大 Boss 互斥的通道
+                bossTier = -2;            // 标记是骨蛇；HUD/阶段逻辑按 bossTier 走
+                bossWarningTimer = 0f;    // 小 Boss 不需要预警圈，直接出现
+                bossSummonTimer = 0f;
+            }
+            variant[id] = V_SERPENT;
+            meta[id] = 0;
+            maxHp[id] = EnemyStats.SERPENT_HP;
+            hp[id] = EnemyStats.SERPENT_HP;
+            speed[id] = EnemyStats.SERPENT_SPEED;
+            dmg[id] = EnemyStats.SERPENT_DMG;
+            cd[id] = 0f;
+            enemyShield[id] = 0f;
+            carry[id] = 0f;
+            summonT[id] = 0f;
+            serpent[id] = head;          // 每一节都指向 head（head 自己 serpent==head）
+            enemiesAlive++;
+            segList.add(id);
+        }
+        return head;
+    }
+
+    /** 当前场上是否有骨蛇存活。大 Boss 优先级仍更高（共用 bossId 通道时只可能有一只） */
+    public boolean serpentActive() {
+        return boneSerpentHead[0] >= 0
+                || boneSerpentHead[1] >= 0
+                || boneSerpentHead[2] >= 0
+                || boneSerpentHead[3] >= 0;
+    }
+
     // ------------------------------------------------------------------
     // 推进
     // ------------------------------------------------------------------
@@ -890,9 +1123,16 @@ public final class World {
         } else {   // 采集蘑菇
             eventType = Balance.EVENT_MUSHROOM;
             eventGoal = Balance.MUSHROOM_COUNT;
+            // 以玩家为圆心撒一圈：事件中心离玩家几百单位，继续围着中心散布的话
+            // 最远的一朵会跑到 900+ 单位外，找齐 8 朵全靠运气。
+            eventX = x[w];
+            eventY = y[w];
             for (int m = 0; m < Balance.MUSHROOM_COUNT; m++) {
-                float a = rng.nextFloat() * (float) (Math.PI * 2);
-                float d = 60f + rng.nextFloat() * 360f;
+                // 等分角度 + 抖动：既铺满一圈，又不会几朵挤在一处
+                float a = (float) (Math.PI * 2 * m / Balance.MUSHROOM_COUNT)
+                        + (rng.nextFloat() - 0.5f) * 0.8f;
+                float d = Balance.MUSHROOM_SPAWN_MIN
+                        + rng.nextFloat() * (Balance.MUSHROOM_SPAWN_MAX - Balance.MUSHROOM_SPAWN_MIN);
                 int id = spawnMushroom(clampCoord(eventX + (float) Math.cos(a) * d),
                         clampCoord(eventY + (float) Math.sin(a) * d));
                 if (id >= 0) {
@@ -1054,6 +1294,20 @@ public final class World {
             }
             if (v == V_STATUE) {
                 // 战斗事件「摧毁雕像」：不移动、不攻击，纯靶子
+                continue;
+            }
+            if (v == V_SERPENT) {
+                // 骨蛇：只在头节点（serpent[i] == i）调度一次整蛇更新，
+                // 身体/尾巴走 updateBoneSerpent 内的 context 跳过
+                if (serpent[i] == i) {
+                    int slot = -1;
+                    for (int s2 = 0; s2 < MAX_BONE_SERPENT; s2++) {
+                        if (boneSerpentHead[s2] == i) { slot = s2; break; }
+                    }
+                    if (slot >= 0) {
+                        updateBoneSerpent(slot, dt);
+                    }
+                }
                 continue;
             }
             // 其余（普通 / 精英 / 分裂 / Boss）走下方通用追击 + 接触伤害
@@ -1604,7 +1858,7 @@ public final class World {
     }
 
     /** 玩家的"可攻击目标"：本体 + 宠物。宠物挡在路上就会被怪优先啃（护主的实质） */
-    private int nearestPlayerUnit(float sx, float sy) {
+    public int nearestPlayerUnit(float sx, float sy) {
         int best = -1;
         float bestScore = Float.MAX_VALUE;
         for (int n = 0; n < wizards.size(); n++) {
@@ -1644,7 +1898,8 @@ public final class World {
     }
 
     /** 把实体推出与之重叠的障碍物（玩家与敌人共用） */
-    private void resolveObstacles(int id) {
+    /** 与障碍做一次碰撞推出。public 是为了让 BoneSerpent 这类外部 AI 模块能复用 */
+    public void resolveObstacles(int id) {
         obstacleHash.query(x[id], y[id], r[id] + Balance.OBSTACLE_MAX_R, scratch2);
         for (int n = 0; n < scratch2.size(); n++) {
             int o = scratch2.get(n);
@@ -1664,8 +1919,8 @@ public final class World {
         }
     }
 
-    /** 把实体钳制在可玩区内（城墙内侧边缘，玩家 / 敌人共用） */
-    private void clampToWorld(int id) {
+    /** 把实体钳制在可玩区内（城墙内侧边缘，玩家 / 敌人共用）。public：见上 */
+    public void clampToWorld(int id) {
         float h = Balance.PLAY_HALF;
         if (x[id] < -h) {
             x[id] = -h;
@@ -1679,8 +1934,8 @@ public final class World {
         }
     }
 
-    /** 玩家受击无敌帧：按职业取基础值 + 灵巧被动加成 */
-    private float heroIframe(int wid) {
+    /** 玩家受击无敌帧：按职业取基础值 + 灵巧被动加成。public：BoneSerpent.bite() 复用 */
+    public float heroIframe(int wid) {
         Loadout lo = loadout[wid];
         int ck = (lo != null) ? lo.classKind : HeroClass.WIZARD;
         float add = (lo != null && lo.stats != null) ? lo.stats.iframeAdd : 0f;
@@ -2178,7 +2433,10 @@ public final class World {
                 continue;
             }
             Loadout lo = loadout[nearest];
-            float radius = Balance.PICKUP_RADIUS * (lo != null ? lo.stats.pickupMul : 1f);
+            // 蘑菇的吸附范围单独放宽（任务道具，不该考验走位精度），其余拾取物沿用宝石半径
+            boolean isMushroom = (meta[i] == PICKUP_MUSHROOM);
+            float base = isMushroom ? Balance.MUSHROOM_PICKUP_RADIUS : Balance.PICKUP_RADIUS;
+            float radius = base * (lo != null ? lo.stats.pickupMul : 1f);
             if (bestD2 <= radius * radius) {
                 // 进入拾取范围：吸附
                 float d = (float) Math.sqrt(bestD2);
@@ -2598,6 +2856,10 @@ public final class World {
             if (variant[i] == V_STATUE) {
                 continue;
             }
+            // 骨蛇的每一节都不回收：尾巴被判出局的话，蛇会自己掉尾巴
+            if (variant[i] == V_SERPENT) {
+                continue;
+            }
             float dx = x[i] - wx;
             float dy = y[i] - wy;
             if (dx * dx + dy * dy > lim2) {
@@ -2657,8 +2919,8 @@ public final class World {
         return best;
     }
 
-    /** 第一个活着玩家的 id。WaveDirector 也要用，做成包级可见 */
-    int firstWizard() {
+    /** 第一个活着玩家的 id。WaveDirector 与客户端冒烟参数注入都要用，提升为 public */
+    public int firstWizard() {
         for (int n = 0; n < wizards.size(); n++) {
             int w = wizards.get(n);
             if (alive[w]) {
@@ -2706,6 +2968,13 @@ public final class World {
     public void damage(int id, float amount) {
         if (id < 0 || !alive[id] || amount <= 0f) {
             return;
+        }
+        // 骨蛇：所有节共享一个血池，统一扣在头上。身体挨打也算血
+        if (kind[id] == KIND_ENEMY && variant[id] == V_SERPENT && serpent[id] >= 0 && serpent[id] != id) {
+            id = serpent[id];
+            if (id < 0 || !alive[id]) {
+                return;
+            }
         }
         // 附着雷电的目标更脆
         float amt = (elem[id] == Element.SHOCK)

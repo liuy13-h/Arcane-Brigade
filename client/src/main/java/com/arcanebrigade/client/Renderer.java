@@ -10,6 +10,7 @@ import com.arcanebrigade.core.SpellDef;
 import com.arcanebrigade.core.Spells;
 import com.arcanebrigade.core.Upgrades;
 import com.arcanebrigade.core.World;
+import com.arcanebrigade.core.enemy.BoneSerpent;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.image.Image;
@@ -470,6 +471,18 @@ public final class Renderer {
                             gc.drawImage(img, Math.round(sx - hw / 2), Math.round(sy + 4 - hh));
                         }
                     }
+                    // 战士的武器（Influx Waver 光刃）：握在身侧，朝向跟着移动方向转
+                    if (ck == HeroClass.WARRIOR && Sprites.warriorWeaponRot != null) {
+                        double ang = moving ? Math.atan2(mvy, mvx) : 0.0;
+                        int n = Sprites.warriorWeaponRot.length;
+                        int k = Math.floorMod((int) Math.round(ang / (2 * Math.PI) * n), n);
+                        Image wpn = Sprites.warriorWeaponRot[k];
+                        double ww = wpn.getWidth() * 0.85;
+                        double wh = wpn.getHeight() * 0.85;
+                        double ox = Math.cos(ang) * 15;
+                        double oy = Math.sin(ang) * 15 - 12;
+                        gc.drawImage(wpn, sx + ox - ww / 2, sy + oy - wh / 2, ww, wh);
+                    }
                 }
                 case World.KIND_ENEMY -> {
                     if (i == w.milkyId()) {
@@ -478,8 +491,10 @@ public final class Renderer {
                         drawBossSprite(w, i, sx, sy);
                     } else if (w.variant[i] == World.V_STATUE) {
                         drawStatue(sx, sy, rr);
+                    } else if (w.variant[i] == World.V_SERPENT) {
+                        drawSerpentSegment(w, i, sx, sy);
                     } else {
-                        gc.drawImage(Sprites.enemies[w.meta[i] % Sprites.enemies.length], sx - 16, sy - 16);
+                        drawEnemySprite(w, i, sx, sy, rr);
                     }
                     drawEnemyStatus(w, i, sx, sy);
                     if (i != w.milkyId() && w.hp[i] < w.maxHp[i]) {
@@ -491,9 +506,15 @@ public final class Renderer {
                     }
                 }
                 case World.KIND_MINION -> {
-                    // 宠物：秘能仆从，带一条细血条（血是普通小怪的 2 倍，值得看）
-                    if (Sprites.minion != null) {
-                        gc.drawImage(Sprites.minion, sx - 14, sy - 18, 28, 28);
+                    // 宠物：Abigail 仆从（image/Abigail_(minion).gif），带一条细血条
+                    Image mimg = (Sprites.minionAnim != null) ? Sprites.minionAnim.frameAt(w.time()) : null;
+                    if (mimg == null) {
+                        mimg = Sprites.minion;
+                    }
+                    if (mimg != null) {
+                        double mh = 32.0;
+                        double mw = mimg.getWidth() * (mh / mimg.getHeight());
+                        gc.drawImage(mimg, sx - mw / 2, sy - mh + 5, mw, mh);
                     }
                     float mf = Math.max(0f, w.hp[i] / Math.max(1f, w.maxHp[i]));
                     gc.setFill(Color.rgb(30, 12, 16, 0.85));
@@ -506,7 +527,7 @@ public final class Renderer {
                     // 否则弹幕海里根本分不清哪颗是要躲的、哪颗是自己打的。
                     Image img = (w.team[i] == World.TEAM_ENEMY)
                             ? Sprites.enemyBolt
-                            : Sprites.bolts[defElem(w, i)];
+                            : playerBoltImage(w, i);
                     gc.drawImage(img, sx - img.getWidth() / 2, sy - img.getHeight() / 2);
                 }
                 case World.KIND_PICKUP -> {
@@ -531,31 +552,81 @@ public final class Renderer {
     }
 
     /**
-     * Boss 形象：用 resources 里的立绘（jpg），圆形裁剪后画出来。
-     * 立绘是方形照片素材，不裁圆就会在沙漠地图上贴一个突兀的方块；
-     * 找不到素材时退回程序化画法（史莱姆放大版），保证不会白屏。
+     * Boss 形象：优先播 image/ 下的像素 GIF（火星飞碟 / 以太双足飞龙 / 暗黑法师）。
+     * GIF 自带透明底，直接按等比缩放贴出即可——旧 jpg 那套圆形裁剪是为了藏方形照片的
+     * 硬边，新素材没有这个问题，裁圆反而会把飞碟的碟身切掉。
+     * 找不到素材时退回静态立绘，再退回程序化画法。
      */
     private void drawBossSprite(World w, int i, double sx, double sy) {
         int tier = w.bossTier();
-        Image img = (tier >= 0 && tier < Sprites.bosses.length) ? Sprites.bosses[tier] : null;
-        double size = w.r[i] * 2.7;
+        GifDecoder.Animation anim = (tier >= 0 && tier < Sprites.bossAnim.length)
+                ? Sprites.bossAnim[tier] : null;
+        Image img = (anim != null) ? anim.frameAt(w.time()) : null;
+        if (img == null && tier >= 0 && tier < Sprites.bosses.length) {
+            img = Sprites.bosses[tier];
+        }
         if (img != null) {
-            double cy = sy - size * 0.06;
-            gc.save();
-            gc.beginPath();
-            gc.arc(sx, cy, size * 0.5, size * 0.5, 0, 360);
-            gc.closePath();
-            gc.clip();
-            gc.drawImage(img, sx - size * 0.5, cy - size * 0.5, size, size);
-            gc.restore();
-            // 裁剪边缘描一圈，把方图切圆的接缝藏起来
-            gc.setStroke(Color.rgb(20, 14, 22, 0.85));
-            gc.setLineWidth(2);
-            gc.strokeOval(sx - size * 0.5, cy - size * 0.5, size, size);
+            // 等比装进一个正方形框：飞碟这种宽扁素材不会被拉变形
+            double box = w.r[i] * 3.4;
+            double s = Math.min(box / img.getWidth(), box / img.getHeight());
+            double dw = img.getWidth() * s;
+            double dh = img.getHeight() * s;
+            gc.drawImage(img, sx - dw / 2, sy - dh / 2, dw, dh);
         } else {
             gc.setFill(Color.rgb(150, 60, 70));
             gc.fillOval(sx - w.r[i], sy - w.r[i], w.r[i] * 2, w.r[i] * 2);
         }
+    }
+
+    /**
+     * 小怪形象：播 image/ 下的像素 GIF（壁行者 / 海盗诅咒 / 海盗诅咒·发光），
+     * 按 meta 取档位。统一按高度对齐、保留各自长宽比，底边贴单位位置。
+     * 没读到 GIF 时退回 enemies[] 的程序化形象（老代码路径）。
+     */
+    private void drawEnemySprite(World w, int i, double sx, double sy, float rr) {
+        int idx = Math.floorMod(w.meta[i], Sprites.enemyAnim.length);
+        GifDecoder.Animation anim = Sprites.enemyAnim[idx];
+        Image img = (anim != null) ? anim.frameAt(w.time()) : null;
+        if (img == null) {
+            img = Sprites.enemies[idx % Sprites.enemies.length];
+        }
+        if (img == null) {
+            return;
+        }
+        double h = rr * 2.6;
+        double dw = img.getWidth() * (h / img.getHeight());
+        gc.drawImage(img, sx - dw / 2, sy - h + rr * 0.35, dw, h);
+    }
+
+    /**
+     * 玩家弹体形象：按施法职业取专属素材——巫师=充能爆能法球、弓箭手=飞刀（按飞行方向取预烘焙朝向），
+     * 其余职业（召唤师等）沿用元素配色弹。职业从 owner 的 Loadout 读，拿不到就退回元素弹。
+     */
+    private Image playerBoltImage(World w, int i) {
+        int ck = ownerClass(w, i);
+        if (ck == HeroClass.WIZARD && Sprites.wizardBolt != null) {
+            Image f = Sprites.wizardBolt.frameAt(w.time());
+            if (f != null) {
+                return f;
+            }
+        }
+        if (ck == HeroClass.ARCHER && Sprites.archerBoltRot != null) {
+            int n = Sprites.archerBoltRot.length;
+            int k = (int) Math.round(Math.atan2(w.vy[i], w.vx[i]) / (2 * Math.PI) * n);
+            k = Math.floorMod(k, n);
+            return Sprites.archerBoltRot[k];
+        }
+        return Sprites.bolts[defElem(w, i)];
+    }
+
+    /** 取单位所属职业（HeroClass）。owner 失效或没有 Loadout 时返回 -1 */
+    private static int ownerClass(World w, int i) {
+        int o = w.owner[i];
+        if (o < 0 || o >= w.highWater() || !w.alive[o]) {
+            return -1;
+        }
+        Loadout lo = w.loadout(o);
+        return (lo != null) ? lo.classKind : -1;
     }
 
     /** 战斗事件「摧毁雕像」：灰色石像，底座 + 柱身 + 裂纹，可被摧毁 */
@@ -579,9 +650,50 @@ public final class Renderer {
         gc.fillOval(sx - rr * 0.4, sy - h - rr * 0.35, rr * 0.8, rr * 0.7);
     }
 
-    /** 战斗事件「采集蘑菇」：红顶白点的蘑菇 */
+    /**
+     * 骨蛇的一段：从 World.serpentSegmentCount/serpentSegment 拿到本节是「头 / 身 / 尾」，
+     * 用 BoneSerpent.segmentAngle 取朝向（与 followBody 用的是同一套方向，避免蛇身与轨迹错位）。
+     * 美术是朝上画的，所以 atan2(dx, -dy) 把「精灵朝上」转到实际方向。
+     */
+    private void drawSerpentSegment(World w, int i, double sx, double sy) {
+        // 找本节在所属蛇里的序号（0=头, ..., N-1=尾）
+        int segIndex = -1;
+        for (int n = 0; n < w.serpentSegmentCount(); n++) {
+            if (w.serpentSegment(n) == i) { segIndex = n; break; }
+        }
+        Image img;
+        int n = w.serpentSegmentCount();
+        if (segIndex <= 0) {
+            img = Sprites.serpentHead;
+        } else if (segIndex >= n - 1) {
+            img = Sprites.serpentTail;
+        } else {
+            img = Sprites.serpentBody;
+        }
+        if (img == null) {
+            // 资源缺失：退回 enemies[0] 替代，仍能看出这是个怪
+            img = Sprites.enemies[0];
+        }
+        float ang = BoneSerpent.segmentAngle(w, segIndex);
+        double iw = img.getWidth();
+        double ih = img.getHeight();
+        gc.save();
+        gc.translate(sx, sy);
+        gc.rotate(Math.toDegrees(ang));
+        gc.drawImage(img, -iw / 2, -ih / 2);
+        gc.restore();
+    }
+
+    /** 战斗事件「采集蘑菇」：红顶白点的蘑菇，外加一圈呼吸光环让它从怪堆里跳出来 */
     private void drawMushroom(double sx, double sy, float time) {
         double bob = Math.sin(time * 3.0) * 1.5;
+        // 地面呼吸光环：外圈常亮 + 内圈随时间脉动，视线扫过就能定位
+        double pulse = 0.5 + 0.5 * Math.sin(time * 3.0);
+        gc.setFill(Color.rgb(255, 210, 90, 0.16 + 0.14 * pulse));
+        gc.fillOval(sx - 20, sy - 12, 40, 22);
+        gc.setStroke(Color.rgb(255, 226, 130, 0.45 + 0.35 * pulse));
+        gc.setLineWidth(2);
+        gc.strokeOval(sx - 20, sy - 12, 40, 22);
         // 菌柄
         gc.setFill(Color.rgb(230, 214, 180));
         gc.fillRoundRect(sx - 4, sy - 10 + bob, 8, 14, 3, 3);
@@ -642,11 +754,21 @@ public final class Renderer {
                 double cx = w.x[i] - left;
                 double cy = w.y[i] - top;
                 double rad = w.r[i];
-                double half = Math.toDegrees(w.vx[i]);
-                double start = -Math.toDegrees(w.dmg[i]) - half;
-                gc.setFill(Color.color(c.getRed(), c.getGreen(), c.getBlue(), 0.28 * t));
-                gc.fillArc(cx - rad, cy - rad, rad * 2, rad * 2,
-                        start, half * 2, javafx.scene.shape.ArcType.ROUND);
+                // 战士的近战挥砍（无元素）用 Terragrim 投射刃素材；
+                // 召唤师秘法脉冲等带元素的扇形仍走原来的程序化画法。
+                Image wf = (Sprites.warriorArc != null && w.elem[i] == Element.NONE)
+                        ? Sprites.warriorArc.frameAt(w.time()) : null;
+                if (wf != null) {
+                    gc.setGlobalAlpha(t);
+                    gc.drawImage(wf, cx - rad, cy - rad, rad * 2, rad * 2);
+                    gc.setGlobalAlpha(1.0);
+                } else {
+                    double half = Math.toDegrees(w.vx[i]);
+                    double start = -Math.toDegrees(w.dmg[i]) - half;
+                    gc.setFill(Color.color(c.getRed(), c.getGreen(), c.getBlue(), 0.28 * t));
+                    gc.fillArc(cx - rad, cy - rad, rad * 2, rad * 2,
+                            start, half * 2, javafx.scene.shape.ArcType.ROUND);
+                }
             }
             default -> { }
         }
@@ -846,8 +968,68 @@ public final class Renderer {
         gc.setFill(Color.rgb(245, 238, 255));
         gc.fillText(label, vw / 2 - tw / 2, by - 8);
 
+        // 采集蘑菇：给屏幕外还没采的蘑菇画指向箭头
+        if (w.eventType() == Balance.EVENT_MUSHROOM) {
+            drawMushroomPointers(w, vw, vh);
+        }
+
         if (w.eventBannerT() > 0f) {
             drawEventBanner(vw, vh, "任务完成 +经验");
+        }
+    }
+
+    /**
+     * 「采集蘑菇」期间，给屏幕外还没采到的蘑菇画一圈指向箭头。
+     * 蘑菇已经撒在玩家周围了，但镜头只有一屏宽，转两圈仍可能漏掉边角那几朵——
+     * 箭头直接回答「往哪走、还有多远」，不用再靠运气扫地图。
+     */
+    private void drawMushroomPointers(World w, double vw, double vh) {
+        double left = camX - vw / 2;
+        double top = camY - vh / 2;
+        double cx = vw / 2;
+        double cy = vh / 2;
+        double maxR = Math.min(cx, cy) - 46;      // 箭头贴屏幕边，往里缩一点免得压住 HUD
+        for (int i = 0; i < w.highWater(); i++) {
+            if (!w.alive[i] || w.kind[i] != World.KIND_PICKUP
+                    || w.meta[i] != World.PICKUP_MUSHROOM) {
+                continue;
+            }
+            double mx = w.x[i] - left;
+            double my = w.y[i] - top;
+            if (mx >= 0 && mx <= vw && my >= 0 && my <= vh) {
+                continue;                          // 屏幕内不画：蘑菇本体已经够显眼
+            }
+            double dx = mx - cx;
+            double dy = my - cy;
+            double ang = Math.atan2(dy, dx);
+            double ex = cx + Math.cos(ang) * maxR;
+            double ey = cy + Math.sin(ang) * maxR;
+
+            gc.save();
+            gc.translate(ex, ey);
+            gc.rotate(Math.toDegrees(ang));
+            gc.setFill(Color.rgb(255, 214, 96, 0.92));
+            gc.beginPath();
+            gc.moveTo(15, 0);
+            gc.lineTo(-9, -9);
+            gc.lineTo(-9, 9);
+            gc.closePath();
+            gc.fill();
+            gc.setStroke(Color.rgb(96, 54, 12, 0.85));
+            gc.setLineWidth(1.5);
+            gc.stroke();
+            gc.restore();
+
+            // 距离数字不跟着箭头转，正着读；往圆心方向让开，避免压住箭头
+            String d = (int) Math.sqrt(dx * dx + dy * dy) + "m";
+            gc.setFont(Font.font("Microsoft YaHei", FontWeight.BOLD, 11));
+            double dw = measureWidth(gc.getFont(), d);
+            double lx = ex - Math.cos(ang) * 24 - dw / 2;
+            double ly = ey - Math.sin(ang) * 24 + 4;
+            gc.setFill(Color.rgb(20, 14, 10, 0.6));
+            gc.fillRoundRect(lx - 4, ly - 11, dw + 8, 15, 4, 4);
+            gc.setFill(Color.rgb(255, 232, 170));
+            gc.fillText(d, lx, ly);
         }
     }
 

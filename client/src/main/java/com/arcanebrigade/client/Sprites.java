@@ -18,6 +18,7 @@ import javafx.scene.paint.RadialGradient;
 import javafx.scene.paint.Stop;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.InputStream;
 import java.util.function.Consumer;
 
@@ -54,11 +55,43 @@ public final class Sprites {
      */
     public static Image[] heroPortraits = new Image[5];
     public static Image[] enemies = new Image[3];
+    /**
+     * 小怪的像素 GIF 动画，下标对齐 enemies[]：
+     * 0=壁行者 Wall_Creeper、1=海盗诅咒 Pirate's_Curse、2=海盗诅咒·发光 Pirate's_Curse_(glowing)。
+     * null 表示该档位没读到素材，渲染时退回 enemies[] 的程序化形象。
+     */
+    public static GifDecoder.Animation[] enemyAnim = new GifDecoder.Animation[3];
+    /**
+     * Boss 的像素 GIF 动画，下标对齐 bosses[]：
+     * 0=火星飞碟、1=以太双足飞龙 3、2=以太双足飞龙 2、3=暗黑法师。
+     * null 时渲染退回 bosses[] 的静态立绘。
+     */
+    public static GifDecoder.Animation[] bossAnim = new GifDecoder.Animation[4];
+    /** 巫师攻击特效：充能爆能法球（Charged_Blaster_Orb.gif） */
+    public static GifDecoder.Animation wizardBolt;
+    /** 弓箭手攻击特效：飞刀（Throwing_Knife.png）。方向性投射物，预烘焙 32 个朝向 */
+    public static Image[] archerBoltRot;
+    /** 战士武器：Influx Waver 光刃。原素材是 webp，JavaFX 无 WebP 解码器，已转成 png */
+    public static Image warriorWeapon;
+    /** 战士武器按朝向预烘焙（挥砍时跟着角色转，避免运行时软件旋转） */
+    public static Image[] warriorWeaponRot;
+    /** 战士攻击特效：Terragrim 投射刃（Terragrim_(projectile).gif） */
+    public static GifDecoder.Animation warriorArc;
+    /** 召唤师召唤物：Abigail 仆从（Abigail_(minion).gif） */
+    public static GifDecoder.Animation minionAnim;
     /** 按元素索引的弹体颜色，见 Element。运行时只查表，不做任何变换 */
     public static Image[] bolts = new Image[Element.COUNT];
     /** 敌方弹幕（统一的"敌意红"），与玩家元素弹做明显区分 */
     public static Image enemyBolt;
     public static Image gem;
+
+    // ---- 骨蛇（小 Boss，lobby-king 引入）----
+    /** 蛇头：38×76 朝上的骨骼立绘。null 时退回 enemies[0] 替代 */
+    public static Image serpentHead;
+    /** 蛇身：中段骨节，水平朝向 */
+    public static Image serpentBody;
+    /** 蛇尾：末端骨节 */
+    public static Image serpentTail;
 
     // ---- 5 关 Boss 奶蛙：血条头像 + 四套动作 GIF ----
     /** 奶蛙血条右侧头像（与血条等高显示） */
@@ -76,6 +109,15 @@ public final class Sprites {
     private static final Group OFFSCREEN = new Group();
     private static final Scene OFFSCREEN_SCENE = new Scene(OFFSCREEN, 1, 1);
 
+    /** 小怪形象文件名，下标对齐 enemies[] / enemyAnim[] */
+    private static final String[] ENEMY_ART = {
+            "Wall_Creeper.gif", "Pirate's_Curse.gif", "Pirate's_Curse_(glowing).gif"
+    };
+    /** Boss 形象文件名，下标对齐 bosses[] / bossAnim[] */
+    private static final String[] BOSS_ART = {
+            "Martian_Saucer.gif", "Etherian_Wyvern_3.gif", "Etherian_Wyvern_2.gif", "Dark_Mage.gif"
+    };
+
     private Sprites() {}
 
     public static void load() {
@@ -91,10 +133,33 @@ public final class Sprites {
         loadHero(HeroClass.WARRIOR, "warrior", Sprites::paintWarrior);
         loadHero(HeroClass.ARCHER, "archer", Sprites::paintArcher);
         loadHero(HeroClass.SUMMONER, "summoner", Sprites::paintSummoner);
+        // Boss：先读旧的 jpg 立绘兜底，再尝试用 image/ 下的像素 GIF 覆盖（按 BOSS_ART 顺序）
         for (int t = 0; t < bosses.length; t++) {
             bosses[t] = loadBoss(t);
+            bossAnim[t] = loadArtAnim(BOSS_ART[t]);
+            if (bossAnim[t] != null) {
+                bosses[t] = bossAnim[t].frames[0];
+            }
         }
         minion = bake(28, 28, Sprites::paintMinion);
+        minionAnim = loadArtAnim("Abigail_(minion).gif");
+        if (minionAnim != null) {
+            minion = minionAnim.frames[0];
+        }
+        // 巫师 / 弓箭手 / 战士的攻击与武器素材
+        wizardBolt  = loadArtAnim("Charged_Blaster_Orb.gif");
+        warriorArc  = loadArtAnim("Terragrim_(projectile).gif");
+        warriorWeapon = loadArt("Influx_Waver_Beam.png");
+        if (warriorWeapon != null) {
+            warriorWeaponRot = bakeRotations(warriorWeapon, 16);
+        }
+        archerBoltRot = bakeKnifeRotations(loadArt("Throwing_Knife.png"), 32);
+
+        // 骨蛇（lobby-king 引入）：头/身/尾三张 png 都是朝上的骨骼立绘，
+        // 用 knockBackground 扣掉透明外的白底（如果原图有的话）
+        serpentHead = loadArt("Bone_Serpent_Head.png");
+        serpentBody = loadArt("Bone_Serpent_Body.png");
+        serpentTail = loadArt("Bone_Serpent_Tail.png");
 
         // 大厅背景与标题画面：从仓库根 image/ 读现成美术
         lobbyBg = loadArt("皇宫王座大厅背景.jpg");
@@ -107,9 +172,16 @@ public final class Sprites {
         heroPortraits[HeroClass.ARCHER]  = knockoutBackground(loadArt("弓箭手角色-尖角额甲版.jpg"));                                // 弓箭手
         heroPortraits[HeroClass.SUMMONER] = knockoutBackground(loadArt("summoner_transparent.png"));                               // 召唤师
 
+        // 小怪：程序化形象先兜底，再尝试用 image/ 下的像素 GIF 覆盖（按 ENEMY_ART 顺序）
         enemies[0] = bake(32, 32, g -> paintSlime(g, Color.rgb(96, 200, 120), Color.rgb(40, 120, 70)));
         enemies[1] = bake(32, 32, g -> paintBat(g, Color.rgb(178, 130, 235), Color.rgb(96, 62, 150)));
         enemies[2] = bake(32, 32, g -> paintBrute(g, Color.rgb(240, 150, 80), Color.rgb(150, 74, 30)));
+        for (int e = 0; e < ENEMY_ART.length; e++) {
+            enemyAnim[e] = loadArtAnim(ENEMY_ART[e]);
+            if (enemyAnim[e] != null) {
+                enemies[e] = enemyAnim[e].frames[0];   // 静态回退同步成新素材首帧
+            }
+        }
         bolts[Element.NONE]   = bake(22, 22, g -> paintBolt(g,
                 Color.rgb(255, 250, 225), Color.rgb(255, 215, 120), Color.rgb(230, 180, 90)));
         bolts[Element.FIRE]   = bake(22, 22, g -> paintBolt(g,
@@ -338,6 +410,16 @@ public final class Sprites {
      * 找不到时打印警告并返回 null，调用方需容忍缺图。
      */
     private static Image loadArt(String fileName) {
+        File f = artFile(fileName);
+        if (f == null) {
+            System.err.println("[Sprites] 缺少美术资源: " + fileName);
+            return null;
+        }
+        return new Image(f.toURI().toString(), false);
+    }
+
+    /** 定位 image/ 下的文件。从工作目录往上逐级找 image 目录，找不到或文件不存在返回 null */
+    private static File artFile(String fileName) {
         File dir = null;
         for (File d = new File(System.getProperty("user.dir")); d != null; d = d.getParentFile()) {
             File cand = new File(d, "image");
@@ -347,11 +429,51 @@ public final class Sprites {
             }
         }
         File f = (dir != null) ? new File(dir, fileName) : new File(fileName);
-        if (!f.isFile()) {
-            System.err.println("[Sprites] 缺少美术资源: " + f.getAbsolutePath());
+        return f.isFile() ? f : null;
+    }
+
+    /**
+     * 从 image/ 载入 GIF 并解码成动画帧。
+     * JavaFX 的 Image 读 GIF 只取第一帧且不做动画，所以必须走 GifDecoder。
+     * 缺图或解码失败都返回 null，调用方退回静态形象。
+     */
+    private static GifDecoder.Animation loadArtAnim(String fileName) {
+        File f = artFile(fileName);
+        if (f == null) {
+            System.err.println("[Sprites] 缺少美术资源: " + fileName);
             return null;
         }
-        return new Image(f.toURI().toString(), false);
+        try (InputStream in = new FileInputStream(f)) {
+            GifDecoder.Animation anim = GifDecoder.decode(in);
+            if (anim == null || anim.frames.length == 0) {
+                System.err.println("[Sprites] GIF 无有效帧: " + f.getAbsolutePath());
+                return null;
+            }
+            return anim;
+        } catch (Exception e) {
+            System.err.println("[Sprites] GIF 解码失败: " + f.getAbsolutePath() + " -> " + e);
+            return null;
+        }
+    }
+
+    /**
+     * 飞刀用的是"刀尖朝上"的竖长图，直接烘焙旋转会让 0 号朝向指向上方。
+     * 这里先顺时针预转 90° 让 0 号朝向对齐 +x（向右），再按 angles 个朝向烘焙，
+     * 运行期只需按速度方向取下标，不做任何实时旋转。
+     */
+    private static Image[] bakeKnifeRotations(Image src, int angles) {
+        if (src == null) {
+            return null;
+        }
+        double w = src.getWidth();
+        double h = src.getHeight();
+        double size = Math.ceil(Math.sqrt(w * w + h * h));
+        Image pointingRight = bake((int) size, (int) size, g -> {
+            g.translate(size / 2.0, size / 2.0);
+            g.rotate(90);
+            g.drawImage(src, -w / 2.0, -h / 2.0);
+        });
+        return bakeRotations(pointingRight, angles);
     }
 
     /**
