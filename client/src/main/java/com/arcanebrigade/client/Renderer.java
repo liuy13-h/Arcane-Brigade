@@ -132,11 +132,11 @@ public final class Renderer {
         drawBoundary(vw, vh, pal);
         drawObstacles(w, alpha, vw, vh);
         drawEventWorld(w, alpha, vw, vh);   // 战斗事件：封印裂隙圈 / 蘑菇 / 雕像（部分在 entities 里）
-        drawMilkyTelegraph(w, vw, vh);      // 奶娃技能预警（地面层）
+        drawMilkyTelegraph(w, vw, vh);      // 奶蛙技能预警（地面层）
         drawEntities(w, alpha, vw, vh);
         drawHud(w, vw, vh);
         drawBossBar(w, vw);
-        drawMilkyBar(w, vw);                // 奶娃专属血条 + 头像
+        drawMilkyBar(w, vw);                // 奶蛙专属血条 + 头像
         drawEventHud(w, vw, vh);            // 事件进度条 + 完成横幅（最上层）
     }
 
@@ -922,10 +922,10 @@ public final class Renderer {
     }
 
     // ------------------------------------------------------------------
-    // 5 关 Boss 奶娃：动画 / 技能预警 / 专属血条
+    // 5 关 Boss 奶蛙：动画 / 技能预警 / 专属血条
     // ------------------------------------------------------------------
 
-    /** 奶娃当前该画的那一帧：按施法状态 / 朝向挑动画 */
+    /** 奶蛙当前该画的那一帧：按施法状态 / 朝向挑动画 */
     private static Image milkyFrame(World w) {
         int cast = w.milkyCast();
         if (cast == 1) {
@@ -989,7 +989,7 @@ public final class Renderer {
         }
     }
 
-    /** 奶娃专属血条：顶部加高条（32px）+ 右端等高头像 */
+    /** 奶蛙专属血条：顶部加高条（32px）+ 右端等高头像 */
     private void drawMilkyBar(World w, double vw) {
         int id = w.milkyId();
         if (id < 0 || !w.alive[id]) {
@@ -1001,7 +1001,7 @@ public final class Renderer {
         double bw = Math.min(680, vw - (pw + 40) - 80);
         double total = bw + 10 + pw;
         double bx = (vw - total) / 2;
-        // 若同屏还有按等级刷的 Boss，奶娃条下移，避免两条重叠
+        // 若同屏还有按等级刷的 Boss，奶蛙条下移，避免两条重叠
         int bid = w.bossId();
         double by = (bid >= 0 && w.alive[bid]) ? 54 : 16;
 
@@ -1026,7 +1026,7 @@ public final class Renderer {
 
         gc.setFont(hudFont);
         gc.setFill(Color.rgb(255, 200, 225));
-        gc.fillText("奶娃", bx, by - 6);
+        gc.fillText("奶蛙", bx, by - 6);
         gc.setFill(Color.rgb(240, 220, 230));
         String hpText = String.format("%.0f / %.0f", w.hp[id], w.maxHp[id]);
         gc.fillText(hpText, bx + bw - measureWidth(hudFont, hpText), by - 6);
@@ -1952,7 +1952,7 @@ public final class Renderer {
             "准备大厅：靠近勇者后按 空格 / E —— 招募同行（可再靠近他人改选）。",
             "出征：走进大厅下方光门按 E —— 已选可出战职业即可开战。",
             "升级三选一：鼠标点击卡片选择；按 R 键可免费重抽一次。",
-            "结束规则：角色血量归零即失败；击败奶娃 Boss 即通关。",
+            "结束规则：角色血量归零即失败；击败奶蛙 Boss 即通关。",
     };
 
     /** 屏幕坐标小矩形：命中判定与绘制共用同一份 */
@@ -2158,7 +2158,7 @@ public final class Renderer {
                 String[] lines = {
                         "「多人联机 · 1–4 人在线合作」正在开发中，敬请期待！",
                         "当前为本地单机抢先体验：从准备大厅招募一位勇者出征，",
-                        "在自动开火的幸存者战斗中击败奶娃 Boss 即可通关（血量归零即失败）。",
+                        "在自动开火的幸存者战斗中击败奶蛙 Boss 即可通关（血量归零即失败）。",
                         "在线合作将在后续版本加入，感谢你的关注！",
                 };
                 double y = g.py() + 152;

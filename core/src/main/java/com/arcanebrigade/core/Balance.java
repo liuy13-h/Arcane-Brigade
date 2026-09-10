@@ -328,7 +328,7 @@ public final class Balance {
     public static final int   MUSHROOM_COUNT  = 8;
     public static final float MUSHROOM_LIFE   = 120f;
 
-    // ---- 5 关 Boss：奶娃（玩家等级达到 25 级时从场地中央刷新，独立技能组）----
+    // ---- 5 关 Boss：奶蛙（玩家等级达到 25 级时从场地中央刷新，独立技能组）----
     /** 刷新条件：玩家等级达到该值 */
     public static final int   MILKY_LEVEL         = 25;
     public static final float MILKY_HP            = 8000f;

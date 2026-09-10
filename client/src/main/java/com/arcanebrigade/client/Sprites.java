@@ -60,8 +60,8 @@ public final class Sprites {
     public static Image enemyBolt;
     public static Image gem;
 
-    // ---- 5 关 Boss 奶娃：血条头像 + 四套动作 GIF ----
-    /** 奶娃血条右侧头像（与血条等高显示） */
+    // ---- 5 关 Boss 奶蛙：血条头像 + 四套动作 GIF ----
+    /** 奶蛙血条右侧头像（与血条等高显示） */
     public static Image milkyPortrait;
     /** 向左行走 / 向右行走（两张独立动图） */
     public static GifDecoder.Animation milkyWalkLeft;
@@ -125,7 +125,7 @@ public final class Sprites {
                 Color.rgb(255, 225, 225), Color.rgb(255, 80, 70), Color.rgb(140, 8, 18)));
         gem = bake(14, 14, Sprites::paintGem);
 
-        // 奶娃素材（resources/sprites/milky/）：原图是白底方图，统一抠背景成透明底
+        // 奶蛙素材（resources/sprites/milky/）：原图是白底方图，统一抠背景成透明底
         milkyPortrait = knockoutBackground(loadImage("milky/portrait.jpg"));
         milkyWalkLeft = knockAnim(loadAnim("milky/walk_left.gif"));
         milkyWalkRight = knockAnim(loadAnim("milky/walk_right.gif"));

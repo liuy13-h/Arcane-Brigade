@@ -154,7 +154,7 @@ public final class World {
     private int bossId = -1;
     /** 当前 Boss 是第几只（BOSS_LEVELS 的下标），HUD 显示名字用 */
     private int bossTier;
-    /** 击败奶娃（5 关 Boss）后置位，客户端据此暂停并弹胜利画面 */
+    /** 击败奶蛙（5 关 Boss）后置位，客户端据此暂停并弹胜利画面 */
     private boolean victory;
     /** 主控玩家阵亡后置位，客户端据此冻结并弹结算画面 */
     private boolean defeat;
@@ -188,12 +188,12 @@ public final class World {
     /** 事件生成的雕像 / 蘑菇实体 id，用于清理与统计 */
     private final IntList eventIds = new IntList(16);
 
-    // ---- 5 关 Boss：奶娃（玩家等级触发，场地中央） ----
+    // ---- 5 关 Boss：奶蛙（玩家等级触发，场地中央） ----
     private int milkyId = -1;
     private boolean milkySpawned;
     private float milkyStompCd;
     private float milkyLaughCd;
-    /** 奶娃施法状态：0=移动/待机，1=蓄力踩地，2=捧腹大笑 */
+    /** 奶蛙施法状态：0=移动/待机，1=蓄力踩地，2=捧腹大笑 */
     private int milkyCast;
     private float milkyCastT;
     /** true=朝右（用右向动画/镜像判断） */
@@ -298,8 +298,8 @@ public final class World {
             bossId = -1;   // Boss 倒下：清掉阶段技能标记，下一帧 updateBossPhase 也会兜底
         }
         if (id == milkyId) {
-            milkyId = -1;  // 奶娃血量归零：消失（客户端据此停掉专属 BGM）
-            // 结束规则之二：击败奶娃 = 通关
+            milkyId = -1;  // 奶蛙血量归零：消失（客户端据此停掉专属 BGM）
+            // 结束规则之二：击败奶蛙 = 通关
             victory = true;
             summary = snapshot(true, false, firstWizard());
         }
@@ -672,7 +672,7 @@ public final class World {
         if (bossId >= 0) {
             updateBossPhase(dt);  // Boss 阶段技能（预警圈 / 召唤）
         }
-        // 奶娃：玩家等级达到 MILKY_LEVEL 时从场地中央刷新，之后走自己的状态机
+        // 奶蛙：玩家等级达到 MILKY_LEVEL 时从场地中央刷新，之后走自己的状态机
         if (!milkySpawned && firstWizard() >= 0 && playerLevel() >= Balance.MILKY_LEVEL) {
             spawnMilky();
         }
@@ -1273,10 +1273,10 @@ public final class World {
     }
 
     // ------------------------------------------------------------------
-    // 5 关 Boss：奶娃
+    // 5 关 Boss：奶蛙
     // ------------------------------------------------------------------
 
-    /** 在场地中央生成奶娃。属性取 Balance.MILKY_*，不带护盾。 */
+    /** 在场地中央生成奶蛙。属性取 Balance.MILKY_*，不带护盾。 */
     private void spawnMilky() {
         int id = spawnEnemy(0f, 0f, 0, V_BOSS);
         if (id < 0) {
@@ -1299,7 +1299,7 @@ public final class World {
     }
 
     /**
-     * 奶娃行为：靠近玩家才起手；施法期间原地不动。
+     * 奶蛙行为：靠近玩家才起手；施法期间原地不动。
      * 技能一「蓄力踩地」→ 朝玩家所在侧的半圆，伤害 50；
      * 技能二「捧腹大笑」→ 半血以下才用，圆形大范围伤害 100，频率低。
      * 未施法时的追击由通用 updateEnemies 按 speed 驱动。
@@ -2782,26 +2782,26 @@ public final class World {
         return time;
     }
 
-    // ---- 5 关 Boss 奶娃（客户端渲染 / 音乐用） ----
+    // ---- 5 关 Boss 奶蛙（客户端渲染 / 音乐用） ----
 
-    /** 冒烟 / 调试用：立即刷新奶娃（忽略等级条件） */
+    /** 冒烟 / 调试用：立即刷新奶蛙（忽略等级条件） */
     public void forceSpawnMilky() {
         if (!milkySpawned) {
             spawnMilky();
         }
     }
 
-    /** 奶娃实体 id；-1 表示不在场 */
+    /** 奶蛙实体 id；-1 表示不在场 */
     public int milkyId() {
         return milkyId;
     }
 
-    /** 奶娃是否在场且存活 */
+    /** 奶蛙是否在场且存活 */
     public boolean milkyAlive() {
         return milkyId >= 0 && alive[milkyId];
     }
 
-    /** 奶娃施法状态：0=移动/待机，1=蓄力踩地，2=捧腹大笑 */
+    /** 奶蛙施法状态：0=移动/待机，1=蓄力踩地，2=捧腹大笑 */
     public int milkyCast() {
         return milkyCast;
     }
@@ -2815,7 +2815,7 @@ public final class World {
         return (milkyCast == 2) ? Balance.MILKY_LAUGH_CAST : Balance.MILKY_STOMP_CAST;
     }
 
-    /** true=奶娃朝右（决定用哪套行走动画） */
+    /** true=奶蛙朝右（决定用哪套行走动画） */
     public boolean milkyFaceRight() {
         return milkyFaceRight;
     }
@@ -2880,7 +2880,7 @@ public final class World {
         return bossId;
     }
 
-    /** 是否已击败奶娃 Boss（胜利判定）。一旦置位不会复位 */
+    /** 是否已击败奶蛙 Boss（胜利判定）。一旦置位不会复位 */
     public boolean victory() {
         return victory;
     }

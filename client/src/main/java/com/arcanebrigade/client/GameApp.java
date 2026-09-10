@@ -75,7 +75,7 @@ public final class GameApp extends Application {
     private boolean mouseDown;
     /** ESC 手动暂停（战斗阶段） */
     private boolean manualPause;
-    /** 奶娃 BGM 是否正在播放（用于检测奶娃出场/消失的瞬间起停音乐） */
+    /** 奶蛙 BGM 是否正在播放（用于检测奶蛙出场/消失的瞬间起停音乐） */
     private boolean bossMusicOn;
 
     @Override
@@ -243,7 +243,7 @@ public final class GameApp extends Application {
             }
             beginGame(pick);
             if (System.getProperty("ab.milky") != null) {
-                world.forceSpawnMilky();   // 覆盖奶娃动画 / 技能 / 血条路径
+                world.forceSpawnMilky();   // 覆盖奶蛙动画 / 技能 / 血条路径
             }
             String bt = System.getProperty("ab.boss");
             if (bt != null && !bt.isBlank()) {
@@ -318,7 +318,7 @@ public final class GameApp extends Application {
                 // ---- 正式战斗阶段（逻辑推进与画面刷新解耦） ----
                 renderer.setMouse(mouseX, mouseY);
 
-                // 奶娃 BGM：在场时循环播放，血量归零消失/重开一局时停止
+                // 奶蛙 BGM：在场时循环播放，血量归零消失/重开一局时停止
                 boolean milkyNow = world.milkyAlive();
                 if (milkyNow != bossMusicOn) {
                     bossMusicOn = milkyNow;

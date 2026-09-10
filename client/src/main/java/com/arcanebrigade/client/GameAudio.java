@@ -21,7 +21,7 @@ public final class GameAudio {
 
     private static MediaPlayer menu;
     private static MediaPlayer lobby;
-    /** 5 关 Boss 奶娃在场时的专属循环音乐 */
+    /** 5 关 Boss 奶蛙在场时的专属循环音乐 */
     private static MediaPlayer boss;
 
     private GameAudio() {}
@@ -52,14 +52,14 @@ public final class GameAudio {
         lobby = null;
     }
 
-    /** 奶娃出场：开始循环播放其专属 BGM（若已在播则重来） */
+    /** 奶蛙出场：开始循环播放其专属 BGM（若已在播则重来） */
     public static void startBossBgm() {
         release(boss);
         boss = start(BOSS_FILE);
         refreshVolume();
     }
 
-    /** 奶娃血量归零消失：停止专属 BGM */
+    /** 奶蛙血量归零消失：停止专属 BGM */
     public static void stopBossBgm() {
         release(boss);
         boss = null;
