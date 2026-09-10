@@ -125,15 +125,15 @@ public final class GameApp extends Application {
                 return;
             }
             pressed.add(e.getCode());
-            // 战斗阶段：ESC 手动暂停；R 键在胜利后重开，在升级面板弹出时重抽
+            // 战斗阶段：ESC 手动暂停；R 键在胜利/阵亡后重开，在升级面板弹出时重抽
             if (e.getCode() == KeyCode.ESCAPE) {
-                if (!world.victory()) {
+                if (!world.victory() && !world.defeat()) {
                     manualPause = !manualPause;
                 }
                 return;
             }
             if (e.getCode() == KeyCode.R) {
-                if (world.victory()) {
+                if (world.victory() || world.defeat()) {
                     restart();
                     return;
                 }
@@ -195,7 +195,7 @@ public final class GameApp extends Application {
                 }
                 return;
             }
-            handleChoiceClick(e.getX(), e.getY());
+            handleBattleClick(e.getX(), e.getY());
         });
 
         this.stage = stage;
@@ -320,6 +320,19 @@ public final class GameApp extends Application {
                     renderer.drawVictory(world, canvas.getWidth(), canvas.getHeight());
                     if (smokeFrames > 0 && ++renderedFrames >= smokeFrames) {
                         System.out.printf("[smoke] 胜利画面，渲染 %d 帧完成，退出%n", renderedFrames);
+                        Platform.exit();
+                    }
+                    return;
+                }
+
+                // 阵亡：同样冻结模拟，弹结算战报，点「继续」或按 R 回大厅。
+                // 之前玩家倒下后没有任何终局状态，游戏会一直空转却永远不结束。
+                if (world.defeat()) {
+                    renderer.setFps(fps[0]);
+                    renderer.draw(world, 0f);
+                    renderer.drawDefeatOverlay(world, canvas.getWidth(), canvas.getHeight());
+                    if (smokeFrames > 0 && ++renderedFrames >= smokeFrames) {
+                        System.out.printf("[smoke] 阵亡结算，渲染 %d 帧完成，退出%n", renderedFrames);
                         Platform.exit();
                     }
                     return;
@@ -638,9 +651,11 @@ public final class GameApp extends Application {
         pressed.clear();
     }
 
-    /** 胜利后重开：换一个种子重建世界，回到准备大厅重新选人 */
+    /** 胜利/阵亡后重开：换一个种子重建世界，回到准备大厅重新选人 */
     private void restart() {
+        boolean auto = (world != null) && world.isAutoFire();   // 保留玩家的开火模式偏好
         world = new World(System.nanoTime());
+        world.setAutoFire(auto);
         manualPause = false;
         lobbyChoice = 0;
         renderedFrames = 0;
@@ -648,10 +663,41 @@ public final class GameApp extends Application {
     }
 
     /**
-     * 鼠标点击命中三选一卡片。卡片尺寸和位置必须与 Renderer.drawUpgradePanel 严格一致。
-     * 命中区域：3 个等宽矩形，y 范围 vh*0.32 .. vh*0.32 + 220。
+     * 战斗阶段的点击派发：阵亡结算的「继续」按钮 → HUD 开火/暂停按钮 → 升级三选一卡片。
+     *
+     * 开火与暂停按钮此前只画不响应：这两个坐标只被 drawHud 用来绘制，命中判定从未写过，
+     * 点在按钮上毫无反应（暂停只能靠 ESC）。这里补上命中判定，坐标与 Renderer 共用同一组常量。
+     *
+     * 卡片尺寸和位置必须与 Renderer.drawUpgradePanel 严格一致：
+     * 命中区域 3 个等宽矩形，y 范围 vh*0.32 .. vh*0.32 + 220。
      */
-    private void handleChoiceClick(double mx, double my) {
+    private void handleBattleClick(double mx, double my) {
+        double vw = renderer.getCanvasWidth();
+        double vh = renderer.getCanvasHeight();
+
+        // 1) 阵亡结算：右下角「继续」回到准备大厅
+        if (world.defeat()) {
+            if (hit(Renderer.continueButtonRect(vw, vh), mx, my)) {
+                restart();
+            }
+            return;
+        }
+        if (world.victory()) {
+            return;                      // 胜利画面只认 R 键
+        }
+
+        // 2) HUD 按钮：开火模式切换（自动 / 手动）
+        if (hit(Renderer.fireButtonRect(vw, vh), mx, my)) {
+            world.setAutoFire(!world.isAutoFire());
+            return;
+        }
+        // 3) HUD 按钮：暂停 / 继续
+        if (hit(Renderer.pauseButtonRect(vw, vh), mx, my)) {
+            manualPause = !manualPause;
+            return;
+        }
+
+        // 4) 升级三选一
         if (world.wizardCount() == 0) {
             return;
         }
@@ -659,8 +705,6 @@ public final class GameApp extends Application {
         if (world.pendingChoices(wid) == 0) {
             return;
         }
-        double vw = renderer.getCanvasWidth();
-        double vh = renderer.getCanvasHeight();
         Upgrades.Choice[] cs = world.peekChoices(wid);
         if (cs == null) {
             return;
@@ -678,6 +722,11 @@ public final class GameApp extends Application {
                 return;
             }
         }
+    }
+
+    /** 点 (mx,my) 是否落在 [x, y, w, h] 矩形内 */
+    private static boolean hit(double[] r, double mx, double my) {
+        return mx >= r[0] && mx <= r[0] + r[2] && my >= r[1] && my <= r[1] + r[3];
     }
 
     private void readInput() {

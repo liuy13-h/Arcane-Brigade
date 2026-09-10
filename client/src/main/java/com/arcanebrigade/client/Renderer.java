@@ -97,6 +97,12 @@ public final class Renderer {
         return new double[] { 16, 104, 110, 30 };
     }
 
+    /** 阵亡结算的「继续」按钮矩形 [x, y, w, h]（右下角）。GameApp 命中判定与绘制共用 */
+    public static double[] continueButtonRect(double vw, double vh) {
+        double w = 168, h = 46;
+        return new double[] { vw - w - 40, vh - h - 60, w, h };
+    }
+
     public void draw(World w, float alpha) {
         double vw = canvas.getWidth();
         double vh = canvas.getHeight();
@@ -1027,6 +1033,87 @@ public final class Renderer {
         gc.setFont(Font.font("Microsoft YaHei", 13));
         gc.setFill(Color.rgb(160, 160, 180));
         gc.fillText("按 R 重新开始", vw / 2 - 48, vh * 0.32 + 140);
+    }
+
+    /**
+     * 阵亡结算画面：半透明罩层 + 战报面板 + 右下角「继续」按钮（回大厅）。
+     * 由 GameApp 在 world.defeat() 时调用。数据取世界冻结的战报快照，不会随画面跳动。
+     */
+    public void drawDefeatOverlay(World w, double vw, double vh) {
+        gc.setFill(Color.rgb(6, 4, 10, 0.86));
+        gc.fillRect(0, 0, vw, vh);
+
+        // ---- 标题 ----
+        Font titleF = Font.font("Microsoft YaHei", FontWeight.BOLD, 46);
+        String title = "阵  亡";
+        gc.setFont(titleF);
+        gc.setFill(Color.rgb(226, 96, 106));
+        gc.fillText(title, vw / 2 - measureWidth(titleF, title) / 2, vh * 0.20);
+
+        Font subF = Font.font("Microsoft YaHei", 15);
+        String sub = "勇者倒下了，但奥术旅团的传说仍在延续";
+        gc.setFont(subF);
+        gc.setFill(Color.rgb(198, 190, 200));
+        gc.fillText(sub, vw / 2 - measureWidth(subF, sub) / 2, vh * 0.20 + 36);
+
+        // ---- 战报面板 ----
+        World.Summary s = w.summary();
+        int secs = (int) (s != null ? s.time : w.time());
+        String[][] rows = {
+                { "存活时间", String.format("%d:%02d", secs / 60, secs % 60) },
+                { "最终等级", "Lv." + (s != null ? s.level : 1) },
+                { "击杀小怪", String.valueOf(s != null ? s.minionKills : w.minionKills()) },
+                { "击杀 BOSS", String.valueOf(s != null ? s.bossKills : w.bossKills()) },
+                { "主动技能", (s != null ? s.spells : 0) + " / 3" },
+                { "被动强化", (s != null ? s.passives : 0) + " 层" },
+        };
+
+        double pw = Math.min(460, vw * 0.66);
+        double rowH = 34;
+        double ph = 30 + rows.length * rowH + 10;
+        double px = vw / 2 - pw / 2;
+        double py = vh * 0.30;
+
+        gc.setFill(Color.rgb(20, 16, 30, 0.92));
+        gc.fillRoundRect(px, py, pw, ph, 14, 14);
+        gc.setStroke(Color.rgb(150, 96, 110, 0.70));
+        gc.setLineWidth(1.5);
+        gc.strokeRoundRect(px, py, pw, ph, 14, 14);
+
+        Font kf = Font.font("Microsoft YaHei", 14);
+        Font vf = Font.font("Consolas", FontWeight.BOLD, 16);
+        double ry = py + 30 + 12;
+        for (String[] r : rows) {
+            gc.setFont(kf);
+            gc.setFill(Color.rgb(190, 184, 200));
+            gc.fillText(r[0], px + 34, ry);
+            gc.setFont(vf);
+            gc.setFill(Color.rgb(255, 226, 180));
+            gc.fillText(r[1], px + pw - 34 - measureWidth(vf, r[1]), ry);
+            ry += rowH;
+        }
+
+        // ---- 右下角「继续」按钮 ----
+        double[] b = continueButtonRect(vw, vh);
+        boolean hover = mouseX >= b[0] && mouseX <= b[0] + b[2]
+                && mouseY >= b[1] && mouseY <= b[1] + b[3];
+        gc.setFill(hover ? Color.rgb(74, 58, 30) : Color.rgb(38, 32, 52));
+        gc.fillRoundRect(b[0], b[1], b[2], b[3], 10, 10);
+        gc.setStroke(Color.rgb(255, 208, 130, hover ? 1.0 : 0.75));
+        gc.setLineWidth(hover ? 2.2 : 1.5);
+        gc.strokeRoundRect(b[0], b[1], b[2], b[3], 10, 10);
+        Font bf = Font.font("Microsoft YaHei", FontWeight.BOLD, 18);
+        String bt = "继  续";
+        gc.setFont(bf);
+        gc.setFill(Color.rgb(255, 226, 170));
+        gc.fillText(bt, b[0] + b[2] / 2 - measureWidth(bf, bt) / 2, b[1] + b[3] / 2 + 6);
+
+        // ---- 底部提示 ----
+        Font tipF = Font.font("Microsoft YaHei", 12.5);
+        String tip = "点击「继续」返回准备大厅（亦可按 R）";
+        gc.setFont(tipF);
+        gc.setFill(Color.rgb(150, 146, 166));
+        gc.fillText(tip, vw / 2 - measureWidth(tipF, tip) / 2, vh - 26);
     }
 
     /** 量字符串像素宽度，同时返回宽度（复用 measurer，避免每帧新建 Text 节点） */

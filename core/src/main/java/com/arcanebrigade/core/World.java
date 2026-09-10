@@ -150,6 +150,12 @@ public final class World {
     private int bossTier;
     /** 击败最后一只 Boss 后置位，客户端据此暂停并弹胜利画面 */
     private boolean victory;
+    /** 主控玩家阵亡后置位，客户端据此冻结并弹结算画面 */
+    private boolean defeat;
+    /** 本局击败的 Boss 数量（kills 含 Boss，结算要分开显示） */
+    private int bossKills;
+    /** 终局战报快照：胜利或阵亡时冻结一份，避免结算画面上的数字继续跳动 */
+    private Summary summary;
     /** 开火模式：true=自动索敌开火，false=手动（朝鼠标方向，按住开火） */
     private boolean autoFire = true;
     private float bossWarningTimer;
@@ -251,6 +257,7 @@ public final class World {
             // 击败最后一只 Boss = 通关。前几只倒下只清标记，不打断对局。
             if (bossTier == Balance.BOSS_LEVELS.length - 1) {
                 victory = true;
+                summary = snapshot(true, firstWizard());
             }
             bossId = -1;   // Boss 倒下：清掉阶段技能标记，下一帧 updateBossPhase 也会兜底
         }
@@ -258,6 +265,9 @@ public final class World {
         if (k == KIND_ENEMY) {
             enemiesAlive--;
             kills++;
+            if (variant[id] == V_BOSS) {
+                bossKills++;
+            }
             healWarriorsOnKill();
             if (killListener != null) {
                 killListener.onKill(id, x[id], y[id], meta[id]);
@@ -288,6 +298,12 @@ public final class World {
             } else {
                 spawnXpGem(x[id], y[id], Balance.GEM_VALUE);
             }
+        }
+        if (k == KIND_WIZARD && !defeat) {
+            // 主控玩家阵亡：立刻冻一份战报，客户端据此停止推进并弹结算画面。
+            // 之前这里什么都不做，玩家死后游戏会一直空转（没有单位可操作）却永远不结束。
+            defeat = true;
+            summary = snapshot(false, id);
         }
         kind[id] = KIND_FREE;
         liveCount--;
@@ -2561,5 +2577,80 @@ public final class World {
                 }
             }
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 终局战报
+    // ------------------------------------------------------------------
+
+    /**
+     * 一局结束（胜利或阵亡）时的战报快照。
+     *
+     * 之所以要在结束那一刻冻结一份：结算画面还在持续渲染，而世界里的计数器
+     * 可能被残留的宠物击杀、延迟结算继续改动，直接读实时值会让面板上的数字自己跳动。
+     */
+    public static final class Summary {
+        public final boolean victory;
+        public final float time;
+        public final int level;
+        /** 小怪击杀数（已扣除 Boss） */
+        public final int minionKills;
+        public final int bossKills;
+        /** 主动技能数（Loadout.SLOTS 上限） */
+        public final int spells;
+        /** 被动总层数 */
+        public final int passives;
+
+        Summary(boolean victory, float time, int level, int minionKills,
+                int bossKills, int spells, int passives) {
+            this.victory = victory;
+            this.time = time;
+            this.level = level;
+            this.minionKills = minionKills;
+            this.bossKills = bossKills;
+            this.spells = spells;
+            this.passives = passives;
+        }
+    }
+
+    /**
+     * 冻结一份当前战报。victory=true 表示通关，false 表示阵亡。
+     * wid 必须显式传入：阵亡快照是在 kill() 里取的，那时 alive 已置 false，
+     * firstWizard() 会返回 -1，拿不到 Loadout。
+     */
+    private Summary snapshot(boolean won, int wid) {
+        Loadout lo = (wid >= 0) ? loadout[wid] : null;
+        int lv = (lo != null) ? lo.level : 0;
+        int sp = (lo != null) ? lo.activeCount() : 0;
+        int pas = 0;
+        if (lo != null) {
+            for (int i = 0; i < lo.pstacks.size(); i++) {
+                pas += lo.pstacks.get(i);
+            }
+        }
+        return new Summary(won, time, lv, kills - bossKills, bossKills, sp, pas);
+    }
+
+    /** 主控玩家是否已阵亡。客户端据此冻结模拟并弹结算画面 */
+    public boolean defeat() {
+        return defeat;
+    }
+
+    /** 本局击败的 Boss 数量 */
+    public int bossKills() {
+        return bossKills;
+    }
+
+    /** 本局击败的小怪数量（总击杀扣除 Boss） */
+    public int minionKills() {
+        return kills - bossKills;
+    }
+
+    /**
+     * 终局战报快照。对局尚未结束时返回 null——结算画面只在结束后才画，
+     * 调用方（客户端）应当先判 defeat()/victory() 再取。
+     */
+    public Summary summary() {
+        return summary;
     }
 }
