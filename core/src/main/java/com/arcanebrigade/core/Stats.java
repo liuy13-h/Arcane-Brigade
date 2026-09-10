@@ -119,8 +119,8 @@ public final class Stats {
         boolean elemOverload = false;
         boolean resonance = false;
 
-        for (int s = 0; s < Loadout.PASSIVE_SLOTS; s++) {
-            int pid = lo.passives[s];
+        for (int s = 0; s < lo.passives.size(); s++) {
+            int pid = lo.passives.get(s);
             if (pid == Passives.NONE) {
                 continue;
             }
@@ -128,7 +128,7 @@ public final class Stats {
             if (d == null) {
                 continue;
             }
-            int n = lo.pstacks[s];
+            int n = lo.pstacks.get(s);
 
             dmgMul      += d.dmgMul * n;
             atkSpeed    += d.atkSpeed * n;

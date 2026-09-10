@@ -26,6 +26,8 @@ public final class World {
     public static final int KIND_ZONE       = 6;
     /** 障碍物：静态碰撞体，玩家 / 敌人 / 弹幕都绕不过去（用户明确要求场景必须含障碍） */
     public static final int KIND_OBSTACLE   = 7;
+    /** 召唤物（召唤师的宠物）：友方单位，替主人扛伤与输出，生命周期由主人掌控 */
+    public static final int KIND_MINION     = 8;
 
     /** KIND_ZONE 子类型。meta 字段区分 */
     public static final int ZONE_POISON  = 0;
@@ -114,6 +116,11 @@ public final class World {
     public final float[] kx = new float[MAX];
     public final float[] ky = new float[MAX];
 
+    /** 召唤师的下一次召唤倒计时（秒）。只有召唤师职业在用 */
+    public final float[] summonT = new float[MAX];
+    /** 宠物的站位序号（0..SUMMON_COUNT-1），用于分散站位，避免 4 只叠成一个点 */
+    public final int[] slot = new int[MAX];
+
     public final boolean[] alive = new boolean[MAX];
 
     private final int[] freeList = new int[MAX];
@@ -122,6 +129,8 @@ public final class World {
     private int liveCount;
 
     private final IntList wizards = new IntList(8);
+    /** 存活宠物列表，每帧重建。数量个位数，重建比维护增删更不容易出错 */
+    private final IntList minions = new IntList(16);
     private int enemiesAlive;
     private int kills;
 
@@ -137,10 +146,29 @@ public final class World {
     private float stageTimer;
     private boolean obstaclesGenerated;
     private int bossId = -1;
-    /** 当前 Boss 是第几只（BOSS_TIMES 的下标），HUD 显示名字用 */
+    /** 当前 Boss 是第几只（BOSS_LEVELS 的下标），HUD 显示名字用 */
     private int bossTier;
+    /** 击败最后一只 Boss 后置位，客户端据此暂停并弹胜利画面 */
+    private boolean victory;
+    /** 主控玩家阵亡后置位，客户端据此冻结并弹结算画面 */
+    private boolean defeat;
+    /** 本局击败的 Boss 数量（kills 含 Boss，结算要分开显示） */
+    private int bossKills;
+    /** 终局战报快照：胜利或阵亡时冻结一份，避免结算画面上的数字继续跳动 */
+    private Summary summary;
+    /** 开火模式：true=自动索敌开火，false=手动（朝鼠标方向，按住开火） */
+    private boolean autoFire = true;
     private float bossWarningTimer;
     private float bossSummonTimer;
+
+    /**
+     * 玩家的指挥指令：鼠标点击（或按住）时记下世界坐标。
+     * 宠物的第一优先级是"朝这里进攻"，有效期 MINION_ORDER_TIME 秒，
+     * 按住鼠标会持续刷新——这样想让宠物打哪边，就把鼠标按在哪边。
+     */
+    private float orderX;
+    private float orderY;
+    private float orderT;
 
     /** 每个角色的技能配置，只有玩家实体有 */
     private final Loadout[] loadout = new Loadout[MAX];
@@ -214,6 +242,8 @@ public final class World {
         variant[id] = V_NORMAL;
         enemyShield[id] = 0f;
         carry[id] = 0f;
+        summonT[id] = 0f;
+        slot[id] = 0;
         liveCount++;
         return id;
     }
@@ -224,12 +254,20 @@ public final class World {
         }
         alive[id] = false;
         if (id == bossId) {
+            // 击败最后一只 Boss = 通关。前几只倒下只清标记，不打断对局。
+            if (bossTier == Balance.BOSS_LEVELS.length - 1) {
+                victory = true;
+                summary = snapshot(true, firstWizard());
+            }
             bossId = -1;   // Boss 倒下：清掉阶段技能标记，下一帧 updateBossPhase 也会兜底
         }
         int k = kind[id];
         if (k == KIND_ENEMY) {
             enemiesAlive--;
             kills++;
+            if (variant[id] == V_BOSS) {
+                bossKills++;
+            }
             healWarriorsOnKill();
             if (killListener != null) {
                 killListener.onKill(id, x[id], y[id], meta[id]);
@@ -260,6 +298,12 @@ public final class World {
             } else {
                 spawnXpGem(x[id], y[id], Balance.GEM_VALUE);
             }
+        }
+        if (k == KIND_WIZARD && !defeat) {
+            // 主控玩家阵亡：立刻冻一份战报，客户端据此停止推进并弹结算画面。
+            // 之前这里什么都不做，玩家死后游戏会一直空转（没有单位可操作）却永远不结束。
+            defeat = true;
+            summary = snapshot(false, id);
         }
         kind[id] = KIND_FREE;
         liveCount--;
@@ -506,7 +550,7 @@ public final class World {
     }
 
     /**
-     * 生成一个 Boss。tier 是 BOSS_TIMES / BOSS_HP_TIERS 的下标（0..3），
+     * 生成一个 Boss。tier 是 BOSS_LEVELS / BOSS_HP_TIERS 的下标（0..3），
      * 血池、伤害、护盾都按档位取，越靠后越硬。
      *
      * 生成位置在玩家外侧但仍在可视范围内（比普通刷怪环更近），
@@ -552,15 +596,18 @@ public final class World {
 
         updateStage(dt);          // 阶段推进 + 首次障碍生成
         rebuildEnemyHash();
+        updateOrder(dt, in);      // 鼠标指挥指令的有效期
         updateStatus(dt);
         updateWizards(dt, in);
+        updateSummoners(dt);      // 召唤师：到点召唤一批宠物
         specialPassiveTick(dt);
         director.update(this, dt);
         updateEnemies(dt);
+        updateMinions(dt);        // 宠物 AI：护主 / 听指挥 / 拴绳
         if (bossId >= 0) {
             updateBossPhase(dt);  // Boss 阶段技能（预警圈 / 召唤）
         }
-        castSpells(dt);
+        castSpells(dt, in);
         updateProjectiles(dt);
         updatePickups(dt);
         updateZones(dt);
@@ -607,13 +654,15 @@ public final class World {
 
     /**
      * 生成某阶段的障碍物布局。围绕玩家散布，排除安全圈，避免出生即卡死。
-     * 障碍类型随场景主题变化（森林=树/石，雪原=冰晶，熔岩=熔岩石，终焉=尖塔）。
+     * 模板风格：沙漠遗迹——岩石 / 碎石堆 / 枯灌，另在散布中段放一口石井地标。
+     * 全部钳制在城墙内侧，不让岩石压到边界装饰上。
      */
     private void generateObstacles(int stage) {
         int w = firstWizard();
         float cx = (w >= 0) ? x[w] : 0f;
         float cy = (w >= 0) ? y[w] : 0f;
         obstacleHash.beginFrame();
+        float lim = Balance.PLAY_HALF - 34f;   // 城墙内侧再留出走位空间，岩石不贴墙
         int n = Balance.OBSTACLE_COUNT_MIN
                 + rng.nextInt(Balance.OBSTACLE_COUNT_MAX - Balance.OBSTACLE_COUNT_MIN + 1);
         for (int k = 0; k < n; k++) {
@@ -621,13 +670,22 @@ public final class World {
             // 距离：安全圈之外到散布半径之内，避免全堆在一起
             float dist = Balance.OBSTACLE_SAFE_RADIUS
                     + rng.nextFloat() * (Balance.OBSTACLE_SPREAD - Balance.OBSTACLE_SAFE_RADIUS);
-            float ox = cx + (float) Math.cos(ang) * dist;
-            float oy = cy + (float) Math.sin(ang) * dist;
+            float ox = clampCoord(cx + (float) Math.cos(ang) * dist);
+            float oy = clampCoord(cy + (float) Math.sin(ang) * dist);
+            ox = Math.max(-lim, Math.min(lim, ox));
+            oy = Math.max(-lim, Math.min(lim, oy));
             float r = Balance.OBSTACLE_R_MIN
                     + rng.nextFloat() * (Balance.OBSTACLE_R_MAX - Balance.OBSTACLE_R_MIN);
             int type = rng.nextInt(3);   // 0/1/2 三种视觉，渲染层按 stage 上色
             spawnObstacle(ox, oy, r, type);
         }
+        // 地标石井（type 3）：每阶段一座，放在散布半径中段，纯装饰但有真实碰撞
+        float wang = rng.nextFloat() * (float) (Math.PI * 2);
+        float wdist = Balance.OBSTACLE_SAFE_RADIUS
+                + (Balance.OBSTACLE_SPREAD - Balance.OBSTACLE_SAFE_RADIUS) * 0.55f;
+        float wx = Math.max(-lim, Math.min(lim, clampCoord(cx + (float) Math.cos(wang) * wdist)));
+        float wy = Math.max(-lim, Math.min(lim, clampCoord(cy + (float) Math.sin(wang) * wdist)));
+        spawnObstacle(wx, wy, 58f, 3);
     }
 
     private int spawnObstacle(float sx, float sy, float radius, int type) {
@@ -642,10 +700,27 @@ public final class World {
 
     private void rebuildEnemyHash() {
         enemyHash.beginFrame();
+        minions.clear();
         for (int i = 0; i < high; i++) {
-            if (kind[i] == KIND_ENEMY && alive[i]) {
-                enemyHash.insert(x[i], y[i], i);
+            if (!alive[i]) {
+                continue;
             }
+            if (kind[i] == KIND_ENEMY) {
+                enemyHash.insert(x[i], y[i], i);
+            } else if (kind[i] == KIND_MINION) {
+                minions.add(i);
+            }
+        }
+    }
+
+    /** 指挥指令：按住鼠标持续刷新，松手后再延续 MINION_ORDER_TIME 秒 */
+    private void updateOrder(float dt, InputCommand in) {
+        if ((in.buttons & InputCommand.BUTTON_ORDER) != 0) {
+            orderX = in.aimX;
+            orderY = in.aimY;
+            orderT = Balance.MINION_ORDER_TIME;
+        } else if (orderT > 0f) {
+            orderT -= dt;
         }
     }
 
@@ -718,6 +793,7 @@ public final class World {
             x[id] += in.dx * baseSpeed * moveMul * dt;
             y[id] += in.dy * baseSpeed * moveMul * dt;
             resolveObstacles(id);
+            clampToWorld(id);   // 玩家也被棕色城墙（边界）挡在内侧
             if (iframe[id] > 0f) {
                 iframe[id] -= dt;
             }
@@ -754,7 +830,8 @@ public final class World {
             }
             // 其余（普通 / 精英 / 分裂 / Boss）走下方通用追击 + 接触伤害
 
-            int target = nearestWizard(x[i], y[i]);
+            // 追击目标含宠物：宠物挡在怪和玩家之间时，怪会先啃宠物——这就是"护主"的实质
+            int target = nearestPlayerUnit(x[i], y[i]);
             if (target < 0) {
                 continue;
             }
@@ -801,6 +878,7 @@ public final class World {
             x[i] += (vx[i] + sepX * moveSpeed * Balance.ENEMY_SEPARATION + kx[i]) * dt;
             y[i] += (vy[i] + sepY * moveSpeed * Balance.ENEMY_SEPARATION + ky[i]) * dt;
             resolveObstacles(i);   // 障碍碰撞推出（敌人也绕不过去）
+            clampToWorld(i);       // 敌人同样被棕色城墙挡在内侧，不会被挤飞出去
 
             // 接触伤害
             float ndx = x[target] - x[i];
@@ -811,11 +889,9 @@ public final class World {
                 if (cd[i] <= 0f) {
                     if (iframe[target] <= 0f) {
                         damage(target, dmg[i]);
-                        // 无敌帧：基础 + 灵巧被动
-                        Loadout tlo = loadout[target];
-                        float ifr = Balance.WIZARD_IFRAME
-                                + (tlo != null ? tlo.stats.iframeAdd : 0f);
-                        iframe[target] = ifr;
+                        // 无敌帧：宠物用固定短帧，玩家用职业基础 + 灵巧被动
+                        iframe[target] = (kind[target] == KIND_MINION)
+                                ? Balance.MINION_IFRAME : heroIframe(target);
                     }
                     cd[i] = Balance.ENEMY_ATTACK_CD;
                 }
@@ -897,6 +973,7 @@ public final class World {
             x[id] += vx[id] * dt;
             y[id] += vy[id] * dt;
             resolveObstacles(id);
+            clampToWorld(id);   // 远程怪同样被边界挡住
             cd[id] -= dt;
             if (cd[id] <= 0f && len <= Balance.RANGED_RANGE) {
                 spawnProjectileEnemy(id, x[target], y[target]);
@@ -967,6 +1044,242 @@ public final class World {
         }
     }
 
+    // ------------------------------------------------------------------
+    // 召唤物（召唤师的宠物）
+    // ------------------------------------------------------------------
+
+    /**
+     * 生成一只宠物。血 = 当前时间点的普通小怪血 × MINION_HP_MUL（用户要求 2 倍）。
+     * 用"当前小怪血"而不是固定值，是因为小怪血随时间成长——
+     * 宠物血量跟着涨，才不会在后期变成一碰就碎的纸片。
+     */
+    public int spawnMinion(int ownerId, int slotIndex) {
+        float ang = (float) (Math.PI * 2) * slotIndex / Math.max(1, Balance.SUMMON_COUNT);
+        int id = alloc(KIND_MINION,
+                clampCoord(x[ownerId] + (float) Math.cos(ang) * 34f),
+                clampCoord(y[ownerId] + (float) Math.sin(ang) * 34f),
+                Balance.MINION_RADIUS, TEAM_PLAYER);
+        if (id < 0) {
+            return -1;
+        }
+        float hp0 = Balance.ENEMY_HP * Balance.enemyHpScale(time) * Balance.MINION_HP_MUL;
+        maxHp[id] = hp0;
+        hp[id] = hp0;
+        speed[id] = Balance.MINION_SPEED;
+        dmg[id] = Balance.MINION_DAMAGE;
+        owner[id] = ownerId;
+        slot[id] = slotIndex;
+        cd[id] = 0f;
+        minions.add(id);
+        return id;
+    }
+
+    /** 召唤师：每 SUMMON_INTERVAL 秒重新召唤一批宠物 */
+    private void updateSummoners(float dt) {
+        for (int n = 0; n < wizards.size(); n++) {
+            int id = wizards.get(n);
+            if (!alive[id]) {
+                continue;
+            }
+            Loadout lo = loadout[id];
+            if (lo == null || lo.classKind != HeroClass.SUMMONER) {
+                continue;
+            }
+            summonT[id] -= dt;
+            if (summonT[id] <= 0f) {
+                summonBatch(id);
+                summonT[id] = Balance.SUMMON_INTERVAL;
+            }
+        }
+    }
+
+    /**
+     * 召唤一批宠物：先解散上一批，再召满血的 4 只。
+     * 替换而不是叠加——叠加的话 20 分钟后会拖着几十只宠物，屏幕和性能都受不了。
+     */
+    private void summonBatch(int ownerId) {
+        for (int n = minions.size() - 1; n >= 0; n--) {
+            int m = minions.get(n);
+            if (alive[m] && owner[m] == ownerId) {
+                despawn(m);
+                // 必须同步从列表里摘掉：despawn 会把 id 放回 freeList，
+                // 紧接着的 alloc 又会拿到同一个 id，留着旧条目就会变成重复项
+                // ——HUD 会瞬间显示 8/4，updateMinions 也会把同一只宠物算两遍。
+                minions.removeAt(n);
+            }
+        }
+        for (int s = 0; s < Balance.SUMMON_COUNT; s++) {
+            spawnMinion(ownerId, s);
+        }
+    }
+
+    /** 宠物 AI：听指挥 > 护主 > 跟随；任何时候都不能跑出拴绳半径 */
+    private void updateMinions(float dt) {
+        for (int n = 0; n < minions.size(); n++) {
+            int i = minions.get(n);
+            if (!alive[i] || kind[i] != KIND_MINION) {
+                continue;
+            }
+            int o = owner[i];
+            if (o < 0 || !alive[o]) {
+                despawn(i);      // 主人没了，召唤物随之消散
+                continue;
+            }
+
+            float dxo = x[o] - x[i];
+            float dyo = y[o] - y[i];
+            float distOwner = (float) Math.sqrt(dxo * dxo + dyo * dyo);
+            boolean outOfLeash = distOwner > Balance.MINION_LEASH;
+
+            int target = outOfLeash ? -1 : pickMinionTarget(i, o);
+
+            float tx, ty;
+            if (target >= 0) {
+                tx = x[target];
+                ty = y[target];
+            } else if (distOwner > Balance.MINION_FOLLOW_DIST) {
+                // 没目标（或跑太远被拽回）：回到主人身边，按站位序号散开，别糊在脚下
+                tx = x[o] + (float) Math.cos(slot[i] * 1.57f) * Balance.MINION_FOLLOW_DIST;
+                ty = y[o] + (float) Math.sin(slot[i] * 1.57f) * Balance.MINION_FOLLOW_DIST;
+            } else {
+                tx = x[i];
+                ty = y[i];
+            }
+
+            float dx = tx - x[i];
+            float dy = ty - y[i];
+            float len = (float) Math.sqrt(dx * dx + dy * dy);
+            if (len > 1e-3f) {
+                // 被拴绳拽回时提速，避免宠物在边界外"拉皮筋"
+                float sp = speed[i] * (outOfLeash ? 1.3f : 1f);
+                vx[i] = dx / len * sp;
+                vy[i] = dy / len * sp;
+                x[i] += vx[i] * dt;
+                y[i] += vy[i] * dt;
+            }
+            separateMinions(i);
+            resolveObstacles(i);
+            clampToWorld(i);      // 宠物同样被棕色城墙挡在内侧
+
+            // 接触伤害：宠物是近战撞击，伤害吃主人的全伤害倍率
+            if (target >= 0) {
+                float ndx = x[target] - x[i];
+                float ndy = y[target] - y[i];
+                float nl = (float) Math.sqrt(ndx * ndx + ndy * ndy);
+                if (nl < r[i] + r[target]) {
+                    damage(target, minionDamage(i));
+                    cd[i] = Balance.MINION_ATTACK_CD;
+                }
+            }
+        }
+    }
+
+    /** 宠物彼此推开。只跟同一个主人的宠物算，数量个位数，O(m²) 足够 */
+    private void separateMinions(int i) {
+        int o = owner[i];
+        for (int k = 0; k < minions.size(); k++) {
+            int m = minions.get(k);
+            if (m == i || !alive[m] || owner[m] != o) {
+                continue;
+            }
+            float sx = x[i] - x[m];
+            float sy = y[i] - y[m];
+            float d2 = sx * sx + sy * sy;
+            float minD = r[i] + r[m];
+            if (d2 > 1e-4f && d2 < minD * minD) {
+                float d = (float) Math.sqrt(d2);
+                float push = (minD - d) * 0.5f;
+                x[i] += sx / d * push;
+                y[i] += sy / d * push;
+            }
+        }
+    }
+
+    private float minionDamage(int minionId) {
+        Loadout lo = loadout[owner[minionId]];
+        float mul = (lo != null) ? lo.stats.dmgMul : 1f;
+        return dmg[minionId] * mul;
+    }
+
+    /**
+     * 宠物选敌：第一优先是"朝鼠标点击的位置进攻"，其次才退回护主。
+     * 两种情况下的目标都要离主人足够近——否则扑过去的路上就会被拴绳拽回来，
+     * 表现为宠物在原地抽搐。
+     */
+    private int pickMinionTarget(int i, int o) {
+        float reach = Balance.MINION_LEASH - 24f;
+        int t = -1;
+        if (orderT > 0f) {
+            t = nearestEnemyWithin(orderX, orderY, Balance.MINION_ORDER_RANGE, x[o], y[o], reach);
+        }
+        if (t < 0) {
+            t = nearestEnemyWithin(x[o], y[o], Balance.MINION_GUARD_RANGE, x[o], y[o], reach);
+        }
+        return t;
+    }
+
+    /** 在 (sx,sy) 附近找最近的敌人，且该敌人离锚点 (cx,cy) 不超过 maxFromAnchor */
+    private int nearestEnemyWithin(float sx, float sy, float range,
+                                   float cx, float cy, float maxFromAnchor) {
+        enemyHash.query(sx, sy, range, scratch2);
+        int best = -1;
+        float bestD2 = range * range;
+        float lim2 = maxFromAnchor * maxFromAnchor;
+        for (int n = 0; n < scratch2.size(); n++) {
+            int e = scratch2.get(n);
+            if (!alive[e] || kind[e] != KIND_ENEMY) {
+                continue;
+            }
+            float ox = x[e] - cx;
+            float oy = y[e] - cy;
+            if (ox * ox + oy * oy > lim2) {
+                continue;
+            }
+            float dx = x[e] - sx;
+            float dy = y[e] - sy;
+            float d2 = dx * dx + dy * dy;
+            if (d2 < bestD2) {
+                bestD2 = d2;
+                best = e;
+            }
+        }
+        return best;
+    }
+
+    /** 玩家的"可攻击目标"：本体 + 宠物。宠物挡在路上就会被怪优先啃（护主的实质） */
+    private int nearestPlayerUnit(float sx, float sy) {
+        int best = -1;
+        float bestScore = Float.MAX_VALUE;
+        for (int n = 0; n < wizards.size(); n++) {
+            int w = wizards.get(n);
+            if (!alive[w]) {
+                continue;
+            }
+            float dx = x[w] - sx;
+            float dy = y[w] - sy;
+            float d2 = dx * dx + dy * dy;
+            if (d2 < bestScore) {
+                bestScore = d2;
+                best = w;
+            }
+        }
+        float bias = Balance.MINION_THREAT_BIAS * Balance.MINION_THREAT_BIAS;
+        for (int n = 0; n < minions.size(); n++) {
+            int m = minions.get(n);
+            if (!alive[m]) {
+                continue;
+            }
+            float dx = x[m] - sx;
+            float dy = y[m] - sy;
+            float d2 = (dx * dx + dy * dy) * bias;
+            if (d2 < bestScore) {
+                bestScore = d2;
+                best = m;
+            }
+        }
+        return best;
+    }
+
     /** 预警圈：先在地上显示 telegraph 秒，到期对玩家与敌人爆炸 */
     private void spawnWarning(float sx, float sy) {
         spawnZone(ZONE_WARNING, sx, sy, Balance.WARNING_RADIUS,
@@ -994,9 +1307,9 @@ public final class World {
         }
     }
 
-    /** 把实体钳制在世界边界内（玩家 / 敌人共用） */
+    /** 把实体钳制在可玩区内（城墙内侧边缘，玩家 / 敌人共用） */
     private void clampToWorld(int id) {
-        float h = Balance.WORLD_HALF;
+        float h = Balance.PLAY_HALF;
         if (x[id] < -h) {
             x[id] = -h;
         } else if (x[id] > h) {
@@ -1017,9 +1330,9 @@ public final class World {
         return HeroClass.baseIframe(ck) + add;
     }
 
-    /** 把单个坐标钳制到世界边界内（生成点用，避免怪刷在边界外再被 clamp 瞬移） */
+    /** 把单个坐标钳制到可玩区内（生成点用，避免怪刷进棕色城墙再被 clamp 瞬移） */
     private static float clampCoord(float v) {
-        return Math.max(-Balance.WORLD_HALF, Math.min(Balance.WORLD_HALF, v));
+        return Math.max(-Balance.PLAY_HALF, Math.min(Balance.PLAY_HALF, v));
     }
 
     /** 最近的经验宝石（小偷用） */
@@ -1044,8 +1357,9 @@ public final class World {
     // 法术
     // ------------------------------------------------------------------
 
-    /** 自动施法。玩家只管走位，所有主动技能都在这里按各自冷却自动放出去。 */
-    private void castSpells(float dt) {
+    /** 施法。自动模式下自动索敌放技能；手动模式下按住开火键朝 aim 方向放。 */
+    private void castSpells(float dt, InputCommand in) {
+        boolean manual = !autoFire;
         for (int n = 0; n < wizards.size(); n++) {
             int id = wizards.get(n);
             if (!alive[id]) {
@@ -1068,7 +1382,18 @@ public final class World {
                 if (lo.cd[s] > 0f) {
                     continue;
                 }
-                if (castOne(def, raw, id, s)) {
+                boolean fired;
+                if (manual) {
+                    // 手动：没按住开火键就不放，也不进冷却
+                    if ((in.buttons & InputCommand.BUTTON_FIRE) == 0) {
+                        continue;
+                    }
+                    float facing = (float) Math.atan2(in.aimY - y[id], in.aimX - x[id]);
+                    fired = castOne(def, raw, id, s, true, facing);
+                } else {
+                    fired = castOne(def, raw, id, s, false, 0f);
+                }
+                if (fired) {
                     float cdTime = def.cooldown / Math.max(0.1f, lo.stats.atkSpeed);
                     lo.cd[s] = cdTime;
                 }
@@ -1098,16 +1423,18 @@ public final class World {
         return p;
     }
 
-    /** 施放一个法术。返回是否成功出手（没找到目标就不进冷却，否则会被远处的怪白白卡住） */
-    private boolean castOne(SpellDef def, int rawSpellId, int caster, int slot) {
+    /** 施放一个法术。返回是否成功出手（自动模式没找到目标就不进冷却，手动模式朝 aim 方向必出手） */
+    private boolean castOne(SpellDef def, int rawSpellId, int caster, int slot, boolean manualAim, float facing) {
         Loadout lo = loadout[caster];
         Stats st = lo.stats;
-        float seekRange = (def.form == SpellDef.Form.MELEE_ARC) ? def.arcRadius : def.range;
-        int target = nearestEnemy(x[caster], y[caster], seekRange);
-        if (target < 0) {
-            return false;
+        if (!manualAim) {
+            float seekRange = (def.form == SpellDef.Form.MELEE_ARC) ? def.arcRadius : def.range;
+            int target = nearestEnemy(x[caster], y[caster], seekRange);
+            if (target < 0) {
+                return false;
+            }
+            facing = (float) Math.atan2(y[target] - y[caster], x[target] - x[caster]);
         }
-        float facing = (float) Math.atan2(y[target] - y[caster], x[target] - x[caster]);
         float power = computePower(def, lo);
 
         switch (def.form) {
@@ -1257,26 +1584,50 @@ public final class World {
                     }
                 }
             } else {
-                // 敌方弹幕：只打玩家（友军伤害 D6 再做）
-                for (int n = 0; n < wizards.size(); n++) {
-                    int wz = wizards.get(n);
-                    if (!alive[wz]) {
-                        continue;
-                    }
-                    float dx = x[wz] - x[i];
-                    float dy = y[wz] - y[i];
-                    float rr = r[wz] + r[i];
-                    if (dx * dx + dy * dy <= rr * rr) {
-                        if (iframe[wz] <= 0f) {
-                            damage(wz, dmg[i]);
-                            iframe[wz] = heroIframe(wz);
-                        }
-                        kill(i);
-                        break;
-                    }
+                // 敌方弹幕：打玩家本体，也会被宠物挡下（宠物护主的一部分）
+                if (enemyBoltHit(i)) {
+                    kill(i);
+                    continue;
                 }
             }
         }
+    }
+
+    /** 敌方弹幕命中判定：先判玩家本体，再判宠物。返回是否命中（命中后弹幕自行销毁） */
+    private boolean enemyBoltHit(int p) {
+        for (int n = 0; n < wizards.size(); n++) {
+            int wz = wizards.get(n);
+            if (!alive[wz]) {
+                continue;
+            }
+            float dx = x[wz] - x[p];
+            float dy = y[wz] - y[p];
+            float rr = r[wz] + r[p];
+            if (dx * dx + dy * dy <= rr * rr) {
+                if (iframe[wz] <= 0f) {
+                    damage(wz, dmg[p]);
+                    iframe[wz] = heroIframe(wz);
+                }
+                return true;
+            }
+        }
+        for (int n = 0; n < minions.size(); n++) {
+            int m = minions.get(n);
+            if (!alive[m]) {
+                continue;
+            }
+            float dx = x[m] - x[p];
+            float dy = y[m] - y[p];
+            float rr = r[m] + r[p];
+            if (dx * dx + dy * dy <= rr * rr) {
+                if (iframe[m] <= 0f) {
+                    damage(m, dmg[p]);
+                    iframe[m] = Balance.MINION_IFRAME;
+                }
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -1841,7 +2192,23 @@ public final class World {
             if (dx * dx + dy * dy <= rr * rr) {
                 if (iframe[wz] <= 0f) {
                     damage(wz, dmg);
-                    iframe[wz] = Balance.WIZARD_IFRAME;
+                    iframe[wz] = heroIframe(wz);
+                }
+            }
+        }
+        // 宠物同样吃 Boss 的范围技：站得近就得跟着挨打，否则召唤师等于白嫖一个免伤盾
+        for (int n = 0; n < minions.size(); n++) {
+            int m = minions.get(n);
+            if (!alive[m]) {
+                continue;
+            }
+            float dx = x[m] - ex;
+            float dy = y[m] - ey;
+            float rr = radius + r[m];
+            if (dx * dx + dy * dy <= rr * rr) {
+                if (iframe[m] <= 0f) {
+                    damage(m, dmg);
+                    iframe[m] = Balance.MINION_IFRAME;
                 }
             }
         }
@@ -2027,6 +2394,23 @@ public final class World {
         this.killListener = l;
     }
 
+    /** 召唤师的下一次召唤倒计时（秒）。非召唤师恒为 0 */
+    public float summonTimer(int wizardId) {
+        return (wizardId >= 0 && wizardId < MAX) ? summonT[wizardId] : 0f;
+    }
+
+    /** 某个玩家当前存活的宠物数（HUD 显示用） */
+    public int minionCount(int ownerId) {
+        int n = 0;
+        for (int k = 0; k < minions.size(); k++) {
+            int m = minions.get(k);
+            if (alive[m] && owner[m] == ownerId) {
+                n++;
+            }
+        }
+        return n;
+    }
+
     public float time() {
         return time;
     }
@@ -2060,9 +2444,37 @@ public final class World {
         return stage;
     }
 
+    /**
+     * 主控玩家的等级。WaveDirector 用它决定 Boss 何时登场。
+     * 没有玩家（还没生成 / 全灭）时返回 0，这样不会误触发刷 Boss。
+     */
+    public int playerLevel() {
+        int w = firstWizard();
+        if (w < 0) {
+            return 0;
+        }
+        Loadout lo = loadout[w];
+        return (lo == null) ? 0 : lo.level;
+    }
+
     /** 当前 Boss 实体 id，-1 表示没有 Boss 在场 */
     public int bossId() {
         return bossId;
+    }
+
+    /** 是否已击败最终 Boss（胜利判定）。一旦置位不会复位 */
+    public boolean victory() {
+        return victory;
+    }
+
+    /** 开火模式开关。手动模式下玩家按住鼠标左键朝鼠标方向开火 */
+    public void setAutoFire(boolean auto) {
+        this.autoFire = auto;
+    }
+
+    /** 当前是否自动开火 */
+    public boolean isAutoFire() {
+        return autoFire;
     }
 
     /** 当前 Boss 档位（BOSS_NAMES 下标），没有 Boss 时返回 -1 */
@@ -2165,5 +2577,80 @@ public final class World {
                 }
             }
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 终局战报
+    // ------------------------------------------------------------------
+
+    /**
+     * 一局结束（胜利或阵亡）时的战报快照。
+     *
+     * 之所以要在结束那一刻冻结一份：结算画面还在持续渲染，而世界里的计数器
+     * 可能被残留的宠物击杀、延迟结算继续改动，直接读实时值会让面板上的数字自己跳动。
+     */
+    public static final class Summary {
+        public final boolean victory;
+        public final float time;
+        public final int level;
+        /** 小怪击杀数（已扣除 Boss） */
+        public final int minionKills;
+        public final int bossKills;
+        /** 主动技能数（Loadout.SLOTS 上限） */
+        public final int spells;
+        /** 被动总层数 */
+        public final int passives;
+
+        Summary(boolean victory, float time, int level, int minionKills,
+                int bossKills, int spells, int passives) {
+            this.victory = victory;
+            this.time = time;
+            this.level = level;
+            this.minionKills = minionKills;
+            this.bossKills = bossKills;
+            this.spells = spells;
+            this.passives = passives;
+        }
+    }
+
+    /**
+     * 冻结一份当前战报。victory=true 表示通关，false 表示阵亡。
+     * wid 必须显式传入：阵亡快照是在 kill() 里取的，那时 alive 已置 false，
+     * firstWizard() 会返回 -1，拿不到 Loadout。
+     */
+    private Summary snapshot(boolean won, int wid) {
+        Loadout lo = (wid >= 0) ? loadout[wid] : null;
+        int lv = (lo != null) ? lo.level : 0;
+        int sp = (lo != null) ? lo.activeCount() : 0;
+        int pas = 0;
+        if (lo != null) {
+            for (int i = 0; i < lo.pstacks.size(); i++) {
+                pas += lo.pstacks.get(i);
+            }
+        }
+        return new Summary(won, time, lv, kills - bossKills, bossKills, sp, pas);
+    }
+
+    /** 主控玩家是否已阵亡。客户端据此冻结模拟并弹结算画面 */
+    public boolean defeat() {
+        return defeat;
+    }
+
+    /** 本局击败的 Boss 数量 */
+    public int bossKills() {
+        return bossKills;
+    }
+
+    /** 本局击败的小怪数量（总击杀扣除 Boss） */
+    public int minionKills() {
+        return kills - bossKills;
+    }
+
+    /**
+     * 终局战报快照。对局尚未结束时返回 null——结算画面只在结束后才画，
+     * 调用方（客户端）应当先判 defeat()/victory() 再取。
+     */
+    public Summary summary() {
+        return summary;
     }
 }

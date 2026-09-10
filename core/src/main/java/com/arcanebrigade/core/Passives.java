@@ -71,16 +71,16 @@ public final class Passives {
     static {
         // ============ 输出类（8）============
         TABLE[POWER_TRAINING] = PassiveDef.builder(POWER_TRAINING, "力量训练", Kind.OUTPUT, PassiveDef.COMMON)
-                .desc("全伤害 +8%").dmg(0.08f).stacks(5).build();
+                .desc("全伤害 +12%").dmg(0.12f).stacks(5).build();
 
         TABLE[PRECISION] = PassiveDef.builder(PRECISION, "精准", Kind.OUTPUT, PassiveDef.COMMON)
-                .desc("暴击率 +6%").crit(0.06f).stacks(5).build();
+                .desc("暴击率 +8%").crit(0.08f).stacks(5).build();
 
         TABLE[DEADLY_STRIKE] = PassiveDef.builder(DEADLY_STRIKE, "致命一击", Kind.OUTPUT, PassiveDef.RARE)
-                .desc("暴击伤害 +35%").critDmg(0.35f).stacks(3).build();
+                .desc("暴击伤害 +50%").critDmg(0.50f).stacks(3).build();
 
         TABLE[ALACRITY] = PassiveDef.builder(ALACRITY, "疾速", Kind.OUTPUT, PassiveDef.COMMON)
-                .desc("攻击速度 +10%").atkSpeed(0.10f).stacks(5).build();
+                .desc("攻击速度 +14%").atkSpeed(0.14f).stacks(5).build();
 
         TABLE[PIERCING_SHOT] = PassiveDef.builder(PIERCING_SHOT, "穿透弹", Kind.OUTPUT, PassiveDef.RARE)
                 .desc("所有投射物 +1 穿透").pierce(1).stacks(3).build();
@@ -89,23 +89,23 @@ public final class Passives {
                 .desc("投射物命中后额外弹射 1 次").bounce(1).stacks(2).build();
 
         TABLE[MAGNIFY] = PassiveDef.builder(MAGNIFY, "巨化", Kind.OUTPUT, PassiveDef.COMMON)
-                .desc("所有范围效果 +15%").area(0.15f).stacks(4).build();
+                .desc("所有范围效果 +20%").area(0.20f).stacks(4).build();
 
         TABLE[LINGERING_BURN] = PassiveDef.builder(LINGERING_BURN, "延烧", Kind.OUTPUT, PassiveDef.COMMON)
-                .desc("持续伤害时长 +30%").dotDur(0.30f).stacks(3).build();
+                .desc("持续伤害时长 +40%").dotDur(0.40f).stacks(3).build();
 
         // ============ 生存类（7）============
         TABLE[VIGOR] = PassiveDef.builder(VIGOR, "强健", Kind.SURVIVAL, PassiveDef.COMMON)
-                .desc("最大生命 +20").hp(20f).stacks(5).build();
+                .desc("最大生命 +25").hp(25f).stacks(5).build();
 
         TABLE[BULWARK] = PassiveDef.builder(BULWARK, "坚壁", Kind.SURVIVAL, PassiveDef.COMMON)
                 .desc("受伤减免 8%").dr(0.08f).stacks(4).build();
 
         TABLE[REGENERATION] = PassiveDef.builder(REGENERATION, "再生", Kind.SURVIVAL, PassiveDef.COMMON)
-                .desc("每秒回血 +0.8").regen(0.8f).stacks(4).build();
+                .desc("每秒回血 +1.0").regen(1.0f).stacks(4).build();
 
         TABLE[SWIFTNESS] = PassiveDef.builder(SWIFTNESS, "迅捷", Kind.SURVIVAL, PassiveDef.COMMON)
-                .desc("移动速度 +8%").move(0.08f).stacks(5).build();
+                .desc("移动速度 +10%").move(0.10f).stacks(5).build();
 
         TABLE[NIMBLE] = PassiveDef.builder(NIMBLE, "灵巧", Kind.SURVIVAL, PassiveDef.RARE)
                 .desc("受击无敌帧 +0.15 秒").iframe(0.15f).stacks(2).build();
@@ -118,10 +118,10 @@ public final class Passives {
 
         // ============ 资源类（5）============
         TABLE[GREED] = PassiveDef.builder(GREED, "贪婪", Kind.RESOURCE, PassiveDef.COMMON)
-                .desc("拾取范围 +40%").pickup(0.40f).stacks(3).build();
+                .desc("拾取范围 +50%").pickup(0.50f).stacks(3).build();
 
         TABLE[WISDOM] = PassiveDef.builder(WISDOM, "智慧", Kind.RESOURCE, PassiveDef.COMMON)
-                .desc("经验获取 +15%").xp(0.15f).stacks(4).build();
+                .desc("经验获取 +20%").xp(0.20f).stacks(4).build();
 
         TABLE[REROLL] = PassiveDef.builder(REROLL, "重抽", Kind.RESOURCE, PassiveDef.RARE)
                 .desc("每 20 秒获得一次免费重抽").reroll().build();
@@ -134,16 +134,16 @@ public final class Passives {
 
         // ============ 元素类（6）============
         TABLE[FIRE_AFFINITY] = PassiveDef.builder(FIRE_AFFINITY, "火焰亲和", Kind.ELEMENT, PassiveDef.COMMON)
-                .desc("火焰伤害 +25%").fire(0.25f).stacks(3).build();
+                .desc("火焰伤害 +35%").fire(0.35f).stacks(3).build();
 
         TABLE[FROST_AFFINITY] = PassiveDef.builder(FROST_AFFINITY, "冰霜亲和", Kind.ELEMENT, PassiveDef.COMMON)
-                .desc("冰霜效果时长 +40%").frostDur(0.40f).stacks(3).build();
+                .desc("冰霜效果时长 +50%").frostDur(0.50f).stacks(3).build();
 
         TABLE[SHOCK_AFFINITY] = PassiveDef.builder(SHOCK_AFFINITY, "雷电亲和", Kind.ELEMENT, PassiveDef.RARE)
                 .desc("雷电弹射次数 +1").shockChain(1).stacks(3).build();
 
         TABLE[ARCANE_AFFINITY] = PassiveDef.builder(ARCANE_AFFINITY, "秘法亲和", Kind.ELEMENT, PassiveDef.COMMON)
-                .desc("秘法伤害 +20%").arcane(0.20f).stacks(3).build();
+                .desc("秘法伤害 +30%").arcane(0.30f).stacks(3).build();
 
         TABLE[RESONANCE] = PassiveDef.builder(RESONANCE, "元素共鸣", Kind.ELEMENT, PassiveDef.RARE)
                 .desc("每装备一种元素，全伤害 +5%").resonance().build();

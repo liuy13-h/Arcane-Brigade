@@ -1,10 +1,10 @@
 package com.arcanebrigade.core;
 
 /**
- * 一个角色的状态：构筑（3 主动 + 8 被动）+ 成长（等级经验）+ 各类计时器。
+ * 一个角色的状态：构筑（3 主动 + 无上限被动）+ 成长（等级经验）+ 各类计时器。
  *
  * 主动刻意只给 3 个——类幸存者里主动技能是自动释放的，堆多了玩家根本感知不到，
- * 反而稀释构筑焦点。深度交给 8 个被动槽（见设计文档"孤注一掷"）。
+ * 反而稀释构筑焦点。深度交给无上限的被动（见设计文档"孤注一掷"）。
  *
  * 冷却是每个槽独立的，和实体上的 cd[] 分开存：
  * 实体 cd[] 只给敌人接触伤害用，混在一起会让"法术冷却"和"攻击间隔"互相踩。
@@ -16,15 +16,13 @@ public final class Loadout {
 
     /** 主动槽上限。这是硬设计，不要随手调大 */
     public static final int SLOTS = 3;
-    /** 被动槽上限 */
-    public static final int PASSIVE_SLOTS = 8;
 
     public final int[] spells = new int[SLOTS];
     public final float[] cd = new float[SLOTS];
 
-    public final int[] passives = new int[PASSIVE_SLOTS];
-    /** 每个槽叠了几层。同一被动可叠加，直到 PassiveDef.maxStacks */
-    public final int[] pstacks = new int[PASSIVE_SLOTS];
+    /** 被动：无上限。passives[i] 是第 i 种被动，pstacks[i] 是它叠的层数（直到 PassiveDef.maxStacks） */
+    public final IntList passives = new IntList(16);
+    public final IntList pstacks = new IntList(16);
 
     /** 哪些主动已进化。位 n 为 1 表示 spells 里的基础形态 n 已进化 */
     public int evolvedMask;
@@ -133,7 +131,7 @@ public final class Loadout {
     // ------------------------------------------------------------------
 
     /**
-     * 获得一个被动。已拥有且未满层则叠层，否则占一个新槽，槽满返回 false。
+     * 获得一个被动。已拥有且未满层则叠层，否则开一个新槽（无上限，永远成功）。
      *
      * 注意：这里不直接改任何数值，只改构筑然后重算 Stats——
      * "数值只在 Stats 里算一次"是 D3 最重要的纪律。
@@ -143,22 +141,19 @@ public final class Loadout {
         if (def == null) {
             return false;
         }
-        for (int i = 0; i < PASSIVE_SLOTS; i++) {
-            if (passives[i] == passiveId && pstacks[i] < def.maxStacks) {
-                pstacks[i]++;
+        int n = passives.size();
+        for (int i = 0; i < n; i++) {
+            if (passives.get(i) == passiveId && pstacks.get(i) < def.maxStacks) {
+                pstacks.set(i, pstacks.get(i) + 1);
                 refresh();
                 return true;
             }
         }
-        for (int i = 0; i < PASSIVE_SLOTS; i++) {
-            if (passives[i] == Passives.NONE) {
-                passives[i] = passiveId;
-                pstacks[i] = 1;
-                refresh();
-                return true;
-            }
-        }
-        return false;
+        // 无上限：未满层的被动开新槽，空间永远够
+        passives.add(passiveId);
+        pstacks.add(1);
+        refresh();
+        return true;
     }
 
     public boolean hasPassive(int passiveId) {
@@ -166,31 +161,17 @@ public final class Loadout {
     }
 
     public int passiveStacks(int passiveId) {
-        for (int i = 0; i < PASSIVE_SLOTS; i++) {
-            if (passives[i] == passiveId) {
-                return pstacks[i];
+        int n = passives.size();
+        for (int i = 0; i < n; i++) {
+            if (passives.get(i) == passiveId) {
+                return pstacks.get(i);
             }
         }
         return 0;
     }
 
     public int passiveCount() {
-        int n = 0;
-        for (int i = 0; i < PASSIVE_SLOTS; i++) {
-            if (passives[i] != Passives.NONE) {
-                n++;
-            }
-        }
-        return n;
-    }
-
-    public int firstEmptyPassive() {
-        for (int i = 0; i < PASSIVE_SLOTS; i++) {
-            if (passives[i] == Passives.NONE) {
-                return i;
-            }
-        }
-        return -1;
+        return passives.size();
     }
 
     // ------------------------------------------------------------------

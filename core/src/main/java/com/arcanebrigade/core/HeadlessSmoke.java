@@ -13,7 +13,7 @@ package com.arcanebrigade.core;
  *   java -cp core/target/classes com.arcanebrigade.core.HeadlessSmoke [帧数] react      元素反应定向验证
  *   java -cp core/target/classes com.arcanebrigade.core.HeadlessSmoke [帧数] upgrade    D3 升级链路：自动选升级跑 N 秒
  *   java -cp core/target/classes com.arcanebrigade.core.HeadlessSmoke [帧数] stage      D4 场景/障碍/阶段/Boss：越阶段边界 + 显式刷 Boss
- *   java -cp core/target/classes com.arcanebrigade.core.HeadlessSmoke [帧数] classes   三职业：各生成巫师/战士/弓箭手，验证技能开火与抽卡
+ *   java -cp core/target/classes com.arcanebrigade.core.HeadlessSmoke [帧数] classes   四职业：各生成巫师/战士/弓箭手/召唤师，验证技能开火、抽卡与宠物
  *   java -cp core/target/classes com.arcanebrigade.core.HeadlessSmoke [帧数] debug      逐步诊断
  */
 public final class HeadlessSmoke {
@@ -283,8 +283,8 @@ public final class HeadlessSmoke {
         System.out.printf("模拟 %d 帧 = %.1f 秒，耗时 %.0f ms，平均 %.3f ms/帧%n",
                 frames, frames * Balance.FIXED_STEP, (t1 - t0) / 1e6,
                 (t1 - t0) / 1e6 / frames);
-        System.out.printf("等级：%d，xpRatio=%.2f，被动数 %d / %d%n",
-                lo.level, lo.xpRatio(), lo.passiveCount(), Loadout.PASSIVE_SLOTS);
+        System.out.printf("等级：%d，xpRatio=%.2f，被动数 %d（无上限）%n",
+                lo.level, lo.xpRatio(), lo.passiveCount());
         System.out.printf("主动槽：%d 个，%s | %s | %s%n",
                 lo.activeCount(),
                 spellLabel(lo.spells[0], lo.evolvedMask),
@@ -339,6 +339,7 @@ public final class HeadlessSmoke {
         int maxEnemies = 0;
         int lastBoss = -1;
         int bossSeen = 0;
+        int lvlIdx = 0;
         long t0 = System.nanoTime();
         for (int i = 0; i < frames; i++) {
             double base = i * 0.004;
@@ -352,17 +353,24 @@ public final class HeadlessSmoke {
                 System.out.printf("  阶段切换 -> stage %d  t=%.1fs  障碍物 %d  场上敌人 %d%n",
                         s, w.time(), w.obstacleCount(), w.enemyCount());
             }
-            // Boss 登场/倒下：验证 BOSS_TIMES 时间表真的把 Boss 送进场
+            // Boss 登场/倒下：验证 BOSS_LEVELS 等级表真的把 Boss 送进场
             int b = w.bossId();
             if (b != lastBoss) {
                 if (b >= 0) {
                     bossSeen++;
-                    System.out.printf("  Boss 登场：%s  t=%.1fs  HP=%.0f  场上敌人 %d%n",
-                            w.bossName(), w.time(), w.maxHp[b], w.enemyCount());
+                    System.out.printf("  Boss 登场：%s  Lv.%d  t=%.1fs  HP=%.0f  场上敌人 %d%n",
+                            w.bossName(), w.playerLevel(), w.time(), w.maxHp[b], w.enemyCount());
                 } else {
-                    System.out.printf("  Boss 被击杀  t=%.1fs%n", w.time());
+                    System.out.printf("  Boss 被击杀  Lv.%d  t=%.1fs%n", w.playerLevel(), w.time());
                 }
                 lastBoss = b;
+            }
+            // 记录玩家升到每个 Boss 触发等级的时间点，用来评估等级曲线节奏
+            if (lvlIdx < Balance.BOSS_LEVELS.length
+                    && w.playerLevel() >= Balance.BOSS_LEVELS[lvlIdx]) {
+                System.out.printf("  达到 Lv.%d  t=%.1fs  场上敌人 %d%n",
+                        Balance.BOSS_LEVELS[lvlIdx], w.time(), w.enemyCount());
+                lvlIdx++;
             }
             maxObstacles = Math.max(maxObstacles, w.obstacleCount());
             maxEnemies = Math.max(maxEnemies, w.enemyCount());
@@ -386,22 +394,28 @@ public final class HeadlessSmoke {
                 frames, frames * Balance.FIXED_STEP, (t1 - t0) / 1e6);
         System.out.printf("到达阶段 %d，最大障碍数 %d（安全圈外生成），峰值敌人 %d，结束敌人 %d%n",
                 lastStage, maxObstacles, maxEnemies, w.enemyCount());
-        System.out.printf("时间表 Boss 登场次数 %d，血量成长系数 t=%.0fs 时 %.1fx%n",
-                bossSeen, w.time(), Balance.enemyHpScale(w.time()));
+        System.out.printf("等级表 Boss 登场次数 %d / %d，结束时 Lv.%d，血量成长系数 t=%.0fs 时 %.1fx%n",
+                bossSeen, Balance.BOSS_LEVELS.length, w.playerLevel(),
+                w.time(), Balance.enemyHpScale(w.time()));
         System.out.printf("显式 Boss id=%d，30 秒后 %s%n",
                 bossIdAtSpawn, bossGone ? "已被击杀（阶段技能路径已覆盖）" : "仍存活");
         System.out.println("OK：场景 / 障碍 / 阶段 / Boss 代码路径无异常");
     }
 
     /**
-     * 三职业验证：分别生成巫师 / 战士 / 弓箭手，各带满本职业技能池，
-     * 跑一段时间后确认三系技能都能正常开火、击杀，且按职业抽卡不抛异常。
+     * 四职业验证：分别生成巫师 / 战士 / 弓箭手 / 召唤师，各带满本职业技能池，
+     * 跑一段时间后确认各系技能都能正常开火、击杀，且按职业抽卡不抛异常。
+     * 召唤师额外验证：宠物按节奏成批刷新、数量封顶、不会跑出拴绳范围。
      */
     private static void runClasses(int frames) {
+        int n = HeroClass.COUNT - 1;
         World w = new World(20260908L);
-        int[] ids = new int[3];
-        int[] cls = { HeroClass.WIZARD, HeroClass.WARRIOR, HeroClass.ARCHER };
-        for (int i = 0; i < 3; i++) {
+        int[] ids = new int[n];
+        int[] cls = new int[n];
+        for (int i = 0; i < n; i++) {
+            cls[i] = i + 1;
+        }
+        for (int i = 0; i < n; i++) {
             int id = w.spawnWizard((i - 1) * 140f, 0f, cls[i]);
             ids[i] = id;
             int[] pool = Spells.poolForClass(cls[i]);
@@ -415,20 +429,44 @@ public final class HeadlessSmoke {
                 lo.set(s, pool[s]);
             }
         }
+        int summonerIdx = -1;
+        for (int i = 0; i < n; i++) {
+            if (cls[i] == HeroClass.SUMMONER) {
+                summonerIdx = i;
+            }
+        }
 
         InputCommand in = new InputCommand();
+        int maxMinions = 0;
+        float maxLeash = 0f;
         long t0 = System.nanoTime();
         for (int i = 0; i < frames; i++) {
             double base = i * 0.004;
             double flip = ((i / 30) & 1) == 0 ? 1.0 : -1.0;
             in.set((float) (Math.cos(base) * flip), (float) (Math.sin(base) * flip));
-            for (int k = 0; k < 3; k++) {
+            for (int k = 0; k < n; k++) {
                 w.hp[ids[k]] = w.maxHp[ids[k]];
             }
+            // 每隔一阵点一次鼠标：走"宠物按点击方向进攻"这条分支
+            in.buttons |= ((i % 90) < 45) ? InputCommand.BUTTON_ORDER : 0;
+            in.aimX = (float) (Math.cos(base) * 400f);
+            in.aimY = (float) (Math.sin(base) * 400f);
             w.step(Balance.FIXED_STEP, in);
-            // 周期性灌经验并应用升级，验证三职业专属抽卡路径
+
+            if (summonerIdx >= 0) {
+                int owner = ids[summonerIdx];
+                maxMinions = Math.max(maxMinions, w.minionCount(owner));
+                float ox = w.x[owner];
+                float oy = w.y[owner];
+                for (int e = 0; e < w.highWater(); e++) {
+                    if (w.alive[e] && w.kind[e] == World.KIND_MINION) {
+                        maxLeash = Math.max(maxLeash, dist(ox, oy, w.x[e], w.y[e]));
+                    }
+                }
+            }
+            // 周期性灌经验并应用升级，验证各职业专属抽卡路径
             if (i % 120 == 0) {
-                for (int k = 0; k < 3; k++) {
+                for (int k = 0; k < n; k++) {
                     Loadout lo = w.loadout(ids[k]);
                     lo.gainXp(2f);
                     while (lo.pendingUps > 0) {
@@ -443,10 +481,10 @@ public final class HeadlessSmoke {
         }
         long t1 = System.nanoTime();
 
-        System.out.println("=== 三职业技能 / 抽卡验证 ===");
+        System.out.println("=== 四职业技能 / 抽卡验证 ===");
         System.out.printf("模拟 %d 帧 = %.1f 秒，耗时 %.0f ms，平均 %.3f ms/帧%n",
                 frames, frames * Balance.FIXED_STEP, (t1 - t0) / 1e6, (t1 - t0) / 1e6 / frames);
-        for (int k = 0; k < 3; k++) {
+        for (int k = 0; k < n; k++) {
             Loadout lo = w.loadout(ids[k]);
             System.out.printf("  [%s] 等级 %d  被动 %d  最大HP %.0f  减伤 %.0f%%  暴击 %.0f%%%n",
                     HeroClass.name(cls[k]), lo.level, lo.passiveCount(),
@@ -454,10 +492,38 @@ public final class HeadlessSmoke {
         }
         System.out.printf("累计击杀：%d  存活实体 %d%n", w.killCount(), w.liveCount());
         boolean ok = w.killCount() > 0;
-        System.out.println(ok ? "OK：三职业技能均正常开火并击杀" : "!! 失败：未产生击杀");
+        System.out.println(ok ? "OK：四职业技能均正常开火并击杀" : "!! 失败：未产生击杀");
+
+        if (summonerIdx >= 0) {
+            int owner = ids[summonerIdx];
+            System.out.printf("召唤师：峰值宠物 %d（上限 %d）  最远拴绳距离 %.0f（上限 %.0f）%n",
+                    maxMinions, Balance.SUMMON_COUNT, maxLeash, Balance.MINION_LEASH);
+            if (maxMinions < Balance.SUMMON_COUNT) {
+                System.out.println("!! 失败：宠物从未成批召唤");
+                ok = false;
+            }
+            if (maxMinions > Balance.SUMMON_COUNT) {
+                System.out.println("!! 失败：宠物数量超出上限（旧批次未解散）");
+                ok = false;
+            }
+            // 拴绳留 40px 容差：分离推挤与追击刹不住车会有少量越界
+            if (maxLeash > Balance.MINION_LEASH + 40f) {
+                System.out.println("!! 失败：宠物跑出了拴绳范围");
+                ok = false;
+            }
+            if (ok) {
+                System.out.println("OK：宠物成批召唤、数量封顶且未脱离拴绳");
+            }
+        }
         if (!ok) {
             System.exit(1);
         }
+    }
+
+    private static float dist(float ax, float ay, float bx, float by) {
+        float dx = bx - ax;
+        float dy = by - ay;
+        return (float) Math.sqrt(dx * dx + dy * dy);
     }
 
     private static String spellLabel(int raw, int evolvedMask) {

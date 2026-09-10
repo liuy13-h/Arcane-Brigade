@@ -51,16 +51,32 @@
         <version>${javafx.version}</version>
         <classifier>${javafx.platform}</classifier>
       </dependency>
+      <dependency>
+        <groupId>org.openjfx</groupId>
+        <artifactId>javafx-media</artifactId>
+        <version>${javafx.version}</version>
+        <classifier>${javafx.platform}</classifier>
+      </dependency>
     </dependencies>
   </dependencyManagement>
 
   <build>
     <pluginManagement>
       <plugins>
+        <!--
+          插件配置放在 pluginManagement 里统一管理：mainClass 在这里声明一次，
+          client 模块直接继承即可运行。
+          注意：本项目是 core + client 两个模块的聚合工程，父工程 packaging=pom，
+          直接在工作区根目录跑 `mvn javafx:run` 会让父工程也尝试启动（没有可运行的类）。
+          正确用法是指定模块：mvn -pl client javafx:run（需先 mvn install 把 core 装到本地仓库）。
+        -->
         <plugin>
           <groupId>org.openjfx</groupId>
           <artifactId>javafx-maven-plugin</artifactId>
           <version>0.0.8</version>
+          <configuration>
+            <mainClass>com.arcanebrigade.client.GameLauncher</mainClass>
+          </configuration>
         </plugin>
       </plugins>
     </pluginManagement>

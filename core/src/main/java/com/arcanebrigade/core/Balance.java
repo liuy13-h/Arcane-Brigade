@@ -19,11 +19,15 @@ public final class Balance {
     /** 战士无敌帧：明显削弱。战士有 15% 减伤 + 击杀回血，无需长时间无敌保护 */
     public static final float WARRIOR_IFRAME = 0.12f;
 
-    // ---- 战士 / 弓箭手（职业基础属性，设计文档第 2 节）----
+    // ---- 战士 / 弓箭手 / 召唤师（职业基础属性，设计文档第 2 节）----
     public static final float WARRIOR_HP    = 140f;
     public static final float WARRIOR_SPEED = 180f;
     public static final float ARCHER_HP     = 85f;
     public static final float ARCHER_SPEED  = 205f;
+    /** 召唤师：本体偏脆——他有 4 只宠物替他挨打，本体再厚就没弱点了 */
+    public static final float SUMMONER_HP    = 90f;
+    public static final float SUMMONER_SPEED = 185f;
+    public static final float SUMMONER_IFRAME = 0.32f;
 
     // ---- 职业特性（集中在这里，不在逻辑里散落）----
     /** 战士：受伤减免 15% */
@@ -34,6 +38,35 @@ public final class Balance {
     public static final float ARCHER_CRIT       = 0.10f;
     /** 巫师：法术伤害 +10% */
     public static final float WIZARD_SPELL_DMG  = 0.10f;
+
+    // ---- 召唤物（召唤师的宠物）----
+    /** 召唤间隔（秒）与每次召唤的数量。到点重新召唤一批，旧的被替换 */
+    public static final float SUMMON_INTERVAL = 10f;
+    public static final int   SUMMON_COUNT    = 4;
+    /** 宠物血 = 当前时间点的普通小怪血 × 该系数（用户要求 2 倍） */
+    public static final float MINION_HP_MUL       = 2f;
+    public static final float MINION_RADIUS       = 10f;
+    public static final float MINION_SPEED        = 215f;
+    public static final float MINION_DAMAGE       = 16f;
+    public static final float MINION_ATTACK_CD    = 0.6f;
+    /** 宠物受击无敌帧：比玩家短，但足以避免在怪堆里被同一帧打光 */
+    public static final float MINION_IFRAME       = 0.18f;
+    /** 活动范围：离召唤师超过这个距离就被强制拉回（用户要求"只能在身边一定范围活动"） */
+    public static final float MINION_LEASH        = 330f;
+    /** 护主：主人在这么近的范围内有敌人时，优先扑上去 */
+    public static final float MINION_GUARD_RANGE  = 260f;
+    /** 指挥：鼠标点击后，在点击点这么大范围内找敌人扑过去 */
+    public static final float MINION_ORDER_RANGE  = 460f;
+    /** 指挥有效期（秒）。按住鼠标会持续刷新，松手后还能生效这么久 */
+    public static final float MINION_ORDER_TIME   = 4f;
+    /** 无敌人时跟随主人保持的距离 */
+    public static final float MINION_FOLLOW_DIST  = 62f;
+    /**
+     * 敌人索敌时对宠物的距离偏置（>1）。
+     * 宠物要能"护主"拦住怪，但不能把仇恨全抢走——
+     * 否则玩家站在后面看戏，召唤师就变成挂机职业了。
+     */
+    public static final float MINION_THREAT_BIAS  = 1.35f;
 
     // ---- 元素状态 ----
     // 具体数值（DoT 强度、减速、时长）写在 Spells 表里的每个法术上，
@@ -91,17 +124,17 @@ public final class Balance {
     public static final float SPAWN_RING_OUT  = 900f;
     public static final float DESPAWN_RANGE   = 1500f; // 超出这个距离直接回收
 
-    // ---- 敌人血量随时间成长（本轮核心：怪变少，但越往后越硬）----
-    /** 线性项：每秒 +1.8% */
-    public static final float ENEMY_HP_GROWTH_LINEAR = 0.018f;
-    /** 二次项：后期加速，让最后 5 分钟真的有压迫感 */
-    public static final float ENEMY_HP_GROWTH_QUAD   = 0.000010f;
-    /** 成长上限。不封顶后期会出现打不动的肉墙 */
-    public static final float ENEMY_HP_SCALE_CAP     = 32f;
+    // ---- 敌人血量随时间成长（本轮调整：削弱后期成长，让小怪别指数变硬）----
+    /** 线性项：每秒 +1.2%（原 1.8%） */
+    public static final float ENEMY_HP_GROWTH_LINEAR = 0.012f;
+    /** 二次项：后期轻微加速（原 0.000010，削弱后几乎线性） */
+    public static final float ENEMY_HP_GROWTH_QUAD   = 0.000003f;
+    /** 成长上限。削弱到 16x，避免后期出现打不动的肉墙 */
+    public static final float ENEMY_HP_SCALE_CAP     = 16f;
 
     /**
      * 敌人血量 = 基础血 × 本系数（t = 游戏时间秒）。
-     * 参考值：300s≈7x、600s≈15x、900s≈25x、1200s≈32x（封顶）。
+     * 参考值（削弱后）：300s≈4.9x、600s≈9.3x、900s≈14.2x、1200s≈16x（封顶）。
      * 调难度改上面三个常量即可，公式集中在这里，不在逻辑里散落。
      */
     public static float enemyHpScale(float t) {
@@ -239,8 +272,13 @@ public final class Balance {
     public static final float RANGED_KEEP_DIST = 280f;   // 保持的最小距离，太近就后退
 
     // ---- Boss（本轮正式引入：每个阶段末尾一只，一局共 4 只）----
-    /** 登场时间点（秒）。与 STAGE_DURATIONS 对齐：每阶段末一只，1100s 是最终 Boss */
-    public static final float[] BOSS_TIMES    = { 300f, 600f, 900f, 1100f };
+    /**
+     * 登场触发等级：玩家升到这些等级时刷对应那只 Boss。
+     * 用等级而不是时间，是因为等级直接反映 build 强度——
+     * 同样的时间点，一个吃满经验的玩家和一个挂机的玩家该面对的 Boss 强度不该一样。
+     * 到等级但上一只还活着时不会叠加，会等它倒下再上（见 WaveDirector）。
+     */
+    public static final int[]   BOSS_LEVELS   = { 4, 8, 12, 16 };
     public static final String[] BOSS_NAMES   = { "石心巨像", "熔岩领主", "霜寂君王", "终焉之影" };
     /** 每只 Boss 的血池。第一只别太肉，5 分钟时的 build 打得动 */
     public static final float[] BOSS_HP_TIERS = { 2000f, 4200f, 7200f, 13000f };
@@ -271,6 +309,10 @@ public final class Balance {
 
     // ---- 世界 ----
     public static final float FIXED_STEP     = 1f / 60f;
-    /** 世界边界半宽：地图是 [-WORLD_HALF, +WORLD_HALF] 的方形区域，玩家/敌人/障碍都限制在内 */
+    /** 世界边界半宽：地图是 [-WORLD_HALF, +WORLD_HALF] 的方形区域 */
     public static final float WORLD_HALF     = 1600f;
+    /** 棕色城墙厚度：城墙（棕色部分）作为地图边界，其内侧边缘才是可走区域 */
+    public static final float WALL_THICKNESS = 56f;
+    /** 可玩区半宽 = 城墙内侧边缘。玩家/敌人/刷怪点都钳制在此，碰不到棕色城墙 */
+    public static final float PLAY_HALF      = WORLD_HALF - WALL_THICKNESS;
 }
