@@ -42,3 +42,6 @@ build.log
 
 # ---- WorkBuddy 项目数据（勿删，勿提交） ----
 .workbuddy/
+
+# ---- 一次性调试脚手架（离屏渲染/轴向校验等，非产品代码）----
+.tmpcheck/
