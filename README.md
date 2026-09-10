@@ -26,6 +26,14 @@
 4. 打开 `client/src/main/java/com/arcanebrigade/client/GameLauncher.java`，
    右键 **Run 'GameLauncher.main()'** 即可。
 
+> **⚠️ 不要直接运行 `GameApp`**（或 `MapPreview` 等 `Application` 子类）。IDEA 会允许你点运行按钮，
+> 但 Application 子类要求 JavaFX 在模块路径上，以 classpath 方式启动会被 JavaFX 拒绝并报
+> **「缺少 JavaFX 运行时组件，需要使用该组件来运行此应用程序」**——这不是依赖缺失，是启动方式不对。
+> 始终用 `GameLauncher`（或仓库内置的 `.run/启动游戏 (GameLauncher)` 运行配置）。
+
+> Maven 面板跑法：`Arcane Brigade : Client` → 插件 → `javafx` → 双击 `javafx:run`
+> （注意选 **Client** 子项目，根项目没有主类；见方式二）。
+
 > 运行配置的 **Working directory** 保持默认即可。即便被设成了模块目录（`client/`）也没关系——
 > 美术与音频资源是从工作目录**逐级向上**查找的，两种设置都找得到。
 
@@ -52,6 +60,7 @@ mvn -pl client javafx:run      # 启动游戏
 
 | 现象 | 原因与处理 |
 |---|---|
+| 报「缺少 JavaFX 运行时组件」 | 直接运行了 `GameApp` 等 `Application` 子类。改用 `GameLauncher` 或运行配置「启动游戏 (GameLauncher)」 |
 | 提示缺少 `image/` 或 `audio/` | 这两个目录默认就在仓库里；若用了非标准工作目录，把 `Working directory` 改回项目根即可 |
 | 没有背景音乐 | 缺音频文件或无声卡时游戏会**静默降级**，只是没 BGM，不影响运行 |
 | Maven 报找不到 JavaFX 依赖 | 首次需要联网；或在 IDEA 里 Maven 面板点 **Reload All Maven Projects** |
