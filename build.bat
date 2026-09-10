@@ -4,6 +4,7 @@ rem Builds core + client into core\target\classes and client\target\classes.
 rem Tries Maven first (also installs the jars into ~/.m2); if Maven is not
 rem usable it falls back to plain javac, which is enough for run.bat.
 setlocal
+chcp 65001 >nul
 
 cd /d "%~dp0"
 
@@ -49,17 +50,30 @@ echo [build] Maven not found - falling back to javac
 if not exist core\target\classes mkdir core\target\classes
 if not exist client\target\classes mkdir client\target\classes
 
-dir /s /b core\src\main\java\*.java > "%TEMP%\ab_core_src.txt"
-"%JAVAC_EXE%" -encoding UTF-8 -d core\target\classes @"%TEMP%\ab_core_src.txt"
+rem Compile from the source folder so the javac argument file contains only
+rem ASCII-relative paths. This keeps the launcher usable from Chinese paths.
+pushd core\src\main\java
+dir /s /b *.java > "%TEMP%\ab_core_src.txt"
+"%JAVAC_EXE%" -encoding UTF-8 -d "..\..\..\target\classes" @"%TEMP%\ab_core_src.txt"
+set "CORE_RC=%ERRORLEVEL%"
+popd
+if not "%CORE_RC%"=="0" goto :fail
+
+rem javac 26 can lose a directory classpath below a non-ASCII parent folder.
+rem A local JAR keeps the client dependency path ASCII-relative and portable.
+powershell -NoProfile -Command "Remove-Item -LiteralPath 'core\target\arcane-core.jar' -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath 'core\target\arcane-core.zip' -Force -ErrorAction SilentlyContinue; Compress-Archive -Path 'core\target\classes\*' -DestinationPath 'core\target\arcane-core.zip' -Force; Move-Item -LiteralPath 'core\target\arcane-core.zip' -Destination 'core\target\arcane-core.jar' -Force"
 if errorlevel 1 goto :fail
 
 set "M2=%USERPROFILE%\.m2\repository"
 rem Use platform jars: generic JavaFX jars contain only Maven metadata.
 rem The client also requires javafx-media for GameAudio.
 set "FXCP=%M2%\org\openjfx\javafx-controls\21.0.12\javafx-controls-21.0.12-win.jar;%M2%\org\openjfx\javafx-graphics\21.0.12\javafx-graphics-21.0.12-win.jar;%M2%\org\openjfx\javafx-base\21.0.12\javafx-base-21.0.12-win.jar;%M2%\org\openjfx\javafx-media\21.0.12\javafx-media-21.0.12-win.jar"
-dir /s /b client\src\main\java\*.java > "%TEMP%\ab_client_src.txt"
-"%JAVAC_EXE%" -encoding UTF-8 -cp "core\target\classes;%FXCP%" -d client\target\classes @"%TEMP%\ab_client_src.txt"
-if errorlevel 1 goto :fail
+pushd client\src\main\java
+dir /s /b *.java > "%TEMP%\ab_client_src.txt"
+"%JAVAC_EXE%" -encoding UTF-8 -cp "..\..\..\..\core\target\arcane-core.jar;%FXCP%" -d "..\..\..\target\classes" @"%TEMP%\ab_client_src.txt"
+set "CLIENT_RC=%ERRORLEVEL%"
+popd
+if not "%CLIENT_RC%"=="0" goto :fail
 set "BUILT=1"
 
 :check

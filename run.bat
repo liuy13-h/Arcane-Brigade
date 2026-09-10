@@ -15,6 +15,7 @@ rem  on Java 17 through Java 26+), so a stale or foreign-compiled
 rem  build can never be launched by mistake.
 rem ============================================================
 setlocal
+chcp 65001 >nul
 cd /d "%~dp0"
 
 set "JAVAC="
@@ -41,15 +42,28 @@ set "CLIENTOUT=client\target\classes"
 
 echo Building core ...
 if not exist "%COREOUT%" mkdir "%COREOUT%"
-dir /s /b "core\src\main\java\*.java" > "%TEMP%\ab_core_src.txt"
-"%JAVAC%" --release 17 -encoding UTF-8 -d "%COREOUT%" "@%TEMP%\ab_core_src.txt"
+rem Keep source entries relative: javac argument files otherwise misread an
+rem absolute path that contains non-ASCII characters.
+pushd core\src\main\java
+dir /s /b *.java > "%TEMP%\ab_core_src.txt"
+"%JAVAC%" --release 17 -encoding UTF-8 -d "..\..\..\target\classes" "@%TEMP%\ab_core_src.txt"
+set "CORE_RC=%ERRORLEVEL%"
+popd
+if not "%CORE_RC%"=="0" goto :failbuild
+
+rem Java's compiler can fail to resolve a directory classpath when this
+rem project is stored below a non-ASCII parent folder. Package core locally.
+powershell -NoProfile -Command "Remove-Item -LiteralPath 'core\target\arcane-core.jar' -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath 'core\target\arcane-core.zip' -Force -ErrorAction SilentlyContinue; Compress-Archive -Path 'core\target\classes\*' -DestinationPath 'core\target\arcane-core.zip' -Force; Move-Item -LiteralPath 'core\target\arcane-core.zip' -Destination 'core\target\arcane-core.jar' -Force"
 if errorlevel 1 goto :failbuild
 
 echo Building client ...
 if not exist "%CLIENTOUT%" mkdir "%CLIENTOUT%"
-dir /s /b "client\src\main\java\*.java" > "%TEMP%\ab_client_src.txt"
-"%JAVAC%" --release 17 -encoding UTF-8 -cp "%COREOUT%;%FB%;%FG%;%FC%;%FM%" -d "%CLIENTOUT%" "@%TEMP%\ab_client_src.txt"
-if errorlevel 1 goto :failbuild
+pushd client\src\main\java
+dir /s /b *.java > "%TEMP%\ab_client_src.txt"
+"%JAVAC%" --release 17 -encoding UTF-8 -cp "..\..\..\..\core\target\arcane-core.jar;%FB%;%FG%;%FC%;%FM%" -d "..\..\..\target\classes" "@%TEMP%\ab_client_src.txt"
+set "CLIENT_RC=%ERRORLEVEL%"
+popd
+if not "%CLIENT_RC%"=="0" goto :failbuild
 del /q "%TEMP%\ab_core_src.txt" "%TEMP%\ab_client_src.txt" >nul 2>nul
 
 :run

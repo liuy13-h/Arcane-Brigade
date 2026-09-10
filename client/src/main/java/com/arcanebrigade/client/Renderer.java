@@ -1191,7 +1191,8 @@ public final class Renderer {
      * 条脚底线上均匀一字排开。px/py 是化身圆心，与 geom 坐标同参考系。
      */
     public void drawLobby(LobbyGeom g, double px, double py, int chosen, double t,
-            int cardClass, double reveal, boolean showGuide) {
+            int cardClass, double reveal, boolean showGuide, TaskSystem tasks,
+            TaskSystem.Category taskCategory, boolean taskOpen) {
         double vw = canvas.getWidth();
         double vh = canvas.getHeight();
         double pulse = 0.5 + 0.5 * Math.sin(t * 2.4);
@@ -1219,6 +1220,7 @@ public final class Renderer {
 
         // ---- 左上角操作指引（可隐藏） ----
         drawLobbyGuide(showGuide);
+        drawLobbyTasks(tasks, taskCategory, taskOpen);
 
         // ---- 四个角色：均匀一字排开，站在同一脚底线上 ----
         // 立绘已由 Sprites 按整数倍预放大(×2, 最近邻)，这里按自然尺寸 1:1 绘制、
@@ -2153,6 +2155,137 @@ public final class Renderer {
             }
         }
         return 1;
+    }
+
+    // ------------------------------------------------------------------
+    // 大厅任务栏：左侧低透明度面板，避免覆盖王座与职业选择主视觉
+    // ------------------------------------------------------------------
+
+    /** 任务按钮、切换标签和领取按钮的命中区域，供 GameApp 与绘制共用。 */
+    public record TaskGeom(Rect toggle, Rect panel, Rect dailyTab, Rect weeklyTab, Rect[] claims) {}
+
+    public static TaskGeom lobbyTaskGeom(double vw, double vh, int taskCount) {
+        double x = 16;
+        Rect toggle = new Rect(x, 154, 174, 34);
+        double panelY = 198;
+        double panelW = Math.min(328, Math.max(280, vw * 0.265));
+        double panelH = 112 + taskCount * 72;
+        Rect panel = new Rect(x, panelY, panelW, panelH);
+        Rect daily = new Rect(x + 12, panelY + 43, (panelW - 34) / 2, 27);
+        Rect weekly = new Rect(daily.x() + daily.w() + 10, panelY + 43, daily.w(), 27);
+        Rect[] claims = new Rect[taskCount];
+        for (int i = 0; i < taskCount; i++) {
+            claims[i] = new Rect(x + panelW - 82, panelY + 85 + i * 72, 66, 25);
+        }
+        return new TaskGeom(toggle, panel, daily, weekly, claims);
+    }
+
+    private void drawLobbyTasks(TaskSystem tasks, TaskSystem.Category category, boolean open) {
+        if (tasks == null) return;
+        double vw = canvas.getWidth();
+        double vh = canvas.getHeight();
+        TaskSystem.TaskView[] views = tasks.tasks(category);
+        TaskGeom g = lobbyTaskGeom(vw, vh, views.length);
+        Rect toggle = g.toggle();
+        gc.setFill(Color.rgb(8, 7, 15, 0.52));
+        gc.fillRoundRect(toggle.x(), toggle.y(), toggle.w(), toggle.h(), 10, 10);
+        gc.setStroke(Color.rgb(255, 214, 140, 0.55));
+        gc.setLineWidth(1.1);
+        gc.strokeRoundRect(toggle.x(), toggle.y(), toggle.w(), toggle.h(), 10, 10);
+        drawTextSoft(gc, Font.font("Microsoft YaHei", FontWeight.BOLD, 13),
+                toggle.x() + 48, toggle.y() + 22, "◆ 任务", Color.rgb(255, 225, 165), null);
+        int claimable = tasks.claimableCount();
+        if (claimable > 0) {
+            gc.setFill(Color.rgb(225, 92, 75, 0.92));
+            gc.fillOval(toggle.x() + toggle.w() - 28, toggle.y() + 8, 18, 18);
+            drawTextSoft(gc, Font.font("Consolas", FontWeight.BOLD, 11),
+                    toggle.x() + toggle.w() - 19, toggle.y() + 21, String.valueOf(claimable), Color.WHITE, null);
+        }
+        if (!open) return;
+
+        Rect p = g.panel();
+        // 透明度压低，让大厅壁饰和角色仍可被看到。
+        gc.setFill(Color.rgb(8, 7, 15, 0.64));
+        gc.fillRoundRect(p.x(), p.y(), p.w(), p.h(), 14, 14);
+        gc.setStroke(Color.rgb(232, 191, 112, 0.52));
+        gc.setLineWidth(1.2);
+        gc.strokeRoundRect(p.x(), p.y(), p.w(), p.h(), 14, 14);
+        drawTextSoft(gc, Font.font("Microsoft YaHei", FontWeight.BOLD, 16),
+                p.x() + 18, p.y() + 27, "旅团任务", Color.rgb(255, 228, 175), null);
+        drawTextSoft(gc, Font.font("Microsoft YaHei", 12), p.x() + p.w() - 52, p.y() + 27,
+                "印记 " + tasks.marks(), Color.rgb(171, 231, 255), null);
+        drawTaskTab(g.dailyTab(), "每日", category == TaskSystem.Category.DAILY);
+        drawTaskTab(g.weeklyTab(), "每周", category == TaskSystem.Category.WEEKLY);
+
+        for (int i = 0; i < views.length; i++) {
+            TaskSystem.TaskView task = views[i];
+            double y = p.y() + 78 + i * 72;
+            gc.setFill(Color.rgb(255, 234, 185, 0.08));
+            gc.fillRoundRect(p.x() + 10, y, p.w() - 20, 63, 9, 9);
+            gc.setFont(Font.font("Microsoft YaHei", FontWeight.BOLD, 13));
+            gc.setFill(task.claimed() ? Color.rgb(160, 160, 170) : Color.rgb(245, 238, 218));
+            gc.fillText(task.title(), p.x() + 20, y + 21);
+            gc.setFont(Font.font("Microsoft YaHei", 11.5));
+            gc.setFill(Color.rgb(205, 197, 214));
+            gc.fillText(task.detail(), p.x() + 20, y + 39);
+            double progress = Math.min(1.0, task.progress() / (double) task.target());
+            gc.setFill(Color.rgb(0, 0, 0, 0.32));
+            gc.fillRoundRect(p.x() + 20, y + 46, p.w() - 126, 8, 4, 4);
+            gc.setFill(task.complete() ? Color.rgb(117, 211, 156, 0.85) : Color.rgb(157, 190, 255, 0.78));
+            gc.fillRoundRect(p.x() + 20, y + 46, (p.w() - 126) * progress, 8, 4, 4);
+            drawTextSoft(gc, Font.font("Consolas", 10.5), p.x() + p.w() - 102, y + 53,
+                    Math.min(task.progress(), task.target()) + "/" + task.target(), Color.rgb(231, 224, 238), null);
+            Rect claim = g.claims()[i];
+            if (task.claimed()) {
+                drawTaskButton(claim, "已领取", Color.rgb(120, 120, 130, 0.46));
+            } else if (task.claimable()) {
+                drawTaskButton(claim, "领取", Color.rgb(95, 178, 136, 0.82));
+            } else {
+                drawTaskButton(claim, "+" + task.reward(), Color.rgb(80, 100, 130, 0.46));
+            }
+        }
+    }
+
+    private void drawTaskTab(Rect r, String label, boolean selected) {
+        gc.setFill(selected ? Color.rgb(196, 151, 77, 0.44) : Color.rgb(255, 255, 255, 0.07));
+        gc.fillRoundRect(r.x(), r.y(), r.w(), r.h(), 7, 7);
+        gc.setStroke(Color.rgb(255, 216, 145, selected ? 0.82 : 0.35));
+        gc.setLineWidth(1);
+        gc.strokeRoundRect(r.x(), r.y(), r.w(), r.h(), 7, 7);
+        drawTextSoft(gc, Font.font("Microsoft YaHei", FontWeight.BOLD, 12), r.x() + r.w() / 2,
+                r.y() + 19, label, selected ? Color.rgb(255, 232, 177) : Color.rgb(196, 191, 205), null);
+    }
+
+    private void drawTaskButton(Rect r, String label, Color fill) {
+        gc.setFill(fill);
+        gc.fillRoundRect(r.x(), r.y(), r.w(), r.h(), 7, 7);
+        gc.setStroke(Color.rgb(232, 228, 236, 0.40));
+        gc.setLineWidth(0.9);
+        gc.strokeRoundRect(r.x(), r.y(), r.w(), r.h(), 7, 7);
+        drawTextSoft(gc, Font.font("Microsoft YaHei", FontWeight.BOLD, 11), r.x() + r.w() / 2,
+                r.y() + 17, label, Color.WHITE, null);
+    }
+
+    /** 入局五秒简报，冻结模拟期间告诉玩家本局可推进的任务。 */
+    public void drawTaskBrief(TaskSystem tasks, double secondsLeft) {
+        double vw = canvas.getWidth(), vh = canvas.getHeight();
+        gc.setFill(Color.rgb(5, 4, 10, 0.70));
+        gc.fillRect(0, 0, vw, vh);
+        double w = Math.min(470, vw * 0.52), h = 248, x = (vw - w) / 2, y = (vh - h) / 2;
+        gc.setFill(Color.rgb(20, 17, 31, 0.90));
+        gc.fillRoundRect(x, y, w, h, 18, 18);
+        gc.setStroke(Color.rgb(238, 193, 104, 0.78));
+        gc.setLineWidth(1.5);
+        gc.strokeRoundRect(x, y, w, h, 18, 18);
+        String[] lines = tasks.runBrief();
+        drawTextSoft(gc, Font.font("Microsoft YaHei", FontWeight.BOLD, 24), x + w / 2, y + 48,
+                lines[0], Color.rgb(255, 230, 177), null);
+        for (int i = 1; i < lines.length; i++) {
+            drawTextSoft(gc, Font.font("Microsoft YaHei", i == 3 ? 12 : 16), x + w / 2,
+                    y + 88 + (i - 1) * 37, lines[i], i == 3 ? Color.rgb(185, 193, 210) : Color.rgb(237, 232, 245), null);
+        }
+        drawTextSoft(gc, Font.font("Consolas", FontWeight.BOLD, 14), x + w / 2, y + h - 23,
+                "准备出征  " + (int) Math.ceil(secondsLeft), Color.rgb(154, 210, 255), null);
     }
 
     // ------------------------------------------------------------------

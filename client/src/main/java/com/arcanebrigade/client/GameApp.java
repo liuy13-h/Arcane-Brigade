@@ -37,6 +37,7 @@ public final class GameApp extends Application {
 
     /** 战斗生命周期与固定步长只由这个边界对象管理。 */
     private BattleSession battle;
+    private TaskSystem tasks;
     private Renderer renderer;
     private Stage stage;
 
@@ -68,6 +69,13 @@ public final class GameApp extends Application {
     private double cardReveal;
     /** 大厅左上角操作指引是否展开（可点「✕」收起，点「❖ 操作指引 ▸」展开） */
     private boolean lobbyGuide = true;
+    /** 左侧任务栏：任务分类与展开状态。 */
+    private boolean lobbyTasksOpen;
+    private TaskSystem.Category lobbyTaskCategory = TaskSystem.Category.DAILY;
+    /** 入局时冻结模拟并展示任务简报五秒。 */
+    private double taskBriefSeconds;
+    private int observedKills;
+    private boolean runCompletionRecorded;
 
     /** 鼠标左键是否按住（战斗阶段用于宠物指挥 + 手动开火） */
     private boolean mouseDown;
@@ -99,6 +107,7 @@ public final class GameApp extends Application {
         Sprites.load();
 
         battle = new BattleSession(20260907L);
+        tasks = new TaskSystem();
 
         Canvas canvas = new Canvas(1280, 720);
         Pane root = new Pane(canvas);
@@ -177,9 +186,31 @@ public final class GameApp extends Application {
                 return;
             }
             if (inLobby) {
-                // 大厅里鼠标只用于指引的收起/展开，角色交互仍走空格/E
+                // 大厅任务栏优先响应；职业交互仍走空格/E。
                 double vw = renderer.getCanvasWidth();
                 double vh = renderer.getCanvasHeight();
+                TaskSystem.TaskView[] views = tasks.tasks(lobbyTaskCategory);
+                Renderer.TaskGeom tg = Renderer.lobbyTaskGeom(vw, vh, views.length);
+                if (tg.toggle().hit(e.getX(), e.getY())) {
+                    lobbyTasksOpen = !lobbyTasksOpen;
+                    return;
+                }
+                if (lobbyTasksOpen) {
+                    if (tg.dailyTab().hit(e.getX(), e.getY())) {
+                        lobbyTaskCategory = TaskSystem.Category.DAILY;
+                        return;
+                    }
+                    if (tg.weeklyTab().hit(e.getX(), e.getY())) {
+                        lobbyTaskCategory = TaskSystem.Category.WEEKLY;
+                        return;
+                    }
+                    for (int i = 0; i < views.length; i++) {
+                        if (views[i].claimable() && tg.claims()[i].hit(e.getX(), e.getY())) {
+                            tasks.claim(views[i].id());
+                            return;
+                        }
+                    }
+                }
                 Renderer.GuideGeom gg = Renderer.lobbyGuideGeom(vw, vh);
                 Renderer.Rect r = lobbyGuide ? gg.hide() : gg.open();
                 if (r.hit(e.getX(), e.getY())) {
@@ -292,7 +323,7 @@ public final class GameApp extends Application {
                     if (drawNow) {
                         renderer.setFps(fps[0]);
                         renderer.drawLobby(g, lx, ly, lobbyChoice, lobbyAnimT, cardClass, cardReveal,
-                                lobbyGuide);
+                                lobbyGuide, tasks, lobbyTaskCategory, lobbyTasksOpen);
                         if (lobbySmokeFrames > 0 && ++lobbyRendered >= lobbySmokeFrames) {
                             System.out.printf("[lobby] 渲染 %d 帧完成（大厅），退出%n", lobbyRendered);
                             Platform.exit();
@@ -305,8 +336,20 @@ public final class GameApp extends Application {
                 renderer.setMouse(mouseX, mouseY);
                 World world = battle.world();
 
+                // 入局任务简报：五秒内不推进模拟，确保玩家能读完本局目标。
+                if (taskBriefSeconds > 0) {
+                    taskBriefSeconds = Math.max(0, taskBriefSeconds - dt);
+                    if (drawNow) {
+                        renderer.setFps(fps[0]);
+                        renderer.draw(world, 0f);
+                        renderer.drawTaskBrief(tasks, taskBriefSeconds);
+                    }
+                    return;
+                }
+
                 // 胜利：冻结模拟，罩层结算。模拟一旦停了就不再推进，直到按 R 重开
                 if (world.victory()) {
+                    finishRun(world);
                     renderer.setFps(fps[0]);
                     renderer.draw(world, 0f);
                     renderer.drawVictory(world, canvas.getWidth(), canvas.getHeight());
@@ -320,6 +363,7 @@ public final class GameApp extends Application {
                 // 阵亡：同样冻结模拟，弹结算战报，点「继续」或按 R 回大厅。
                 // 之前玩家倒下后没有任何终局状态，游戏会一直空转却永远不结束。
                 if (world.defeat()) {
+                    finishRun(world);
                     renderer.setFps(fps[0]);
                     renderer.draw(world, 0f);
                     renderer.drawDefeatOverlay(world, canvas.getWidth(), canvas.getHeight());
@@ -333,6 +377,7 @@ public final class GameApp extends Application {
                 boolean upgradePaused = battle.hasPendingUpgrade();
                 readInput();
                 float alpha = battle.advance(dt, input);
+                syncTaskKills(world);
 
                 if (!drawNow) {
                     return;
@@ -618,6 +663,9 @@ public final class GameApp extends Application {
             return;                       // 已在战斗中，忽略重复触发
         }
         battle.start(classKind);
+        taskBriefSeconds = 5.0;
+        observedKills = 0;
+        runCompletionRecorded = false;
         inTitle = false;
         inLobby = false;
         overlay = Renderer.OVER_NONE;
@@ -629,6 +677,7 @@ public final class GameApp extends Application {
     /** 胜利/阵亡后重开：换一个种子重建世界，回到准备大厅重新选人 */
     private void restart() {
         battle.reset(System.nanoTime());
+        taskBriefSeconds = 0;
         lobbyChoice = 0;
         renderedFrames = 0;
         enterLobby();
@@ -700,6 +749,24 @@ public final class GameApp extends Application {
     /** 点 (mx,my) 是否落在 [x, y, w, h] 矩形内 */
     private static boolean hit(double[] r, double mx, double my) {
         return mx >= r[0] && mx <= r[0] + r[2] && my >= r[1] && my <= r[1] + r[3];
+    }
+
+    /** 将本局新增击杀同步进局外任务，避免按帧重复计数。 */
+    private void syncTaskKills(World world) {
+        int current = world.killCount();
+        if (current > observedKills) {
+            tasks.recordKills(current - observedKills);
+            observedKills = current;
+        }
+    }
+
+    /** 胜利或阵亡都算完成一局；同一局只登记一次。 */
+    private void finishRun(World world) {
+        syncTaskKills(world);
+        if (!runCompletionRecorded) {
+            tasks.recordCompletedRun();
+            runCompletionRecorded = true;
+        }
     }
 
     private void readInput() {
