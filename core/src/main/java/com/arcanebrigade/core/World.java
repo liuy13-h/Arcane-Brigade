@@ -44,6 +44,12 @@ public final class World {
     public static final int V_RANGED = 3;   // 远程：保持距离发射弹幕
     public static final int V_SPLIT  = 4;   // 分裂：死亡裂成数只
     public static final int V_BOSS   = 5;   // Boss：多阶段
+    public static final int V_STATUE = 6;   // 战斗事件「摧毁雕像」：不移动不攻击的静态靶子
+
+    /** 拾取物 meta 子类型 */
+    public static final int PICKUP_GEM      = 0;
+    public static final int PICKUP_CHEST    = 1;
+    public static final int PICKUP_MUSHROOM = 2;   // 战斗事件「采集蘑菇」
 
     /**
      * FX 子类型。为了不再为特效开新数组，借用现有字段：
@@ -156,10 +162,31 @@ public final class World {
     private int bossKills;
     /** 终局战报快照：胜利或阵亡时冻结一份，避免结算画面上的数字继续跳动 */
     private Summary summary;
+    /** 主动退出（暂停菜单「退出结算」）：与阵亡同屏展示战报，但标题不同 */
+    private boolean abandoned;
     /** 开火模式：true=自动索敌开火，false=手动（朝鼠标方向，按住开火） */
     private boolean autoFire = true;
     private float bossWarningTimer;
     private float bossSummonTimer;
+
+    // ---- 战斗事件（小任务）状态 ----
+    /** 下一个待触发事件的 EVENT_TIMES 下标 */
+    private int eventIndex;
+    /** 当前进行中的事件类型（Balance.EVENT_RIFT / STATUE / MUSHROOM，0=无） */
+    private int eventType;
+    /** 进度：裂隙=已坚持秒数；雕像=已摧毁数；蘑菇=已采集数 */
+    private float eventProgress;
+    /** 目标：裂隙=RIFT_HOLD_TIME；雕像=STATUE_COUNT；蘑菇=MUSHROOM_COUNT */
+    private float eventGoal;
+    /** 事件区域中心（裂隙圈 / 雕像与蘑菇的散布中心） */
+    private float eventX;
+    private float eventY;
+    /** 本局已完成的事件数（结算显示） */
+    private int eventCompleted;
+    /** 「任务完成 +经验」横幅剩余显示秒数 */
+    private float eventBannerT;
+    /** 事件生成的雕像 / 蘑菇实体 id，用于清理与统计 */
+    private final IntList eventIds = new IntList(16);
 
     /**
      * 玩家的指挥指令：鼠标点击（或按住）时记下世界坐标。
@@ -257,7 +284,7 @@ public final class World {
             // 击败最后一只 Boss = 通关。前几只倒下只清标记，不打断对局。
             if (bossTier == Balance.BOSS_LEVELS.length - 1) {
                 victory = true;
-                summary = snapshot(true, firstWizard());
+                summary = snapshot(true, false, firstWizard());
             }
             bossId = -1;   // Boss 倒下：清掉阶段技能标记，下一帧 updateBossPhase 也会兜底
         }
@@ -303,7 +330,7 @@ public final class World {
             // 主控玩家阵亡：立刻冻一份战报，客户端据此停止推进并弹结算画面。
             // 之前这里什么都不做，玩家死后游戏会一直空转（没有单位可操作）却永远不结束。
             defeat = true;
-            summary = snapshot(false, id);
+            summary = snapshot(false, false, id);
         }
         kind[id] = KIND_FREE;
         liveCount--;
@@ -394,6 +421,11 @@ public final class World {
             hp0 = Balance.RANGED_HP;
             sp0 = Balance.RANGED_SPEED;
             dm0 = 0f;       // 伤害来自弹幕而非接触
+        } else if (variant == V_STATUE) {
+            // 战斗事件「摧毁雕像」：不移动、不攻击的静态靶子，血偏厚
+            hp0 = Balance.STATUE_HP;
+            sp0 = 0f;
+            dm0 = 0f;
         }
         // 血量随时间成长：怪的数量砍掉后，难度主要由这条曲线承担。
         // 统一在这里乘，避免每个生成点各乘一次导致叠加。
@@ -403,6 +435,9 @@ public final class World {
         hp[id] = maxHp[id];
         speed[id] = sp0;
         dmg[id] = dm0;
+        if (variant == V_STATUE) {
+            r[id] = Balance.STATUE_RADIUS;   // 雕像更大，作为可摧毁目标更醒目
+        }
         if (variant == V_ELITE) {
             // 护盾也跟着涨，但涨幅封顶，否则后期精英变成打不破的壳
             enemyShield[id] = Balance.ELITE_SHIELD * Math.min(scale, 6f);
@@ -492,6 +527,20 @@ public final class World {
         dmg[id] = 0f;
         life[id] = Balance.GEM_LIFE;
         meta[id] = 1;       // 1 = 宝箱
+        return id;
+    }
+
+    /** 蘑菇（战斗事件「采集蘑菇」）：玩家走过即拾取，计入事件进度并给少量经验。 */
+    public int spawnMushroom(float sx, float sy) {
+        int id = alloc(KIND_PICKUP, sx, sy, 9f, TEAM_PLAYER);
+        if (id < 0) {
+            return -1;
+        }
+        vx[id] = 0f;
+        vy[id] = 0f;
+        dmg[id] = Balance.GEM_VALUE;
+        life[id] = Balance.MUSHROOM_LIFE;
+        meta[id] = PICKUP_MUSHROOM;
         return id;
     }
 
@@ -600,6 +649,7 @@ public final class World {
         updateStatus(dt);
         updateWizards(dt, in);
         updateSummoners(dt);      // 召唤师：到点召唤一批宠物
+        updateEvents(dt);         // 战斗事件：到点触发 + 进度推进 + 完成发经验
         specialPassiveTick(dt);
         director.update(this, dt);
         updateEnemies(dt);
@@ -724,6 +774,158 @@ public final class World {
         }
     }
 
+    // ------------------------------------------------------------------
+    // 战斗事件（小任务）
+    // ------------------------------------------------------------------
+
+    /** 到点触发下一个小任务，并推进当前任务进度；完成后发放经验。 */
+    private void updateEvents(float dt) {
+        if (victory || defeat) {
+            return;
+        }
+        if (eventBannerT > 0f) {
+            eventBannerT -= dt;
+        }
+        // 到点触发：若上一个任务还没做完，则顶掉它（旧实体清理、无奖励），保证节奏不被拖死
+        if (eventType == 0 && eventIndex < Balance.EVENT_TIMES.length
+                && time >= Balance.EVENT_TIMES[eventIndex]) {
+            startEvent(eventIndex);
+            eventIndex++;
+        }
+        if (eventType == 0) {
+            return;
+        }
+
+        int w = firstWizard();
+        if (w < 0) {
+            return;
+        }
+        switch (eventType) {
+            case Balance.EVENT_RIFT -> {
+                float dx = x[w] - eventX;
+                float dy = y[w] - eventY;
+                float d2 = dx * dx + dy * dy;
+                float rr = Balance.RIFT_RADIUS + Balance.WIZARD_RADIUS;
+                if (d2 <= rr * rr) {
+                    eventProgress += dt;
+                }
+                if (eventProgress >= eventGoal) {
+                    completeEvent();
+                }
+            }
+            case Balance.EVENT_STATUE -> {
+                // 雕像被击杀会从 eventIds 里剔除，剩余数量即进度
+                int remain = 0;
+                for (int n = 0; n < eventIds.size(); n++) {
+                    int e = eventIds.get(n);
+                    if (alive[e] && kind[e] == KIND_ENEMY) {
+                        remain++;
+                    }
+                }
+                eventProgress = Balance.STATUE_COUNT - remain;
+                if (remain == 0) {
+                    completeEvent();
+                }
+            }
+            case Balance.EVENT_MUSHROOM -> {
+                if (eventProgress >= eventGoal) {
+                    completeEvent();
+                }
+            }
+            default -> { }
+        }
+    }
+
+    /** 开启第 idx 个事件（下标对齐 Balance.EVENT_TIMES）。 */
+    private void startEvent(int idx) {
+        int w = firstWizard();
+        if (w < 0) {
+            return;
+        }
+        // 事件中心：离玩家一小段距离，避免直接压在玩家脸上
+        float ang = rng.nextFloat() * (float) (Math.PI * 2);
+        float dist = 260f + rng.nextFloat() * 260f;
+        eventX = clampCoord(x[w] + (float) Math.cos(ang) * dist);
+        eventY = clampCoord(y[w] + (float) Math.sin(ang) * dist);
+        eventProgress = 0f;
+        eventIds.clear();
+
+        if (idx == 0) {   // 封印裂隙
+            eventType = Balance.EVENT_RIFT;
+            eventGoal = Balance.RIFT_HOLD_TIME;
+        } else if (idx == 1) {   // 摧毁雕像
+            eventType = Balance.EVENT_STATUE;
+            eventGoal = Balance.STATUE_COUNT;
+            for (int s = 0; s < Balance.STATUE_COUNT; s++) {
+                float a = rng.nextFloat() * (float) (Math.PI * 2);
+                float d = 70f + rng.nextFloat() * 150f;
+                int id = spawnEnemy(clampCoord(eventX + (float) Math.cos(a) * d),
+                        clampCoord(eventY + (float) Math.sin(a) * d), 0, V_STATUE);
+                if (id >= 0) {
+                    eventIds.add(id);
+                }
+            }
+        } else {   // 采集蘑菇
+            eventType = Balance.EVENT_MUSHROOM;
+            eventGoal = Balance.MUSHROOM_COUNT;
+            for (int m = 0; m < Balance.MUSHROOM_COUNT; m++) {
+                float a = rng.nextFloat() * (float) (Math.PI * 2);
+                float d = 60f + rng.nextFloat() * 360f;
+                int id = spawnMushroom(clampCoord(eventX + (float) Math.cos(a) * d),
+                        clampCoord(eventY + (float) Math.sin(a) * d));
+                if (id >= 0) {
+                    eventIds.add(id);
+                }
+            }
+        }
+    }
+
+    /** 完成任务：清场 + 发经验 + 横幅提示。 */
+    private void completeEvent() {
+        if (eventType == 0) {
+            return;
+        }
+        // 清理事件实体（蘑菇/雕像），裂隙无实体
+        for (int n = 0; n < eventIds.size(); n++) {
+            int e = eventIds.get(n);
+            if (alive[e] && (kind[e] == KIND_ENEMY || kind[e] == KIND_PICKUP)) {
+                despawn(e);
+            }
+        }
+        eventIds.clear();
+        // 发经验：所有存活玩家（当前是单主控，但写通用点没坏处）
+        for (int n = 0; n < wizards.size(); n++) {
+            int id = wizards.get(n);
+            if (!alive[id] || loadout[id] == null) {
+                continue;
+            }
+            Loadout lo = loadout[id];
+            float mul = Balance.EVENT_XP_MUL[eventIndex - 1 < 0 ? 0 : eventIndex - 1];
+            lo.gainXp(Loadout.xpForLevel(lo.level) * mul);
+        }
+        eventCompleted++;
+        eventBannerT = 3.5f;
+        eventType = 0;
+        eventProgress = 0f;
+        eventGoal = 0f;
+    }
+
+    /** 暂停菜单「退出结算」：主动结束本局，冻结战报（标题与阵亡区分）。 */
+    public void abandon() {
+        if (victory || defeat || abandoned) {
+            return;
+        }
+        abandoned = true;
+        summary = snapshot(false, true, firstWizard());
+    }
+
+    /** 采集一朵蘑菇：由 updatePickups 在玩家拾取时回调，推进蘑菇事件进度。 */
+    private void takeMushroom() {
+        if (eventType == Balance.EVENT_MUSHROOM) {
+            eventProgress++;
+        }
+    }
+
     /** 元素状态的持续效果：燃烧跳伤害、到期清除。冰霜与雷电是被动修正，在读取处生效 */
     private void updateStatus(float dt) {
         // 每帧算一次就够，别在上千实体的循环里反复调 exp
@@ -826,6 +1028,10 @@ public final class World {
             }
             if (v == V_RANGED) {
                 updateRanged(i, dt);
+                continue;
+            }
+            if (v == V_STATUE) {
+                // 战斗事件「摧毁雕像」：不移动、不攻击，纯靶子
                 continue;
             }
             // 其余（普通 / 精英 / 分裂 / Boss）走下方通用追击 + 接触伤害
@@ -1838,11 +2044,17 @@ public final class World {
             y[i] += vy[i] * dt;
             // 拾取判定：足够近就吸收
             if (bestD2 <= (r[i] + Balance.WIZARD_RADIUS) * (r[i] + Balance.WIZARD_RADIUS)) {
-                if (meta[i] == 1) {
+                if (meta[i] == PICKUP_CHEST) {
                     // 宝箱：直接给一次升级
                     if (lo != null) {
                         lo.gainXp(Loadout.xpForLevel(lo.level) - lo.xp + 1);
                     }
+                } else if (meta[i] == PICKUP_MUSHROOM) {
+                    // 蘑菇：给少量经验并推进「采集蘑菇」事件进度
+                    if (lo != null) {
+                        lo.gainXp(dmg[i]);
+                    }
+                    takeMushroom();
                 } else if (lo != null) {
                     lo.gainXp(dmg[i]);
                 }
@@ -2231,6 +2443,10 @@ public final class World {
             if (i == bossId) {
                 continue;
             }
+            // 雕像事件靶子不回收：玩家跑远了任务就永远完不成
+            if (variant[i] == V_STATUE) {
+                continue;
+            }
             float dx = x[i] - wx;
             float dy = y[i] - wy;
             if (dx * dx + dy * dy > lim2) {
@@ -2591,6 +2807,8 @@ public final class World {
      */
     public static final class Summary {
         public final boolean victory;
+        /** true = 玩家从暂停菜单「退出结算」主动结束（标题与阵亡区分） */
+        public final boolean abandoned;
         public final float time;
         public final int level;
         /** 小怪击杀数（已扣除 Boss） */
@@ -2600,16 +2818,20 @@ public final class World {
         public final int spells;
         /** 被动总层数 */
         public final int passives;
+        /** 本局完成的小任务数（共 3） */
+        public final int events;
 
-        Summary(boolean victory, float time, int level, int minionKills,
-                int bossKills, int spells, int passives) {
+        Summary(boolean victory, boolean abandoned, float time, int level, int minionKills,
+                int bossKills, int spells, int passives, int events) {
             this.victory = victory;
+            this.abandoned = abandoned;
             this.time = time;
             this.level = level;
             this.minionKills = minionKills;
             this.bossKills = bossKills;
             this.spells = spells;
             this.passives = passives;
+            this.events = events;
         }
     }
 
@@ -2618,7 +2840,7 @@ public final class World {
      * wid 必须显式传入：阵亡快照是在 kill() 里取的，那时 alive 已置 false，
      * firstWizard() 会返回 -1，拿不到 Loadout。
      */
-    private Summary snapshot(boolean won, int wid) {
+    private Summary snapshot(boolean won, boolean aband, int wid) {
         Loadout lo = (wid >= 0) ? loadout[wid] : null;
         int lv = (lo != null) ? lo.level : 0;
         int sp = (lo != null) ? lo.activeCount() : 0;
@@ -2628,12 +2850,67 @@ public final class World {
                 pas += lo.pstacks.get(i);
             }
         }
-        return new Summary(won, time, lv, kills - bossKills, bossKills, sp, pas);
+        return new Summary(won, aband, time, lv, kills - bossKills, bossKills, sp, pas,
+                eventCompleted);
     }
 
     /** 主控玩家是否已阵亡。客户端据此冻结模拟并弹结算画面 */
     public boolean defeat() {
         return defeat;
+    }
+
+    /** 玩家是否从暂停菜单主动退出（「退出结算」）。与阵亡同屏展示战报，但标题不同 */
+    public boolean abandoned() {
+        return abandoned;
+    }
+
+    // ---- 战斗事件（小任务）只读访问器 ----
+    /** 当前事件类型：Balance.EVENT_RIFT / EVENT_STATUE / EVENT_MUSHROOM，0=无 */
+    public int eventType() {
+        return eventType;
+    }
+
+    /** 当前事件进度（裂隙=已坚持秒；雕像=已摧毁数；蘑菇=已采集数） */
+    public float eventProgress() {
+        return eventProgress;
+    }
+
+    /** 当前事件目标值 */
+    public float eventGoal() {
+        return eventGoal;
+    }
+
+    /** 事件区域中心坐标（裂隙圈圆心 / 雕像与蘑菇散布中心） */
+    public float eventX() {
+        return eventX;
+    }
+
+    public float eventY() {
+        return eventY;
+    }
+
+    /** 「任务完成 +经验」横幅剩余显示秒数（>0 显示） */
+    public float eventBannerT() {
+        return eventBannerT;
+    }
+
+    /** 本局已完成的小任务数 */
+    public int eventCompletedCount() {
+        return eventCompleted;
+    }
+
+    /** 当前事件名字（无事件时返回空串） */
+    public String eventName() {
+        if (eventType == Balance.EVENT_RIFT) {
+            return Balance.EVENT_NAMES[0];
+        }
+        if (eventType == Balance.EVENT_STATUE) {
+            return Balance.EVENT_NAMES[1];
+        }
+        if (eventType == Balance.EVENT_MUSHROOM) {
+            return Balance.EVENT_NAMES[2];
+        }
+        return "";
     }
 
     /** 本局击败的 Boss 数量 */
