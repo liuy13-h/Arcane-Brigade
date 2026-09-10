@@ -338,6 +338,11 @@ public final class Sprites {
     // 画法
     // ------------------------------------------------------------------
 
+
+    // ------------------------------------------------------------------
+    // 画法
+    // ------------------------------------------------------------------
+
     private static void paintWizard(GraphicsContext g) {
         double cx = 22, cy = 24;
         // 脚下光晕
@@ -430,6 +435,7 @@ public final class Sprites {
         g.fillOval(cx + 1.1, cy + 0.5, 2.4, 2.4);
     }
 
+    /** 弓箭手兜底形象：绿斗篷 + 身前长弓 */
     private static void paintArcher(GraphicsContext g) {
         double cx = 22, cy = 24;
         // 脚下光晕（绿色）
@@ -460,6 +466,38 @@ public final class Sprites {
 
         // 脸与眼睛
         g.setFill(Color.rgb(238, 220, 190));
+        g.fillOval(cx - 6, cy - 4, 12, 11);
+        g.setFill(Color.rgb(30, 32, 48));
+        g.fillOval(cx - 3.5, cy + 0.5, 2.4, 2.4);
+        g.fillOval(cx + 1.1, cy + 0.5, 2.4, 2.4);
+    }
+
+    /**
+     * 中性「旅行者」剪影：准备大厅里还没选职业时的化身。
+     * 刻意用灰色系，与三个职业的彩色光晕区分开。
+     */
+    private static void paintAdventurer(GraphicsContext g) {
+        double cx = 22, cy = 24;
+        // 脚下灰雾
+        g.setFill(new RadialGradient(0, 0, cx, cy, 20, false, CycleMethod.NO_CYCLE,
+                new Stop(0, Color.rgb(210, 214, 224, 0.40)),
+                new Stop(1, Color.rgb(210, 214, 224, 0))));
+        g.fillOval(2, 4, 40, 40);
+
+        // 灰斗篷
+        g.setFill(Color.rgb(104, 108, 122));
+        g.fillOval(cx - 10, cy - 6, 20, 22);
+        g.setFill(Color.rgb(78, 82, 96));
+        g.fillOval(cx - 10, cy + 8, 20, 10);
+
+        // 兜帽(比斗篷浅一点,翻起的帽沿)
+        g.setFill(Color.rgb(122, 126, 140));
+        g.fillArc(cx - 10, cy - 15, 20, 19, 0, 180, ArcType.ROUND);
+        g.setFill(Color.rgb(90, 93, 108));
+        g.fillRect(cx - 12, cy - 6, 24, 3);
+
+        // 脸与眼睛
+        g.setFill(Color.rgb(226, 222, 214));
         g.fillOval(cx - 6, cy - 4, 12, 11);
         g.setFill(Color.rgb(30, 32, 48));
         g.fillOval(cx - 3.5, cy + 0.5, 2.4, 2.4);
@@ -541,35 +579,6 @@ public final class Sprites {
         g.setFill(Color.rgb(60, 40, 90));
         g.fillOval(cx - 3.6, cy - 1.4, 1.8, 1.8);
         g.fillOval(cx + 2.0, cy - 1.4, 1.8, 1.8);
-    }
-
-    /** 大厅初始操控对象（国王）兜底：中性灰斗篷旅行者 */
-    private static void paintAdventurer(GraphicsContext g) {
-        double cx = 22, cy = 24;
-        // 脚下灰雾
-        g.setFill(new RadialGradient(0, 0, cx, cy, 20, false, CycleMethod.NO_CYCLE,
-                new Stop(0, Color.rgb(210, 214, 224, 0.40)),
-                new Stop(1, Color.rgb(210, 214, 224, 0))));
-        g.fillOval(2, 4, 40, 40);
-
-        // 灰斗篷
-        g.setFill(Color.rgb(104, 108, 122));
-        g.fillOval(cx - 10, cy - 6, 20, 22);
-        g.setFill(Color.rgb(78, 82, 96));
-        g.fillOval(cx - 10, cy + 8, 20, 10);
-
-        // 兜帽(比斗篷浅一点,翻起的帽沿)
-        g.setFill(Color.rgb(122, 126, 140));
-        g.fillArc(cx - 10, cy - 15, 20, 19, 0, 180, ArcType.ROUND);
-        g.setFill(Color.rgb(90, 93, 108));
-        g.fillRect(cx - 12, cy - 6, 24, 3);
-
-        // 脸与眼睛
-        g.setFill(Color.rgb(226, 222, 214));
-        g.fillOval(cx - 6, cy - 4, 12, 11);
-        g.setFill(Color.rgb(30, 32, 48));
-        g.fillOval(cx - 3.5, cy + 0.5, 2.4, 2.4);
-        g.fillOval(cx + 1.1, cy + 0.5, 2.4, 2.4);
     }
 
     private static void paintSlime(GraphicsContext g, Color body, Color dark) {

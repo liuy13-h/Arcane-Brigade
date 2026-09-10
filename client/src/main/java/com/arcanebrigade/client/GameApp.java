@@ -47,6 +47,16 @@ public final class GameApp extends Application {
     private int dragSlider = -1;
     private double mouseX = -1000, mouseY = -1000;
 
+    // ---- 「角色背景」滚动框 与 「查看详情」弹层状态（选人卡/大厅） ----
+    /** 选人卡右栏背景滚动偏移（px），由滚轮更新 */
+    private double loreScroll;
+    /** 查看详情弹层的职业 id：0=关闭；>0 时弹层打开并淡入 */
+    private int detailClass;
+    /** 弹层正文滚动偏移（px） */
+    private double detailScroll;
+    /** 弹层淡入进度 0..1（打开时从 0 升至 1） */
+    private double detailFade;
+
     /** 战斗冒烟帧数：-Dab.smoke=180 = 自动选职业打 180 帧后退出（战斗路径回归） */
     private int smokeFrames = -1;
     private int renderedFrames;
@@ -118,6 +128,13 @@ public final class GameApp extends Application {
             }
             if (inLobby) {
                 // 大厅阶段：WASD 靠 pressed 轮询移动；空格/E 先应答面前勇者的招募，其次光门出发
+                // 「查看详情」弹层打开时：ESC 关闭，其余按键不进入 pressed（国王/卡片全部冻结）
+                if (detailClass != 0) {
+                    if (e.getCode() == KeyCode.ESCAPE) {
+                        closeDetail();
+                    }
+                    return;
+                }
                 pressed.add(e.getCode());
                 if (e.getCode() == KeyCode.E || e.getCode() == KeyCode.SPACE) {
                     lobbyAction();
@@ -147,6 +164,33 @@ public final class GameApp extends Application {
         scene.setOnMouseMoved(e -> {
             mouseX = e.getX();
             mouseY = e.getY();
+        });
+        // 滚轮：详情弹层打开时滚档案正文；选人卡展开且悬停在卡面上时滚「角色背景」框
+        scene.setOnScroll(e -> {
+            double vw = renderer != null ? renderer.getCanvasWidth()
+                    : canvas.getWidth();
+            double vh = renderer != null ? renderer.getCanvasHeight()
+                    : canvas.getHeight();
+            double dy = e.getDeltaY();
+            if (dy == 0 || inTitle) {
+                return;
+            }
+            if (detailClass != 0) {
+                // 向上滚看上文（偏移减小）、向下滚看下文
+                detailScroll -= dy;
+                detailScroll = Math.max(0, detailScroll);
+                return;
+            }
+            if (inLobby && cardClass != 0 && cardReveal > 0.6 && mouseX >= 0) {
+                double cardX = vw - Renderer.classCardW(vw) - 12;
+                double panelTop = vh - 18 - Math.min(306, vh * 0.42) - 6;
+                boolean overCard = mouseX >= cardX - 8 && mouseX <= cardX + Renderer.classCardW(vw)
+                        && mouseY >= panelTop - 8 && mouseY <= vh - 8;
+                if (overCard) {
+                    loreScroll -= dy;
+                    loreScroll = Math.max(0, loreScroll);
+                }
+            }
         });
         // 音量滑块：按下即定位、按住拖动连续调节；同时记录左键按下状态供战斗阶段使用
         scene.setOnMousePressed(e -> {
@@ -188,6 +232,30 @@ public final class GameApp extends Application {
                 // 大厅里鼠标只用于指引的收起/展开，角色交互仍走空格/E
                 double vw = renderer.getCanvasWidth();
                 double vh = renderer.getCanvasHeight();
+                // 「查看详情」弹层打开：点 ✕ 或面板外 = 关闭；点在面板内不响应
+                if (detailClass != 0) {
+                    double[] p = Renderer.detailPanelRect(vw, vh);
+                    double[] c = Renderer.detailCloseRect(vw, vh);
+                    boolean inClose = e.getX() >= c[0] && e.getX() <= c[0] + c[2]
+                            && e.getY() >= c[1] && e.getY() <= c[1] + c[3];
+                    boolean inPanel = e.getX() >= p[0] && e.getX() <= p[0] + p[2]
+                            && e.getY() >= p[1] && e.getY() <= p[1] + p[3];
+                    if (inClose || !inPanel) {
+                        closeDetail();
+                    }
+                    return;
+                }
+                // 卡片展示中：点「查看详情」打开弹层（召唤师也可看档案）
+                if (cardClass != 0 && cardReveal > 0.9) {
+                    double[] b = Renderer.classDetailButton(vw, vh, cardReveal);
+                    if (e.getX() >= b[0] && e.getX() <= b[0] + b[2]
+                            && e.getY() >= b[1] && e.getY() <= b[1] + b[3]) {
+                        detailClass = cardClass;
+                        detailFade = 0;
+                        detailScroll = 0;
+                        return;
+                    }
+                }
                 Renderer.GuideGeom gg = Renderer.lobbyGuideGeom(vw, vh);
                 Renderer.Rect r = lobbyGuide ? gg.hide() : gg.open();
                 if (r.hit(e.getX(), e.getY())) {
@@ -270,6 +338,7 @@ public final class GameApp extends Application {
                 fps[0] += (1.0 / Math.max(dt, 1e-6) - fps[0]) * 0.08;
 
                 // 帧率上限只限制「画面刷新」：逻辑仍每帧按固定步长推进。
+                // 30=隔帧绘制；60=默认；120 受显示器刷新限制，高于实际刷新时等同不限。
                 double period = 1.0 / GameConfig.fpsCap;
                 boolean drawNow = (now - lastDraw[0]) / 1e9 >= period - 1e-9;
                 if (drawNow) {
@@ -298,6 +367,11 @@ public final class GameApp extends Application {
                     double vh = canvas.getHeight();
                     Renderer.LobbyGeom g = Renderer.geom(vw, vh);
                     stepLobby(dt, g);
+                    // 弹层淡入推进 + 滚动/弹层状态同步给渲染器（drawLobby 内部读取）
+                    if (detailClass != 0 && detailFade < 1) {
+                        detailFade = Math.min(1, detailFade + dt / 0.18);
+                    }
+                    renderer.setLobbyUi(loreScroll, detailClass, detailScroll, detailFade);
                     if (drawNow) {
                         renderer.setFps(fps[0]);
                         renderer.drawLobby(g, lx, ly, lobbyChoice, lobbyAnimT, cardClass, cardReveal,
@@ -391,6 +465,7 @@ public final class GameApp extends Application {
         inTitle = false;
         inLobby = true;
         overlay = Renderer.OVER_NONE;
+        closeDetail();    // 重进大厅清掉可能残留的档案弹层状态
         lobbyPosInit = false;    // 首帧按出生点落位
         cardClass = 0;
         cardReveal = 0;
@@ -547,6 +622,10 @@ public final class GameApp extends Application {
 
     /** 大厅一帧：按 WASD 移动并夹紧在可走范围内，靠近角色即选中（含召唤师可高亮） */
     private void stepLobby(double dt, Renderer.LobbyGeom g) {
+        // 「查看详情」弹层打开：国王与卡片全部冻结，等待 ESC / 点 ✕ / 点面板外关闭
+        if (detailClass != 0) {
+            return;
+        }
         if (!lobbyPosInit) {
             // 国王从王座台阶出发：站在四人一字排开之上、出征光门之下的纵深
             double[] sp = g.kingSpawn();
@@ -582,6 +661,7 @@ public final class GameApp extends Application {
         if (want && cardClass != near) {
             cardClass = near;
             cardReveal = 0;
+            loreScroll = 0;      // 换人：背景框回到顶部
         }
         double target = want ? 1 : 0;
         double spd = dt / (want ? 0.30 : 0.22);   // 滑入略缓、缩回略快
@@ -636,6 +716,13 @@ public final class GameApp extends Application {
         }
     }
 
+    /** 关闭「查看详情」弹层：清空弹层状态（淡入进度归零，下次打开重新淡入） */
+    private void closeDetail() {
+        detailClass = 0;
+        detailFade = 0;
+        detailScroll = 0;
+    }
+
     /** 玩家确认职业：生成对应勇者，退出大厅/主菜单，正式开局 */
     private void beginGame(int classKind) {
         if (!inTitle && !inLobby) {
@@ -646,6 +733,7 @@ public final class GameApp extends Application {
         inLobby = false;
         overlay = Renderer.OVER_NONE;
         manualPause = false;
+        closeDetail();    // 进战斗前也清一次（防御性）
         GameAudio.stopMenuBgm();  // 出征 / 战斗冒烟都离开主界面
         GameAudio.stopLobbyBgm(); // 战斗中暂时没有 BGM
         pressed.clear();

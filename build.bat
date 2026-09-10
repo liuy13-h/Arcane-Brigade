@@ -1,4 +1,7 @@
 @echo off
+rem Same Chinese-path fix as run.bat: make `dir`'s argfile output UTF-8
+rem so JDK18+ javac can read it (see run.bat header for details).
+chcp 65001 >nul
 rem Arcane Brigade - one-click build
 rem Builds core + client into core\target\classes and client\target\classes.
 rem Tries Maven first (also installs the jars into ~/.m2); if Maven is not

@@ -1,4 +1,12 @@
 @echo off
+rem ------------------------------------------------------------------
+rem  Chinese-path fix: `dir /s /b` emits fully-qualified source paths
+rem  encoded with the console codepage, but JDK18+ reads javac @argfiles
+rem  as UTF-8, so a non-UTF-8 codepage throws MalformedInputException.
+rem  Switch to UTF-8 (65001) up front so both sides agree. Must be set
+rem  BEFORE any non-ASCII text is parsed by cmd, hence placed here.
+rem ------------------------------------------------------------------
+chcp 65001 >nul
 rem ============================================================
 rem  Arcane Brigade one-click launcher
 rem  Needs: a JDK 17 or newer (java and javac reachable from PATH,
@@ -26,7 +34,11 @@ if not defined JAVAC (
 )
 if "%JAVAC%"=="javac" (set "JAVAEXE=java") else (set "JAVAEXE=%JAVAC:javac.exe=java.exe%")
 
-set "FX=%USERPROFILE%\.m2\repository\org\openjfx"
+rem Local repo: prefer D:\.m2 (some dev machines keep Maven there),
+rem fall back to the standard per-user location. No hand-editing needed.
+set "M2=D:\.m2\repository"
+if not exist "%M2%\org\openjfx\javafx-base\21.0.12" set "M2=%USERPROFILE%\.m2\repository"
+set "FX=%M2%\org\openjfx"
 set "FB=%FX%\javafx-base\21.0.12\javafx-base-21.0.12-win.jar"
 set "FG=%FX%\javafx-graphics\21.0.12\javafx-graphics-21.0.12-win.jar"
 set "FC=%FX%\javafx-controls\21.0.12\javafx-controls-21.0.12-win.jar"
@@ -57,7 +69,14 @@ set "CP=%COREOUT%;%CLIENTOUT%;%FB%;%FG%;%FC%;%FM%"
 echo Launching Arcane Brigade ...
 set "SMK="
 if defined AB_SMOKE set "SMK=-Dab.smoke=%AB_SMOKE%"
-"%JAVAEXE%" -Dfile.encoding=UTF-8 -Dsun.java2d.dpiaware=true %SMK% -cp "%CP%" com.arcanebrigade.client.GameLauncher
+rem JDK 23+ warns about JavaFX native access and Unsafe use (errors later);
+rem these two flags silence that early. JDK 21 does NOT know
+rem --sun-misc-unsafe-memory-access and dies with "Unrecognized option",
+rem so probe first and only pass the flags when the runtime accepts them.
+set "FWD="
+"%JAVAEXE%" --sun-misc-unsafe-memory-access=allow -version >nul 2>nul
+if not errorlevel 1 set "FWD=--enable-native-access=ALL-UNNAMED --sun-misc-unsafe-memory-access=allow"
+"%JAVAEXE%" %FWD% -Dfile.encoding=UTF-8 -Dsun.java2d.dpiaware=true %SMK% -cp "%CP%" com.arcanebrigade.client.GameLauncher
 set "RC=%ERRORLEVEL%"
 endlocal & exit /b %RC%
 

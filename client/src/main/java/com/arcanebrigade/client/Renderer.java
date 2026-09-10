@@ -21,6 +21,9 @@ import javafx.scene.text.Font;
 import javafx.scene.text.FontWeight;
 import javafx.scene.text.Text;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Canvas 立即模式渲染。整个画面在一张 Canvas 上画完，不往 Scene Graph 里塞任何节点。
  *
@@ -53,6 +56,16 @@ public final class Renderer {
     /** 手动暂停状态，暂停按钮文字 + 暂停罩层用 */
     private boolean paused;
 
+    // ---- 选人卡交互状态（每帧由 GameApp.setLobbyUi 写入，绘制时读取） ----
+    /** 「角色背景」滚动框的纵向偏移（px，上为正） */
+    private double loreScroll;
+    /** 「查看详情」弹层当前职业 id；0 = 未打开 */
+    private int detailClass;
+    /** 弹层正文滚动偏移（px） */
+    private double detailScroll;
+    /** 弹层淡入进度 0..1 */
+    private double detailFade;
+
     public Renderer(Canvas canvas) {
         this.canvas = canvas;
         this.gc = canvas.getGraphicsContext2D();
@@ -64,6 +77,15 @@ public final class Renderer {
 
     public void setFps(double v) {
         this.fps = v;
+    }
+
+    /** 每帧同步选人卡滚动/详情弹层状态（绘制前调用一次） */
+    public void setLobbyUi(double loreScroll, int detailClass,
+            double detailScroll, double detailFade) {
+        this.loreScroll = loreScroll;
+        this.detailClass = detailClass;
+        this.detailScroll = detailScroll;
+        this.detailFade = detailFade;
     }
 
     public double getCanvasWidth() {
@@ -1364,6 +1386,11 @@ public final class Renderer {
         if (cardClass != 0 && cardClass != chosen && reveal > 0.03) {
             drawRecruitBar(vw, vh, cardClass, chosen, reveal);
         }
+
+        // ---- 「查看详情」全屏弹层：盖在整张大厅画面上（含上面的卡与招募条） ----
+        if (detailClass != 0 && detailFade > 0.004) {
+            drawDetail(vw, vh, detailClass, detailFade);
+        }
     }
 
     /**
@@ -1381,7 +1408,7 @@ public final class Renderer {
 
         // 条占屏幕左下部，右侧避开立绘文字面板
         double barH = 92;
-        double cardW = Math.min(430, vw * 0.34);
+        double cardW = classCardW(vw);
         double x0 = 18;
         double right = vw - cardW - 36;
         double barW = Math.max(240, right - x0);
@@ -1417,93 +1444,420 @@ public final class Renderer {
         gc.fillText(hint, hx, baseY);
     }
 
+    /** 选人卡滑入后的统一宽度（招募条避让 / 卡片绘制 / 点击命中共用） */
+    public static double classCardW(double vw) {
+        return Math.min(480, vw * 0.40);
+    }
+
     /**
-     * 站在角色面前时从屏右滑入的细节立绘：不画任何底板/白底/描边，只有立绘与文字，
-     * 任其直接叠在王座厅场景上。reveal 0..1 = 展示进度（1 完全到位、0 缩回屏外），
-     * 进出共用同一根 ease-out 曲线，因此离开区域时立绘会原路滑出。
+     * 「查看详情」按钮的命中矩形 {x,y,w,h}。
+     * 几何与 drawClassCard 内的按钮完全一致（同一套公式），GameApp 点击命中用。
+     */
+    public static double[] classDetailButton(double vw, double vh, double reveal) {
+        double cardW = classCardW(vw);
+        double targetX = vw - cardW - 12;
+        double r = Math.max(0, Math.min(1, reveal));
+        double p = 1 - Math.pow(1 - r, 3);
+        double x = vw + 40 + (targetX - vw - 40) * p;
+        double panelX = x + 8;
+        double panelW = cardW - 16;
+        double infoH = Math.min(306, vh * 0.42);
+        double panelBottom = vh - 14;
+        double innerX = panelX + 14;
+        double innerBottom = panelBottom - 12;
+        double leftW = Math.round((panelW - 28) * 0.44);
+        double rightX = innerX + leftW + 12;
+        double rightW = (panelX + panelW - 14) - rightX;
+        double btnH = 30;
+        double btnW = 132;
+        double btnX = rightX + rightW - btnW;
+        double btnY = innerBottom - btnH;
+        return new double[] { btnX, btnY, btnW, btnH };
+    }
+
+    /**
+     * 站在角色面前时从屏右滑入的细节卡：上部无底立绘 + 下部双栏面板。
+     * 左栏：编号/职业名/真名/定位/特性/数值条；右栏：「角色背景」滚动框 + 查看详情按钮。
+     * 不画任何底板/白底，任其直接叠在王座厅场景上。reveal 0..1 = 展示进度。
      */
     private void drawClassCard(double vw, double vh, int ck, double reveal) {
         Image art = Sprites.heroPortraits[ck];
         if (art == null) {
             return;
         }
-        double cardW = Math.min(430, vw * 0.34);
+        double cardW = classCardW(vw);
         double targetX = vw - cardW - 12;
         double r = Math.max(0, Math.min(1, reveal));
         double p = 1 - Math.pow(1 - r, 3);          // ease-out cubic
-        double fromX = vw + 40;
-        double x = fromX + (targetX - fromX) * p;
+        double x = vw + 40 + (targetX - vw - 40) * p;
         Color ac = classAccent(ck);
 
-        double pad = 16;
-        double innerW = cardW - pad * 2;
-        double infoH = 244;
+        double pad = 14;
+        double infoH = Math.min(306, vh * 0.42);
         double infoTop = vh - 18 - infoH;
         double artTop = 96;
-        double artAvailH = infoTop - artTop - 24;
+        double artAvailH = Math.max(120, infoTop - artTop - 26);
 
         // 立绘：透明背景图，contain 等比，底边贴近文字区上沿，避免整体悬空
-        double sc = Math.min(innerW / art.getWidth(), artAvailH / art.getHeight());
+        double sc = Math.min((cardW - 2 * pad) / art.getWidth(), artAvailH / art.getHeight());
         double aw = art.getWidth() * sc;
         double ah = art.getHeight() * sc;
-        gc.drawImage(art, x + (cardW - aw) / 2, artTop + (artAvailH - ah) / 2, aw, ah);
+        gc.drawImage(art, Math.round(x + (cardW - aw) / 2), Math.round(artTop + (artAvailH - ah) / 2), aw, ah);
 
-        // ---- 文字信息底：职业色的半透明面板，只垫文字区（立绘保持无底悬浮不动） ----
+        // ---- 文字信息底：职业色半透明面板（左栏信息 / 右栏背景框共用一块底） ----
         double panelX = x + 8;
         double panelTop = infoTop - 6;
         double panelW = cardW - 16;
         double panelBottom = vh - 14;
-        gc.setFill(Color.color(ac.getRed(), ac.getGreen(), ac.getBlue(), 0.20));
+        gc.setFill(Color.color(ac.getRed(), ac.getGreen(), ac.getBlue(), 0.16));
         gc.fillRoundRect(panelX, panelTop, panelW, panelBottom - panelTop, 12, 12);
-        gc.setStroke(Color.color(ac.getRed(), ac.getGreen(), ac.getBlue(), 0.45));
+        gc.setStroke(Color.color(ac.getRed(), ac.getGreen(), ac.getBlue(), 0.40));
         gc.setLineWidth(1);
         gc.strokeRoundRect(panelX, panelTop, panelW, panelBottom - panelTop, 12, 12);
 
-        // ---- 信息区（文字自带投影，保证在面板与明亮背景上仍清晰） ----
-        double iy = infoTop + 8;
-        double tx = x + pad;
-        shadowLeft(tx, iy + 13, Font.font("Microsoft YaHei", 11),
-                CARD_EN[ck], Color.rgb(200, 198, 224));
-        shadowLeft(tx, iy + 47, Font.font("Microsoft YaHei", FontWeight.BOLD, 26),
-                CARD_NAME[ck], Color.WHITE);
+        // ---- 面板内部：左右两栏 ----
+        double innerX = panelX + 14;
+        double innerTop = panelTop + 12;
+        double innerBottom = panelBottom - 12;
+        double leftW = Math.round((panelW - 28) * 0.44);
+        double colGap = 12;
+        double rightX = innerX + leftW + colGap;
+        double rightW = (panelX + panelW - 14) - rightX;
+
+        // ===== 左栏：编号 / 职业名 / 真名 / 定位 / 特性 / 数值条 / 台词 =====
+        LobbyLore.Lore lore = LobbyLore.byClass(ck);
+        double lx = innerX;
+        double iy = innerTop;
+        Font enF = Font.font("Microsoft YaHei", 10.5);
+        shadowLeft(lx, iy + 10, enF, CARD_EN[ck], Color.rgb(198, 196, 224));
+        iy += 16;
+        Font nmF = Font.font("Microsoft YaHei", FontWeight.BOLD, 23);
+        shadowLeft(lx, iy + 19, nmF, CARD_NAME[ck], Color.WHITE);
+        iy += 34;
+        if (lore != null) {
+            Font rnF = Font.font("Microsoft YaHei", FontWeight.BOLD, 11.5);
+            shadowLeft(lx, iy + 11, rnF, lore.name(), ac);
+            iy += 22;
+        }
         // 定位：左竖色条 + 文本
-        double roleY = iy + 78;
+        shadowLeft(lx + 8, iy + 12, Font.font("Microsoft YaHei", 12.5),
+                lore != null ? lore.role() : CARD_ROLE[ck], Color.rgb(244, 242, 252));
         gc.setFill(ac);
-        gc.fillRoundRect(tx, roleY - 13, 4, 17, 2, 2);
-        shadowLeft(tx + 11, roleY, Font.font("Microsoft YaHei", 14.5),
-                CARD_ROLE[ck], Color.rgb(244, 242, 252));
-        // 特征：逐行菱形点
-        double fy = iy + 126;
-        Font featF = Font.font("Microsoft YaHei", 13);
+        gc.fillRoundRect(lx, iy - 4, 3.5, 15, 1.5, 1.5);
+        iy += 26;
+        // 特性：逐行菱形点
+        Font featF = Font.font("Microsoft YaHei", 11.5);
         for (String f : CARD_FEATS[ck]) {
             gc.setFill(Color.color(ac.getRed(), ac.getGreen(), ac.getBlue(), 0.95));
-            gc.fillRoundRect(tx + 5, fy - 9.5, 5, 5, 1.2, 1.2);
-            shadowLeft(tx + 21, fy, featF, f, Color.rgb(228, 226, 242));
-            fy += 21;
+            gc.fillRoundRect(lx + 4, iy - 8, 5, 5, 1.2, 1.2);
+            shadowLeft(lx + 16, iy, featF, f, Color.rgb(226, 224, 242));
+            iy += 19;
         }
-        drawCardBar(tx, fy + 8, "生命", Math.round(CARD_LIFE[ck] * 150) + "",
-                CARD_LIFE[ck], ac);
-        drawCardBar(tx, fy + 32, "移速", Math.round(CARD_SPEED[ck] * 235) + "",
-                CARD_SPEED[ck], Color.rgb(120, 220, 255));
+        iy += 4;
+        // 数值条（宽度适配左栏）
+        double barW = Math.max(60, leftW - 74);
+        drawCardBar(lx, iy, "生命", Math.round(CARD_LIFE[ck] * 150) + "",
+                CARD_LIFE[ck], ac, barW);
+        iy += 27;
+        drawCardBar(lx, iy, "移速", Math.round(CARD_SPEED[ck] * 235) + "",
+                CARD_SPEED[ck], Color.rgb(120, 220, 255), barW);
+
+        // ===== 右栏：「角色背景」滚动框 + 「查看详情」按钮 =====
+        double[] btnR = classDetailButton(vw, vh, reveal);
+        double btnX = btnR[0];
+        double btnY = btnR[1];
+        double btnW = btnR[2];
+        double btnH = btnR[3];
+        double boxTitleH = 20;
+        double boxGap = 10;
+        double boxTop = innerTop + boxTitleH;
+        double boxBottom = btnY - boxGap;
+        // 右栏标题
+        shadowLeft(rightX, innerTop + 13, Font.font("Microsoft YaHei", FontWeight.BOLD, 12),
+                "角色背景", Color.rgb(255, 227, 168));
+
+        // 滚动框内容：背景全文 + 性格 + 战斗风格（纯文字，无数值）
+        StringBuilder sb = new StringBuilder();
+        if (lore != null) {
+            sb.append(lore.background());
+            sb.append("\n\n性格：").append(lore.personality());
+            sb.append("\n\n战斗风格：").append(lore.style());
+        } else {
+            sb.append("（该职业的档案尚未撰写）");
+        }
+        Font bodyF = Font.font("Microsoft YaHei", 12);
+        double lineH = 19.5;
+        double boxX = rightX;
+        double boxW = rightW;
+        double boxH = boxBottom - boxTop;
+        List<String> lines = wrapText(bodyF, sb.toString(), boxW - 12);
+        double maxScroll = Math.max(0, lines.size() * lineH - boxH);
+        double scroll = Math.max(0, Math.min(maxScroll, loreScroll));
+
+        // 滚动框底：深色半透明，让文字可读
+        gc.setFill(Color.rgb(6, 6, 16, 0.45));
+        gc.fillRoundRect(boxX, boxTop, boxW, boxH, 8, 8);
+        gc.setStroke(Color.color(ac.getRed(), ac.getGreen(), ac.getBlue(), 0.28));
+        gc.setLineWidth(1);
+        gc.strokeRoundRect(boxX, boxTop, boxW, boxH, 8, 8);
+        // 裁剪区域里画滚动行
+        gc.save();
+        gc.beginPath();
+        gc.rect(boxX + 6, boxTop + 4, boxW - 12, boxH - 8);
+        gc.clip();
+        gc.setFont(bodyF);
+        double ty = boxTop + 4 + lineH - 4;
+        for (String line : lines) {
+            gc.setFill(Color.rgb(235, 233, 248));
+            gc.fillText(line, boxX + 7, ty - scroll);
+            ty += lineH;
+        }
+        gc.restore();
+        // 滚动条：仅当有溢出时显示
+        if (maxScroll > 0.5) {
+            double sbH = Math.max(18, boxH * boxH / (lines.size() * lineH));
+            double sbY = boxTop + 4 + (boxH - 8 - sbH) * (scroll / maxScroll);
+            gc.setFill(Color.color(ac.getRed(), ac.getGreen(), ac.getBlue(), 0.85));
+            gc.fillRoundRect(boxX + boxW - 6, sbY, 3, sbH, 1.5, 1.5);
+        }
+
+        // 「查看详情」按钮：金色勾边，点击后打开全屏档案弹层
+        gc.setFill(Color.color(ac.getRed(), ac.getGreen(), ac.getBlue(), 0.22));
+        gc.fillRoundRect(btnX, btnY, btnW, btnH, 15, 15);
+        gc.setStroke(Color.rgb(255, 214, 140));
+        gc.setLineWidth(1.4);
+        gc.strokeRoundRect(btnX, btnY, btnW, btnH, 15, 15);
+        Font btnF = Font.font("Microsoft YaHei", FontWeight.BOLD, 13);
+        String btnT = "查看详情";
+        double btnWpx = measureWidth(btnF, btnT);
+        gc.setFont(btnF);
+        gc.setFill(Color.rgb(255, 226, 170));
+        gc.fillText(btnT, btnX + (btnW - btnWpx) / 2, btnY + btnH / 2 + 4.5);
     }
 
-    /** 无底数值条：标签 + 数值（带投影），进度只画彩色圆角条 + 细描边，不留白槽 */
+    /**
+     * 「查看详情」弹层：杀戮尖塔式档案页。全屏暗幕 + 中央面板：左侧大立绘，
+     * 右侧完整档案（真名/称号/定位固定头部，背景/性格/风格/台词滚轮查看）。
+     * fade 0..1 = 淡入进度。detailScroll 由 GameApp 滚轮更新，这里只 clamp 绘制。
+     */
+    private void drawDetail(double vw, double vh, int ck, double fade) {
+        Image art = Sprites.heroPortraits[ck];
+        LobbyLore.Lore lore = LobbyLore.byClass(ck);
+        Color ac = classAccent(ck);
+        double f = Math.max(0, Math.min(1, fade));
+        double ease = f < 1 ? 1 - Math.pow(1 - f, 3) : 1;   // ease-out cubic
+
+        // 全屏暗幕
+        gc.setFill(Color.rgb(4, 3, 10, 0.72 * ease));
+        gc.fillRect(0, 0, vw, vh);
+        if (ease < 0.01) {
+            return;
+        }
+
+        double pw = Math.min(1040, vw * 0.85);
+        double ph = Math.min(640, vh * 0.88);
+        double px = (vw - pw) / 2;
+        double py = (vh - ph) / 2;
+        double[] pr = detailPanelRect(vw, vh);
+        px = pr[0];
+        py = pr[1];
+
+        // 面板底：深色圆角 + 职业色描边
+        gc.setFill(Color.rgb(15, 13, 28, 0.97 * ease));
+        gc.fillRoundRect(px, py, pw, ph, 18, 18);
+        gc.setStroke(Color.color(ac.getRed(), ac.getGreen(), ac.getBlue(), 0.9 * ease));
+        gc.setLineWidth(2);
+        gc.strokeRoundRect(px, py, pw, ph, 18, 18);
+
+        // 右上角关闭钮（✕）
+        double[] cr = detailCloseRect(vw, vh);
+        double cx0 = cr[0] + cr[2] / 2;
+        double cy0 = cr[1] + cr[3] / 2;
+        gc.setStroke(Color.color(1, 0.9, 0.8, 0.8 * ease));
+        gc.setLineWidth(1.6);
+        gc.strokeLine(cx0 - 5, cy0 - 5, cx0 + 5, cy0 + 5);
+        gc.strokeLine(cx0 - 5, cy0 + 5, cx0 + 5, cy0 - 5);
+
+        // ---- 左侧：大立绘（透明底竖版，铺满左栏高度，底边贴面板内缘） ----
+        double lw = pw * 0.42;
+        double padY = 20;
+        double availH = ph - padY * 2;
+        if (art != null) {
+            double sc = Math.min((lw - 20) / art.getWidth(), availH / art.getHeight());
+            double aw = art.getWidth() * sc;
+            double ah = art.getHeight() * sc;
+            gc.drawImage(art,
+                    Math.round(px + 18 + (lw - 20 - aw) / 2),
+                    Math.round(py + padY + (availH - ah) / 2), aw, ah);
+        }
+
+        // ---- 右侧：固定头部 + 可滚动档案正文 ----
+        double tx = px + lw + 10;
+        double tw = px + pw - 30 - tx;   // 右栏宽
+        double headY = py + 26;
+        Font enF = Font.font("Microsoft YaHei", 11);
+        shadowLeft(tx, headY + 11, enF, CARD_EN[ck], Color.rgb(198, 196, 224));
+        String title = (lore != null ? lore.name() : CARD_NAME[ck]);
+        shadowLeft(tx, headY + 43, Font.font("Microsoft YaHei", FontWeight.BOLD, 26),
+                title, Color.WHITE);
+        double head2Y = headY + 72;
+        if (lore != null) {
+            shadowLeft(tx, head2Y, Font.font("Microsoft YaHei", FontWeight.BOLD, 13),
+                    lore.title(), Color.rgb(255, 227, 168));
+            double roleX = tx + measureWidth(Font.font("Microsoft YaHei", FontWeight.BOLD, 13),
+                    lore.title()) + 14;
+            gc.setFill(Color.color(ac.getRed(), ac.getGreen(), ac.getBlue(), 0.95));
+            gc.fillRoundRect(roleX - 8, head2Y - 11, 3.5, 15, 1.5, 1.5);
+            shadowLeft(roleX + 2, head2Y, Font.font("Microsoft YaHei", 13),
+                    lore.role(), Color.rgb(240, 238, 250));
+        }
+        gc.setStroke(Color.color(ac.getRed(), ac.getGreen(), ac.getBlue(), 0.35 * ease));
+        gc.setLineWidth(1);
+        double sepY = headY + 96;
+        gc.strokeLine(tx, sepY, px + pw - 30, sepY);
+
+        // ---- 滚动正文：段落标题（金色）+ 折行正文，整块裁剪滚动 ----
+        Font secF = Font.font("Microsoft YaHei", FontWeight.BOLD, 15);
+        Font bodyF = Font.font("Microsoft YaHei", 14);
+        double secGap = 12;
+        double bodyLineH = 23;
+        double viewTop = sepY + 18;
+        double viewBottom = py + ph - 52;
+        double viewH = viewBottom - viewTop;
+
+        // 预排版：每段 = {标题} + {正文行}，累加总高用于滚动 clamp
+        record Block(String sec, List<String> lines) {}
+        List<Block> blocks = new ArrayList<>();
+        if (lore != null) {
+            blocks.add(new Block("角色背景", wrapText(bodyF, lore.background(), tw - 26)));
+            blocks.add(new Block("性格", wrapText(bodyF, lore.personality(), tw - 26)));
+            blocks.add(new Block("战斗风格", wrapText(bodyF, lore.style(), tw - 26)));
+            blocks.add(new Block("台词", wrapText(bodyF, lore.quote(), tw - 26)));
+        } else {
+            blocks.add(new Block("档案", List.of("（该职业的档案尚未撰写）")));
+        }
+        double totalH = 0;
+        for (Block b : blocks) {
+            totalH += 34 + b.lines().size() * bodyLineH + secGap;
+        }
+        totalH += 10;
+        double maxS = Math.max(0, totalH - viewH);
+        double s = Math.max(0, Math.min(maxS, detailScroll));
+
+        gc.save();
+        gc.beginPath();
+        gc.rect(tx, viewTop, tw, viewH);
+        gc.clip();
+        double yy = viewTop + 8 - s;
+        for (Block b : blocks) {
+            shadowLeft(tx, yy + 14, secF, b.sec(), Color.rgb(255, 227, 168));
+            yy += 34;
+            gc.setFont(bodyF);
+            for (String line : b.lines()) {
+                gc.setFill(Color.rgb(236, 234, 248));
+                gc.fillText(line, tx, yy + bodyLineH - 8);
+                yy += bodyLineH;
+            }
+            yy += secGap;
+        }
+        gc.restore();
+
+        // 滚动条（仅溢出时显示）
+        if (maxS > 0.5) {
+            double sbH = Math.max(24, viewH * viewH / totalH);
+            double sbY = viewTop + (viewH - sbH) * (s / maxS);
+            gc.setFill(Color.color(ac.getRed(), ac.getGreen(), ac.getBlue(), 0.85));
+            gc.fillRoundRect(px + pw - 16, sbY, 4, sbH, 2, 2);
+        }
+
+        // 底部提示：滚轮查看 / 关闭方式
+        Font tipF = Font.font("Microsoft YaHei", 11.5);
+        String tip = "滚轮滚动查看全文 · Esc 或点击 ✕ 返回";
+        double tipW = measureWidth(tipF, tip);
+        gc.setFont(tipF);
+        gc.setFill(Color.rgb(150, 148, 170, 0.9 * ease));
+        gc.fillText(tip, px + pw - tipW - 24, py + ph - 24);
+    }
+
+    /** 详情弹层中央面板矩形 {x,y,w,h}（GameApp 点击面板外关闭用） */
+    public static double[] detailPanelRect(double vw, double vh) {
+        double pw = Math.min(1040, vw * 0.85);
+        double ph = Math.min(640, vh * 0.88);
+        return new double[] { (vw - pw) / 2, (vh - ph) / 2, pw, ph };
+    }
+
+    /** 详情弹层右上角 ✕ 关闭钮矩形 {x,y,w,h} */
+    public static double[] detailCloseRect(double vw, double vh) {
+        double[] p = detailPanelRect(vw, vh);
+        return new double[] { p[0] + p[2] - 34, p[1] + 18, 26, 26 };
+    }
+
+    /** 无底数值条：标签 + 数值（带投影），进度只画彩色圆角条 + 细描边，不留白槽。条宽调用方给定 */
     private void drawCardBar(double x, double y, String label, String value,
-            double frac, Color color) {
-        shadowLeft(x, y + 6, Font.font("Microsoft YaHei", 12.5), label,
+            double frac, Color color, double barW) {
+        shadowLeft(x, y + 6, Font.font("Microsoft YaHei", 11.5), label,
                 Color.rgb(240, 238, 250));
-        shadowLeft(x + 62, y + 6, Font.font("Consolas", 12), value, Color.WHITE);
-        double bw = 150;
-        double bx = x + 134;
-        double bh = 6;
+        double bx = x + 30;
+        double bh = 5;
         double f = Math.max(0, Math.min(1, frac));
         gc.setStroke(Color.color(0, 0, 0, 0.5));
         gc.setLineWidth(1);
-        gc.strokeRoundRect(bx, y, bw, bh, 3, 3);
+        gc.strokeRoundRect(bx, y + 1, barW, bh, 3, 3);
         if (f > 0.01) {
             gc.setFill(Color.color(color.getRed(), color.getGreen(), color.getBlue(), 0.95));
-            gc.fillRoundRect(bx, y, bw * f, bh, 3, 3);
+            gc.fillRoundRect(bx, y + 1, barW * f, bh, 3, 3);
         }
+        shadowLeft(bx + barW + 6, y + 6, Font.font("Consolas", 11.5), value, Color.WHITE);
+    }
+
+    /**
+     * 将一段文本按给定最大宽度逐字折行（中文逐字、连续半角串尽量不拆）。
+     * 用单个 Text 度量，只处理纯文本，不含任何换行语义以外的样式。
+     */
+    private static List<String> wrapText(Font font, String text, double maxW) {
+        List<String> out = new ArrayList<>();
+        if (text == null || text.isEmpty()) {
+            return out;
+        }
+        StringBuilder line = new StringBuilder();
+        double lineW = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '\n') {
+                if (line.length() > 0) {
+                    out.add(line.toString());
+                    line.setLength(0);
+                    lineW = 0;
+                }
+                continue;
+            }
+            // 连续 ASCII（单词/数字）整体计算；其余逐字符（中文/标点）
+            int j = i;
+            while (j < text.length() && isWordChar(text.charAt(j))) {
+                j++;
+            }
+            String token = (j > i) ? text.substring(i, j) : text.substring(i, i + 1);
+            double tw = measureWidth(font, token);
+            if (line.length() > 0 && lineW + tw > maxW) {
+                out.add(line.toString());
+                line.setLength(0);
+                lineW = 0;
+            }
+            line.append(token);
+            lineW += tw;
+            i = (j > i) ? j - 1 : i;
+        }
+        if (line.length() > 0) {
+            out.add(line.toString());
+        }
+        return out;
+    }
+
+    /** 半角连续字符（词/数字）：折行时优先整体保留 */
+    private static boolean isWordChar(char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                || (c >= '0' && c <= '9') || c == ' ' || c == '.' || c == '%' || c == '-';
+
     }
 
     /** 左对齐文字 + 细投影：不垫底色的前提下保证可读性 */
@@ -1834,6 +2188,7 @@ public final class Renderer {
                 gc.setFill(dim);
                 gc.setFont(small);
                 gc.fillText("提示：可出战职业为 巫师 / 战士 / 弓箭手 / 召唤师。", lx, y + 14);
+
             }
             case OVER_SETTINGS -> {
                 Rect r = g.clickable()[0];
