@@ -454,8 +454,8 @@ public final class GameApp extends Application {
                         GameAudio.stopBossBgm();
                     }
                 }
-                // 奶蛙技能二「捧腹大笑」：起手瞬间从头播放，施法结束立即停止
-                int milkyCastNow = world.milkyCast();
+                // 奶蛙技能二「捧腹大笑」：起手瞬间从头播放；施法结束或奶蛙死亡都立即停止
+                int milkyCastNow = world.milkyAlive() ? world.milkyCast() : 0;
                 if (milkyCastNow == 2 && lastMilkyCast != 2) {
                     GameAudio.playLaugh();
                 } else if (milkyCastNow != 2 && lastMilkyCast == 2) {
@@ -611,11 +611,6 @@ public final class GameApp extends Application {
         Renderer.SettingsGeom g = Renderer.settingsGeom(vw, vh);
         if (g.close().hit(mx, my)) {
             overlay = Renderer.OVER_NONE;
-            return;
-        }
-        if (g.showId().hit(mx, my)) {
-            GameConfig.showPlayerId = !GameConfig.showPlayerId;
-            GameConfig.save();
             return;
         }
         int s = settingsSliderAt(mx, my);

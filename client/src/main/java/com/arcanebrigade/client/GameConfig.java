@@ -4,7 +4,6 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.security.SecureRandom;
 import java.util.Properties;
 
 /**
@@ -39,13 +38,9 @@ public final class GameConfig {
     public static final int[][] RESOLUTIONS = {
             { 1280, 720 }, { 1600, 900 }, { 1920, 1080 } };
 
-    private static final SecureRandom RND = new SecureRandom();
-
     /** 四个音量 0..100（默认：总 80 / BGM 70 / 音效 90 / 语音 90） */
     private static final int[] VOL = { 80, 70, 90, 90 };
 
-    /** 是否在战斗画面角落显示玩家 ID */
-    public static boolean showPlayerId = true;
     /** 显示模式：MODE_* 之一 */
     public static int displayMode = MODE_WINDOW;
     /** 窗口模式下的宽高（全屏 / 无边框时会忽略） */
@@ -53,8 +48,6 @@ public final class GameConfig {
     public static int winH = 720;
     /** 帧率上限：FPS_CHOICES 之一 */
     public static int fpsCap = 60;
-    /** 本机玩家 ID（首次运行生成并持久化） */
-    public static String playerId;
 
     /** 当前播放的声音总开关（框架占位，音频引擎接入后读取它） */
     public static boolean audioEnabled() {
@@ -88,17 +81,12 @@ public final class GameConfig {
         VOL[VOL_BGM]    = clampInt(p.getProperty("volume.bgm"), VOL[VOL_BGM]);
         VOL[VOL_SFX]    = clampInt(p.getProperty("volume.sfx"), VOL[VOL_SFX]);
         VOL[VOL_VOICE]  = clampInt(p.getProperty("volume.voice"), VOL[VOL_VOICE]);
-        showPlayerId = p.getProperty("showPlayerId", "true").equalsIgnoreCase("true");
         displayMode = clampInt(p.getProperty("displayMode"), displayMode);
         winW = clampInt(p.getProperty("winW"), winW);
         winH = clampInt(p.getProperty("winH"), winH);
         fpsCap = clampInt(p.getProperty("fpsCap"), fpsCap);
         if (fpsCap != 30 && fpsCap != 60 && fpsCap != 120) {
             fpsCap = 60;
-        }
-        playerId = p.getProperty("playerId");
-        if (playerId == null || playerId.isBlank()) {
-            playerId = generatePlayerId();
         }
         save();
     }
@@ -110,14 +98,10 @@ public final class GameConfig {
         p.setProperty("volume.bgm", String.valueOf(VOL[VOL_BGM]));
         p.setProperty("volume.sfx", String.valueOf(VOL[VOL_SFX]));
         p.setProperty("volume.voice", String.valueOf(VOL[VOL_VOICE]));
-        p.setProperty("showPlayerId", String.valueOf(showPlayerId));
         p.setProperty("displayMode", String.valueOf(displayMode));
         p.setProperty("winW", String.valueOf(winW));
         p.setProperty("winH", String.valueOf(winH));
         p.setProperty("fpsCap", String.valueOf(fpsCap));
-        if (playerId != null) {
-            p.setProperty("playerId", playerId);
-        }
         File f = file();
         File dir = f.getParentFile();
         if (dir != null && !dir.exists() && !dir.mkdirs()) {
@@ -145,17 +129,5 @@ public final class GameConfig {
         } catch (NumberFormatException e) {
             return def;
         }
-    }
-
-    private static String generatePlayerId() {
-        char[] hex = "0123456789ABCDEF".toCharArray();
-        StringBuilder sb = new StringBuilder("AB-");
-        for (int i = 0; i < 8; i++) {
-            if (i == 4) {
-                sb.append('-');
-            }
-            sb.append(hex[RND.nextInt(16)]);
-        }
-        return sb.toString();
     }
 }

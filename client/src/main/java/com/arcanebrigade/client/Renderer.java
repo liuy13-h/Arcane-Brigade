@@ -865,17 +865,6 @@ public final class Renderer {
     }
 
     private void drawHud(World w, double vw, double vh) {
-        // 右上角玩家 ID（「设置」里可关）
-        if (GameConfig.showPlayerId && GameConfig.playerId != null) {
-            gc.setFont(hudFont);
-            String tag = "ID " + GameConfig.playerId;
-            double tw = measureWidth(hudFont, tag);
-            gc.setFill(Color.rgb(12, 10, 18, 0.45));
-            gc.fillRoundRect(vw - tw - 28, 10, tw + 16, 24, 6, 6);
-            gc.setFill(Color.rgb(228, 224, 240, 0.92));
-            gc.fillText(tag, vw - tw - 20, 26);
-        }
-
         gc.setFont(hudFont);
         gc.setFill(Color.rgb(228, 228, 240));
         int reactions = w.reactionCount(Element.R_STEAM)
@@ -2581,6 +2570,8 @@ public final class Renderer {
     // menuButtons()/menuHit() 这一份几何，避免"画的框"和"点的框"错位。
     // ------------------------------------------------------------------
 
+    /** 主界面按钮数量 */
+    public static final int MENU_COUNT = 4;
     /** 覆盖层种类：无 / 操作说明 / 设置 */
     public static final int OVER_NONE = 0;
     public static final int OVER_HELP = 1;
@@ -2593,9 +2584,9 @@ public final class Renderer {
     /** 四个菜单按钮在标题画（图像坐标）里的命中矩形：{x0, y0, x1, y1}。 */
     private static final int[][] MENU_BOX = {
             { 416, 1905, 836, 2048 },   // 0 开始游戏
-            { 1330, 1905, 1750, 2048 }, // 1 设置
-            { 1758, 1905, 2178, 2048 }, // 2 操作说明
-            { 2183, 1905, 2603, 2048 }, // 3 退出游戏
+            { 1022, 1905, 1442, 2048 }, // 1 设置
+            { 1631, 1905, 2051, 2048 }, // 2 操作说明
+            { 2185, 1905, 2605, 2048 }, // 3 退出游戏
     };
 
     /** 按钮文字（仅美术缺失兜底绘制时用；美术在位时字是印在图画里的） */
@@ -2736,7 +2727,7 @@ public final class Renderer {
         }
     }
 
-    /** 主界面上层覆盖面板：操作说明 / 设置 */
+    /** 主界面上层覆盖面板：操作说明（「设置」走独立绘制） */
     private void drawMenuOverlay(int overlay, boolean fullscreen) {
         if (overlay == OVER_SETTINGS) {   // 「设置」面板已重做，走独立绘制
             drawSettingsOverlay();
@@ -2755,11 +2746,7 @@ public final class Renderer {
         gc.setLineWidth(2);
         gc.strokeRoundRect(g.px(), g.py(), g.pw(), g.ph(), 16, 16);
 
-        String head = switch (overlay) {
-            case OVER_HELP -> "操 作 说 明";
-            case OVER_SETTINGS -> "设 置";
-            default -> "";
-        };
+        String head = "操 作 说 明";
         drawTextSoft(gc, Font.font("Microsoft YaHei", FontWeight.BOLD, 23),
                 g.px() + g.pw() / 2, g.py() + 58, head,
                 Color.rgb(255, 227, 168), Color.rgb(12, 6, 2, 0.5));
@@ -2773,47 +2760,16 @@ public final class Renderer {
         Color faint = Color.rgb(198, 198, 216);
         Color dim = Color.rgb(174, 174, 198);
 
-        switch (overlay) {
-            case OVER_HELP -> {
-                double y = g.py() + 122;
-                gc.setFont(body);
-                for (String line : HELP_LINES) {
-                    gc.setFill(faint);
-                    gc.fillText(line, lx, y);
-                    y += 40;
-                }
-                gc.setFill(dim);
-                gc.setFont(small);
-                gc.fillText("提示：可出战职业为 巫师 / 战士 / 弓箭手 / 召唤师。", lx, y + 14);
-            }
-            case OVER_SETTINGS -> {
-                Rect r = g.clickable()[0];
-                boolean on = fullscreen;
-                gc.setFill(on ? Color.rgb(94, 72, 28) : Color.rgb(46, 42, 64));
-                gc.fillRoundRect(r.x(), r.y(), r.w(), r.h(), 10, 10);
-                gc.setStroke(on ? Color.rgb(255, 200, 120) : Color.rgb(132, 124, 152));
-                gc.setLineWidth(on ? 2 : 1.5);
-                gc.strokeRoundRect(r.x(), r.y(), r.w(), r.h(), 10, 10);
-                Font f = Font.font("Microsoft YaHei", 17);
-                gc.setFont(f);
-                gc.setFill(Color.rgb(238, 234, 246));
-                gc.fillText("全屏模式", r.x() + 24, r.y() + r.h() / 2 + 6);
-                Font fs = Font.font("Microsoft YaHei", FontWeight.BOLD, 17);
-                String state = on ? "开" : "关";
-                double sw = measureWidth(fs, state);
-                gc.setFont(fs);
-                gc.setFill(on ? Color.rgb(255, 210, 130) : Color.rgb(176, 172, 192));
-                gc.fillText(state, r.x() + r.w() - 24 - sw, r.y() + r.h() / 2 + 6);
-                gc.setFont(small);
-                gc.setFill(dim);
-                gc.fillText("点击上方开关切换全屏 / 窗口模式（亦可用 F11 快捷切换）。", lx, g.py() + 248);
-                gc.fillText("标题画面在任意窗口比例下等比完整显示；大厅与战斗画面随窗口自适应。", lx, g.py() + 274);
-            }
-            default -> {
-                // 仅 操作说明 / 设置 会进入本面板；其余覆盖层直接返回
-                return;
-            }
+        double y = g.py() + 122;
+        gc.setFont(body);
+        for (String line : HELP_LINES) {
+            gc.setFill(faint);
+            gc.fillText(line, lx, y);
+            y += 40;
         }
+        gc.setFill(dim);
+        gc.setFont(small);
+        gc.fillText("提示：可出战职业为 法师 / 战士 / 弓箭手 / 召唤师。", lx, y + 14);
 
         // 面板右下角「返回」钮
         drawMenuClose(g.close());
@@ -2834,8 +2790,8 @@ public final class Renderer {
     // ------------------------------------------------------------------
     // 「设置」面板
     //
-    // 音量（总/BGM/音效/语音）、显示玩家 ID 开关、显示模式（窗口/全屏/
-    // 无边框窗口）、窗口分辨率、帧率上限。数值来源与落地都在 GameConfig，
+    // 音量（总/BGM/音效/语音）、显示模式（窗口/全屏/无边框窗口）、
+    // 窗口分辨率、帧率上限。数值来源与落地都在 GameConfig，
     // 这里只负责画。几何统一由 settingsGeom() 产出，命中/绘制不分叉。
     // ------------------------------------------------------------------
 
@@ -2846,7 +2802,7 @@ public final class Renderer {
 
     /** 设置面板几何：全部控件矩形（屏幕坐标）。GameApp 命中与绘制共用。 */
     public record SettingsGeom(double px, double py, double pw, double ph,
-            Rect close, Rect[] volumes, Rect showId,
+            Rect close, Rect[] volumes,
             Rect[] modes, Rect[] resolutions, Rect[] fps) {}
 
     /** 三选一的行：把 contentW 三等分，各段间 16px 间距 */
@@ -2870,8 +2826,7 @@ public final class Renderer {
         // 竖向节奏（相对面板顶）
         double rowTop = 118;                       // 第一条滑块上缘
         double rowStep = 52;
-        double showTop = rowTop + 4 * rowStep + 10;    // 开关行
-        double seg1Top = showTop + 40 + 34;            // 显示模式（上方预留 caption）
+        double seg1Top = rowTop + 4 * rowStep + 44;    // 显示模式（上方预留 caption）
         double seg2Top = seg1Top + 54;                 // 窗口分辨率
         double seg3Top = seg2Top + 54;                 // 帧率上限
         double closeTop = seg3Top + 40 + 16;           // 返回钮
@@ -2885,12 +2840,11 @@ public final class Renderer {
             vols[i] = new Rect(contentX + 118, py + rowTop + i * rowStep,
                     contentW - 118 - 64, 26);
         }
-        Rect showId = new Rect(contentX, py + showTop, contentW, 40);
         Rect[] modes = segmentRow(contentX, py + seg1Top, contentW);
         Rect[] res = segmentRow(contentX, py + seg2Top, contentW);
         Rect[] fps = segmentRow(contentX, py + seg3Top, contentW);
         Rect close = new Rect(px + pw / 2 - 90, py + closeTop, 180, 46);
-        return new SettingsGeom(px, py, pw, ph, close, vols, showId, modes, res, fps);
+        return new SettingsGeom(px, py, pw, ph, close, vols, modes, res, fps);
     }
 
     /** 画「设置」整块覆盖层：美术风镶金面板 + 分区托盘 + 精致控件。 */
@@ -2984,36 +2938,6 @@ public final class Renderer {
             gc.setFill(Color.rgb(250, 240, 214));
             gc.fillText(String.valueOf((int) v), r.x() + r.w() + 16, midY + 4);
         }
-
-        // ================= 显示玩家 ID 开关 =================
-        Rect sid = g.showId();
-        boolean idOn = GameConfig.showPlayerId;
-        drawGroupBox(px + 22, sid.y() - 12, pw - 44, sid.h() + 24);
-        // 行底色渐变
-        gc.setFill(idOn
-                ? new LinearGradient(0, sid.y(), 0, sid.y() + sid.h(), false, CycleMethod.NO_CYCLE,
-                        new Stop(0, Color.rgb(96, 72, 30)), new Stop(1, Color.rgb(66, 50, 24)))
-                : new LinearGradient(0, sid.y(), 0, sid.y() + sid.h(), false, CycleMethod.NO_CYCLE,
-                        new Stop(0, Color.rgb(54, 49, 74)), new Stop(1, Color.rgb(38, 34, 54))));
-        gc.fillRoundRect(sid.x(), sid.y(), sid.w(), sid.h(), 10, 10);
-        gc.setStroke(idOn ? Color.rgb(255, 210, 130) : Color.rgb(150, 142, 176));
-        gc.setLineWidth(idOn ? 2 : 1.2);
-        gc.strokeRoundRect(sid.x(), sid.y(), sid.w(), sid.h(), 10, 10);
-        gc.setFont(Font.font("Microsoft YaHei", 15));
-        gc.setFill(Color.rgb(240, 236, 250));
-        gc.fillText("显示玩家 ID", sid.x() + 20, sid.y() + sid.h() / 2 + 5);
-        // 右侧状态胶囊
-        double pillW = 74, pillH = 32;
-        double pillX = sid.x() + sid.w() - pillW - 18;
-        double pillY = sid.y() + (sid.h() - pillH) / 2;
-        gc.setFill(idOn ? Color.rgb(84, 168, 104) : Color.rgb(120, 110, 128));
-        gc.fillRoundRect(pillX, pillY, pillW, pillH, 16, 16);
-        gc.setStroke(Color.rgb(255, 255, 255, 0.25));
-        gc.setLineWidth(1);
-        gc.strokeRoundRect(pillX, pillY, pillW, pillH, 16, 16);
-        drawTextSoft(gc, Font.font("Microsoft YaHei", FontWeight.BOLD, 14),
-                pillX + pillW / 2, pillY + pillH / 2 + 5, idOn ? "开" : "关",
-                Color.WHITE, null);
 
         // ================= 画面与性能：三组三选一 =================
         Rect fps0 = g.fps()[0];
