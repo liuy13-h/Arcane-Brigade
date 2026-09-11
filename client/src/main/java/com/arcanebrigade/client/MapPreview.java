@@ -57,8 +57,8 @@ public final class MapPreview extends Application {
         w.maxHp[wid] = 1_000_000f;
         w.hp[wid] = w.maxHp[wid];
 
-        // 关卡改为作者固定摆放后，预览必须停在出生点：这样才能核对中央掩体和
-        // 机关的位置，不再沿用旧版“围绕玩家随机散布障碍”的偏移逻辑。
+        // 预览从出生点取镜头裁切：这样能核对可滚动地图中央的掩体和机关，
+        // 不再沿用旧版“围绕玩家随机散布障碍”的偏移逻辑。
 
         InputCommand in = new InputCommand();
         in.set(0f, 0f);

@@ -11,15 +11,40 @@ public final class ArenaMapTest {
                     map + " must spawn every authored collider exactly once");
             check(world.trapCount() == map.traps().length && world.trapCount() > 0,
                     map + " must expose its authored hazards");
+            check(map.terrain().length > 0, map + " must expose interactive terrain");
             check(world.arenaMap() == map, "selected map must survive world construction");
+
+            ArenaMap.Terrain firstTerrain = map.terrain()[0];
+            check(map.terrainAt(firstTerrain.x(), firstTerrain.y()) == firstTerrain
+                            && Math.abs(map.movementMultiplierAt(firstTerrain.x(), firstTerrain.y())
+                            - firstTerrain.movementMultiplier()) < 0.001f,
+                    map + " terrain must expose its authored movement effect");
+            world.x[hero] = firstTerrain.x();
+            world.y[hero] = firstTerrain.y();
+            InputCommand runEast = new InputCommand();
+            runEast.set(1f, 0f);
+            world.step(Balance.FIXED_STEP, runEast);
+            float expectedTerrainStep = HeroClass.baseSpeed(HeroClass.WIZARD)
+                    * firstTerrain.movementMultiplier() * Balance.FIXED_STEP;
+            check(Math.abs(world.x[hero] - firstTerrain.x() - expectedTerrainStep) < 0.05f,
+                    map + " terrain must change actual player movement speed");
+
+            for (ArenaMap.Obstacle obstacle : map.obstacles()) {
+                world.x[hero] = obstacle.x() + obstacle.footprintHalfWidth() - 1f;
+                world.y[hero] = obstacle.y();
+                world.step(Balance.FIXED_STEP, new InputCommand());
+                world.step(Balance.FIXED_STEP, new InputCommand());
+                check(!obstacle.overlapsCircle(world.x[hero], world.y[hero], world.r[hero]),
+                        map + " " + obstacle.shape() + " obstacle must physically block the player");
+            }
 
             InputCommand runToCorner = new InputCommand();
             runToCorner.set(1f, 1f);
             for (int frame = 0; frame < 600; frame++) world.step(Balance.FIXED_STEP, runToCorner);
             check(Math.abs(world.x[hero]) <= map.halfWidth() - world.r[hero] + 0.01f,
-                    map + " must keep the player inside its single-screen width");
+                    map + " must keep the player inside its authored map width");
             check(Math.abs(world.y[hero]) <= map.halfHeight() - world.r[hero] + 0.01f,
-                    map + " must keep the player inside its single-screen height");
+                    map + " must keep the player inside its authored map height");
 
             ArenaMap.Trap first = map.traps()[0];
             world.x[hero] = first.x();
@@ -32,7 +57,34 @@ public final class ArenaMapTest {
             }
             check(world.hp[hero] < before, map + " trap must actually damage a player in its active window");
         }
+
+        ArenaMap.Trap arrowLane = ArenaMap.STONE_CRYPT.traps()[2];
+        check(arrowLane.isLane() && arrowLane.contains(arrowLane.x(), arrowLane.y(), 0f)
+                        && !arrowLane.contains(arrowLane.x(), arrowLane.y() - arrowLane.halfHeight() - 1f, 0f),
+                "crypt arrow mechanism must be a narrow horizontal damage lane");
+
+        World crypt = new World(23L, ArenaMap.STONE_CRYPT);
+        int laneHero = crypt.spawnWizard(arrowLane.x(), arrowLane.y(), HeroClass.WIZARD);
+        float laneBefore = crypt.hp[laneHero];
+        for (int frame = 0; frame < 120 && crypt.hp[laneHero] >= laneBefore; frame++) {
+            crypt.step(Balance.FIXED_STEP, new InputCommand());
+        }
+        check(crypt.hp[laneHero] < laneBefore, "crypt arrow lane must damage a player during its active window");
+        check(hasShape(ArenaMap.DESERT_RUINS, ArenaMap.ObstacleShape.CAPSULE)
+                        && hasShape(ArenaMap.DESERT_RUINS, ArenaMap.ObstacleShape.BOX),
+                "desert must use a narrow grounded footprint instead of oversized circles");
+        check(hasShape(ArenaMap.STONE_CRYPT, ArenaMap.ObstacleShape.CIRCLE)
+                        && hasShape(ArenaMap.STONE_CRYPT, ArenaMap.ObstacleShape.CAPSULE)
+                        && hasShape(ArenaMap.STONE_CRYPT, ArenaMap.ObstacleShape.BOX),
+                "crypt must use circle, capsule and box colliders by object type");
         System.out.println("OK: ArenaMapTest");
+    }
+
+    private static boolean hasShape(ArenaMap map, ArenaMap.ObstacleShape shape) {
+        for (ArenaMap.Obstacle obstacle : map.obstacles()) {
+            if (obstacle.shape() == shape) return true;
+        }
+        return false;
     }
 
     private static void check(boolean value, String message) {

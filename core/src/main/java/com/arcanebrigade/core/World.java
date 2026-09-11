@@ -74,6 +74,10 @@ public final class World {
     public final float[] vx = new float[MAX];
     public final float[] vy = new float[MAX];
     public final float[] r  = new float[MAX];
+    /** 障碍物底部轮廓；只在 KIND_OBSTACLE 实体上读取。 */
+    private final int[] obstacleShape = new int[MAX];
+    private final float[] obstacleHalfW = new float[MAX];
+    private final float[] obstacleHalfH = new float[MAX];
     public final float[] hp = new float[MAX];
     public final float[] maxHp = new float[MAX];
     public final float[] speed = new float[MAX];
@@ -715,7 +719,7 @@ public final class World {
     private void generateObstacles(int stage) {
         obstacleHash.beginFrame();
         for (ArenaMap.Obstacle obstacle : arenaMap.obstacles()) {
-            spawnObstacle(obstacle.x(), obstacle.y(), obstacle.radius(), obstacle.visual());
+            spawnObstacle(obstacle);
         }
     }
 
@@ -725,42 +729,38 @@ public final class World {
             if (!trap.active(time)) {
                 continue;
             }
-            damageTrapTargets(trap.x(), trap.y(), trap.radius(), trap.damage());
+            damageTrapTargets(trap);
         }
     }
 
-    private void damageTrapTargets(float tx, float ty, float radius, float amount) {
+    private void damageTrapTargets(ArenaMap.Trap trap) {
         for (int n = 0; n < wizards.size(); n++) {
             int id = wizards.get(n);
-            if (!alive[id] || iframe[id] > 0f || !inCircle(id, tx, ty, radius)) {
+            if (!alive[id] || iframe[id] > 0f || !trap.contains(x[id], y[id], r[id])) {
                 continue;
             }
-            damage(id, amount);
+            damage(id, trap.damage());
             iframe[id] = heroIframe(id);
         }
         for (int n = 0; n < minions.size(); n++) {
             int id = minions.get(n);
-            if (!alive[id] || iframe[id] > 0f || !inCircle(id, tx, ty, radius)) {
+            if (!alive[id] || iframe[id] > 0f || !trap.contains(x[id], y[id], r[id])) {
                 continue;
             }
-            damage(id, amount);
+            damage(id, trap.damage());
             iframe[id] = Balance.MINION_IFRAME;
         }
     }
 
-    private boolean inCircle(int id, float cx, float cy, float radius) {
-        float dx = x[id] - cx;
-        float dy = y[id] - cy;
-        float rr = radius + r[id];
-        return dx * dx + dy * dy <= rr * rr;
-    }
-
-    private int spawnObstacle(float sx, float sy, float radius, int type) {
-        int id = alloc(KIND_OBSTACLE, sx, sy, radius, TEAM_ENEMY);
+    private int spawnObstacle(ArenaMap.Obstacle obstacle) {
+        int id = alloc(KIND_OBSTACLE, obstacle.x(), obstacle.y(), obstacle.broadRadius(), TEAM_ENEMY);
         if (id < 0) {
             return -1;
         }
-        meta[id] = type;
+        meta[id] = obstacle.visual();
+        obstacleShape[id] = obstacle.shape().ordinal();
+        obstacleHalfW[id] = obstacle.halfWidth();
+        obstacleHalfH[id] = obstacle.halfHeight();
         obstacleHash.insert(x[id], y[id], id);
         return id;
     }
@@ -1008,7 +1008,7 @@ public final class World {
                 moveMul *= 1f + Balance.LAST_STAND_MOVE;
             }
 
-            float baseSpeed = HeroClass.baseSpeed(ck);
+            float baseSpeed = HeroClass.baseSpeed(ck) * arenaMap.movementMultiplierAt(x[id], y[id]);
             x[id] += in.dx * baseSpeed * moveMul * dt;
             y[id] += in.dy * baseSpeed * moveMul * dt;
             resolveObstacles(id);
@@ -1061,7 +1061,7 @@ public final class World {
             // 冰霜减速
             float slow = (elem[i] == Element.FROST)
                     ? Math.min(elemP[i], Balance.ELEM_FROST_MAX_SLOW) : 0f;
-            float moveSpeed = speed[i] * (1f - slow);
+            float moveSpeed = speed[i] * (1f - slow) * arenaMap.movementMultiplierAt(x[i], y[i]);
 
             float dx = x[target] - x[i];
             float dy = y[target] - y[i];
@@ -1149,8 +1149,9 @@ public final class World {
         float dx = tx - x[id], dy = ty - y[id];
         float len = (float) Math.sqrt(dx * dx + dy * dy);
         if (len > 1e-3f) {
-            vx[id] = dx / len * speed[id];
-            vy[id] = dy / len * speed[id];
+            float moveSpeed = speed[id] * arenaMap.movementMultiplierAt(x[id], y[id]);
+            vx[id] = dx / len * moveSpeed;
+            vy[id] = dy / len * moveSpeed;
         }
         x[id] += vx[id] * dt;
         y[id] += vy[id] * dt;
@@ -1517,17 +1518,123 @@ public final class World {
             if (!alive[o] || kind[o] != KIND_OBSTACLE) {
                 continue;
             }
-            float dx = x[id] - x[o];
-            float dy = y[id] - y[o];
-            float d2 = dx * dx + dy * dy;
-            float minD = r[id] + r[o];
-            if (d2 < minD * minD && d2 > 1e-4f) {
-                float d = (float) Math.sqrt(d2);
-                float push = minD - d;
-                x[id] += dx / d * push;
-                y[id] += dy / d * push;
+            pushOutOfObstacle(id, o);
+        }
+    }
+
+    /** 角色移动与投射物遮挡共用的“圆形目标是否碰到障碍底座”判定。 */
+    private boolean overlapsObstacle(int obstacle, float cx, float cy, float targetRadius) {
+        return switch (ArenaMap.ObstacleShape.values()[obstacleShape[obstacle]]) {
+            case CIRCLE -> circleOverlaps(cx, cy, targetRadius, x[obstacle], y[obstacle], r[obstacle]);
+            case BOX -> circleOverlapsBox(cx, cy, targetRadius, x[obstacle], y[obstacle],
+                    obstacleHalfW[obstacle], obstacleHalfH[obstacle]);
+            case CAPSULE -> {
+                float capRadius = Math.min(obstacleHalfW[obstacle], obstacleHalfH[obstacle]);
+                float ax = x[obstacle], ay = y[obstacle], bx = x[obstacle], by = y[obstacle];
+                if (obstacleHalfW[obstacle] >= obstacleHalfH[obstacle]) {
+                    ax -= obstacleHalfW[obstacle] - capRadius;
+                    bx += obstacleHalfW[obstacle] - capRadius;
+                } else {
+                    ay -= obstacleHalfH[obstacle] - capRadius;
+                    by += obstacleHalfH[obstacle] - capRadius;
+                }
+                yield circleOverlapsCapsule(cx, cy, targetRadius, ax, ay, bx, by, capRadius);
+            }
+        };
+    }
+
+    /** 将移动实体推出形状化障碍，消除圆形近似在墙与箱子两侧制造的假阻挡。 */
+    private void pushOutOfObstacle(int id, int obstacle) {
+        switch (ArenaMap.ObstacleShape.values()[obstacleShape[obstacle]]) {
+            case CIRCLE -> pushOutOfCircle(id, x[obstacle], y[obstacle], r[obstacle], 1f, 0f);
+            case BOX -> pushOutOfBox(id, obstacle);
+            case CAPSULE -> {
+                float capRadius = Math.min(obstacleHalfW[obstacle], obstacleHalfH[obstacle]);
+                boolean horizontal = obstacleHalfW[obstacle] >= obstacleHalfH[obstacle];
+                float ax = x[obstacle], ay = y[obstacle], bx = x[obstacle], by = y[obstacle];
+                if (horizontal) {
+                    ax -= obstacleHalfW[obstacle] - capRadius;
+                    bx += obstacleHalfW[obstacle] - capRadius;
+                } else {
+                    ay -= obstacleHalfH[obstacle] - capRadius;
+                    by += obstacleHalfH[obstacle] - capRadius;
+                }
+                float sx = bx - ax, sy = by - ay;
+                float len2 = sx * sx + sy * sy;
+                float t = len2 <= 1e-4f ? 0f : ((x[id] - ax) * sx + (y[id] - ay) * sy) / len2;
+                t = Math.max(0f, Math.min(1f, t));
+                pushOutOfCircle(id, ax + sx * t, ay + sy * t, capRadius,
+                        horizontal ? 0f : 1f, horizontal ? 1f : 0f);
             }
         }
+    }
+
+    private void pushOutOfBox(int id, int obstacle) {
+        float halfW = obstacleHalfW[obstacle];
+        float halfH = obstacleHalfH[obstacle];
+        float minX = x[obstacle] - halfW, maxX = x[obstacle] + halfW;
+        float minY = y[obstacle] - halfH, maxY = y[obstacle] + halfH;
+        float nearestX = Math.max(minX, Math.min(maxX, x[id]));
+        float nearestY = Math.max(minY, Math.min(maxY, y[id]));
+        float dx = x[id] - nearestX, dy = y[id] - nearestY;
+        float d2 = dx * dx + dy * dy;
+        if (d2 >= r[id] * r[id]) {
+            return;
+        }
+        if (d2 > 1e-4f) {
+            float distance = (float) Math.sqrt(d2);
+            float push = r[id] - distance + 0.01f;
+            x[id] += dx / distance * push;
+            y[id] += dy / distance * push;
+            return;
+        }
+        float left = x[id] - minX, right = maxX - x[id];
+        float top = y[id] - minY, bottom = maxY - y[id];
+        float nearestSide = Math.min(Math.min(left, right), Math.min(top, bottom));
+        if (nearestSide == left) x[id] = minX - r[id] - 0.01f;
+        else if (nearestSide == right) x[id] = maxX + r[id] + 0.01f;
+        else if (nearestSide == top) y[id] = minY - r[id] - 0.01f;
+        else y[id] = maxY + r[id] + 0.01f;
+    }
+
+    private void pushOutOfCircle(int id, float cx, float cy, float radius, float fallbackX, float fallbackY) {
+        float dx = x[id] - cx, dy = y[id] - cy;
+        float d2 = dx * dx + dy * dy;
+        float contactDistance = r[id] + radius;
+        if (d2 >= contactDistance * contactDistance) {
+            return;
+        }
+        if (d2 <= 1e-4f) {
+            x[id] += fallbackX * (contactDistance + 0.01f);
+            y[id] += fallbackY * (contactDistance + 0.01f);
+            return;
+        }
+        float distance = (float) Math.sqrt(d2);
+        float push = contactDistance - distance + 0.01f;
+        x[id] += dx / distance * push;
+        y[id] += dy / distance * push;
+    }
+
+    private static boolean circleOverlaps(float cx, float cy, float radius, float ox, float oy, float obstacleRadius) {
+        float dx = cx - ox, dy = cy - oy, rr = radius + obstacleRadius;
+        return dx * dx + dy * dy < rr * rr;
+    }
+
+    private static boolean circleOverlapsBox(float cx, float cy, float radius, float ox, float oy,
+                                             float halfW, float halfH) {
+        float nearestX = Math.max(ox - halfW, Math.min(ox + halfW, cx));
+        float nearestY = Math.max(oy - halfH, Math.min(oy + halfH, cy));
+        float dx = cx - nearestX, dy = cy - nearestY;
+        return dx * dx + dy * dy < radius * radius;
+    }
+
+    private static boolean circleOverlapsCapsule(float cx, float cy, float radius, float ax, float ay,
+                                                 float bx, float by, float capsuleRadius) {
+        float sx = bx - ax, sy = by - ay;
+        float len2 = sx * sx + sy * sy;
+        float t = len2 <= 1e-4f ? 0f : ((cx - ax) * sx + (cy - ay) * sy) / len2;
+        t = Math.max(0f, Math.min(1f, t));
+        return circleOverlaps(cx, cy, radius, ax + sx * t, ay + sy * t, capsuleRadius);
     }
 
     /** 把实体钳制在可玩区内（城墙内侧边缘，玩家 / 敌人共用） */
@@ -1554,7 +1661,7 @@ public final class World {
         return HeroClass.baseIframe(ck) + add;
     }
 
-    /** 单屏地图的生成点钳制，横纵边界与固定镜头比例一致。 */
+    /** 可滚动地图的生成点钳制，保证单位与事件始终落在作者设计的场地内。 */
     private float clampX(float v) {
         return Math.max(-arenaMap.halfWidth(), Math.min(arenaMap.halfWidth(), v));
     }
@@ -1771,10 +1878,7 @@ public final class World {
                 if (!alive[o] || kind[o] != KIND_OBSTACLE) {
                     continue;
                 }
-                float dx = x[i] - x[o];
-                float dy = y[i] - y[o];
-                float rr = r[i] + r[o];
-                if (dx * dx + dy * dy <= rr * rr) {
+                if (overlapsObstacle(o, x[i], y[i], r[i])) {
                     blocked = true;
                     break;
                 }

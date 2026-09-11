@@ -31,6 +31,8 @@ import javafx.scene.text.Text;
 public final class Renderer {
 
     private static final double TILE = 72.0;
+    /** 启动参数 -Dab.debugColliders=true 时显示所有底座碰撞，供地图校准使用。 */
+    private static final boolean DEBUG_COLLIDERS = Boolean.getBoolean("ab.debugColliders");
 
     /** 复用同一个 Text 量宽度，避免每帧新建节点 */
     private static final Text measurer = new Text();
@@ -128,8 +130,13 @@ public final class Renderer {
                 ? Sprites.battleMaps[w.arenaMap().ordinal()] : null;
         Color[] pal = arenaPalette(w.arenaMap(), w.stage());
         if (battleMap != null) {
-            // 一张关卡图就是完整战场：固定镜头让美术中的墙体/岩石与逻辑坐标保持稳定。
-            gc.drawImage(battleMap, 0, 0, vw, vh);
+            // 底图以原始像素大小放进世界坐标。相机裁切而非缩放整张图，
+            // 因而角色移动时能看到新的地形，而不是永远困在一张静态全景里。
+            double left = camX - vw / 2;
+            double top = camY - vh / 2;
+            double mapX = -battleMap.getWidth() / 2 - left;
+            double mapY = -battleMap.getHeight() / 2 - top;
+            gc.drawImage(battleMap, mapX, mapY, battleMap.getWidth(), battleMap.getHeight());
             gc.setFill(Color.color(0.02, 0.02, 0.05, 0.12));
             gc.fillRect(0, 0, vw, vh);
         } else {
@@ -139,6 +146,8 @@ public final class Renderer {
             drawBoundary(vw, vh, pal);
             drawObstacles(w, alpha, vw, vh);
         }
+        drawArenaTerrain(w, vw, vh);
+        if (DEBUG_COLLIDERS) drawColliderDebug(w, vw, vh);
         drawArenaTraps(w, vw, vh);
         drawEventWorld(w, alpha, vw, vh);   // 战斗事件：封印裂隙圈 / 蘑菇 / 雕像（部分在 entities 里）
         drawEntities(w, alpha, vw, vh);
@@ -203,11 +212,30 @@ public final class Renderer {
     }
 
     private void updateCamera(World w, float alpha) {
-        // 三张新地图均为单屏战场。镜头锁中心，玩家走位不会让地图图层与碰撞漂移。
+        // 地图是比视口更大的连续场地：镜头跟随主控，但绝不越过墙体边缘。
         if (w.arenaMap() != null) {
-            camX = 0;
-            camY = 0;
-            camReady = true;
+            if (w.wizardCount() == 0) {
+                camX = 0f;
+                camY = 0f;
+                camReady = true;
+                return;
+            }
+            int id = w.wizard(0);
+            float rx = w.px[id] + (w.x[id] - w.px[id]) * alpha;
+            float ry = w.py[id] + (w.y[id] - w.py[id]) * alpha;
+            float maxCamX = Math.max(0f, w.arenaMap().halfWidth() - (float) canvas.getWidth() / 2f);
+            float maxCamY = Math.max(0f, w.arenaMap().halfHeight() - (float) canvas.getHeight() / 2f);
+            float targetX = Math.max(-maxCamX, Math.min(maxCamX, rx));
+            float targetY = Math.max(-maxCamY, Math.min(maxCamY, ry));
+            if (!camReady) {
+                camX = targetX;
+                camY = targetY;
+                camReady = true;
+            } else {
+                // 比旧版自由镜头略快，减少大规模弹幕下的拖拽感。
+                camX += (targetX - camX) * 0.20f;
+                camY += (targetY - camY) * 0.20f;
+            }
             return;
         }
         if (w.wizardCount() == 0) {
@@ -404,20 +432,37 @@ public final class Renderer {
             if (trap == null) continue;
             double sx = trap.x() - left;
             double sy = trap.y() - top;
-            if (sx + trap.radius() < 0 || sx - trap.radius() > vw || sy + trap.radius() < 0 || sy - trap.radius() > vh) continue;
+            double halfW = trap.isLane() ? trap.halfWidth() : trap.radius();
+            double halfH = trap.isLane() ? trap.halfHeight() : trap.radius();
+            if (sx + halfW < 0 || sx - halfW > vw || sy + halfH < 0 || sy - halfH > vh) continue;
             boolean active = w.trapActive(i);
             boolean warning = w.trapTelegraphing(i);
             Color c = switch (trap.visual()) {
                 case 1 -> Color.rgb(255, 94, 40);      // 熔岩喷口
                 case 2 -> Color.rgb(110, 222, 255);    // 墓室机关
+                case 3 -> Color.rgb(229, 184, 104);    // 箭道
                 default -> Color.rgb(235, 186, 92);    // 流沙
             };
             double alpha = active ? 0.44 : warning ? 0.20 : 0.08;
             gc.setFill(Color.color(c.getRed(), c.getGreen(), c.getBlue(), alpha));
-            gc.fillOval(sx - trap.radius(), sy - trap.radius(), trap.radius() * 2, trap.radius() * 2);
             gc.setStroke(Color.color(c.getRed(), c.getGreen(), c.getBlue(), active ? 0.98 : warning ? 0.72 : 0.30));
             gc.setLineWidth(active ? 3.0 : 1.5);
-            gc.strokeOval(sx - trap.radius(), sy - trap.radius(), trap.radius() * 2, trap.radius() * 2);
+            if (trap.isLane()) {
+                gc.fillRoundRect(sx - halfW, sy - halfH, halfW * 2, halfH * 2, 8, 8);
+                gc.strokeRoundRect(sx - halfW, sy - halfH, halfW * 2, halfH * 2, 8, 8);
+                if (active) {
+                    double shift = (w.time() * 360) % 96;
+                    gc.setLineWidth(2.4);
+                    for (double ax = sx - halfW + shift; ax < sx + halfW; ax += 96) {
+                        gc.strokeLine(ax - 18, sy, ax + 12, sy);
+                        gc.strokeLine(ax + 12, sy, ax + 4, sy - 6);
+                        gc.strokeLine(ax + 12, sy, ax + 4, sy + 6);
+                    }
+                }
+            } else {
+                gc.fillOval(sx - trap.radius(), sy - trap.radius(), trap.radius() * 2, trap.radius() * 2);
+                gc.strokeOval(sx - trap.radius(), sy - trap.radius(), trap.radius() * 2, trap.radius() * 2);
+            }
             if (trap.visual() == 2 && active) {
                 gc.setStroke(Color.rgb(225, 235, 240, 0.9));
                 gc.setLineWidth(2);
@@ -426,6 +471,68 @@ public final class Renderer {
                             sx + spike * 18 + 7, sy - trap.radius() * 0.45);
                 }
             }
+        }
+    }
+
+    /** 可交互地形在陷阱下层绘制：慢速区是暖色涟漪，符文是冷色脉冲。 */
+    private void drawArenaTerrain(World w, double vw, double vh) {
+        double left = camX - vw / 2;
+        double top = camY - vh / 2;
+        for (ArenaMap.Terrain terrain : w.arenaMap().terrain()) {
+            double sx = terrain.x() - left;
+            double sy = terrain.y() - top;
+            double radius = terrain.radius();
+            if (sx + radius < 0 || sx - radius > vw || sy + radius < 0 || sy - radius > vh) {
+                continue;
+            }
+            Color color = switch (terrain.visual()) {
+                case 1 -> Color.rgb(255, 92, 38);
+                case 2 -> Color.rgb(104, 224, 255);
+                default -> Color.rgb(235, 186, 92);
+            };
+            double pulse = 1d + Math.sin(w.time() * 3d + terrain.x() * 0.01d) * 0.05d;
+            double pr = radius * pulse;
+            double alpha = terrain.movementMultiplier() < 1f ? 0.08 : 0.12;
+            gc.setFill(Color.color(color.getRed(), color.getGreen(), color.getBlue(), alpha));
+            gc.fillOval(sx - pr, sy - pr, pr * 2, pr * 2);
+            gc.setStroke(Color.color(color.getRed(), color.getGreen(), color.getBlue(), 0.48));
+            gc.setLineWidth(terrain.movementMultiplier() < 1f ? 1.3 : 2.1);
+            gc.strokeOval(sx - pr, sy - pr, pr * 2, pr * 2);
+        }
+    }
+
+    /** 碰撞校准叠层：形状直接读取 ArenaMap 数据，避免显示一套、实际计算另一套。 */
+    private void drawColliderDebug(World w, double vw, double vh) {
+        double left = camX - vw / 2;
+        double top = camY - vh / 2;
+        gc.setFill(Color.rgb(66, 214, 255, 0.16));
+        gc.setStroke(Color.rgb(66, 214, 255, 0.96));
+        gc.setLineWidth(2);
+        for (ArenaMap.Obstacle obstacle : w.arenaMap().obstacles()) {
+            double sx = obstacle.x() - left;
+            double sy = obstacle.y() - top;
+            switch (obstacle.shape()) {
+                case CIRCLE -> {
+                    double radius = obstacle.radius();
+                    gc.fillOval(sx - radius, sy - radius, radius * 2, radius * 2);
+                    gc.strokeOval(sx - radius, sy - radius, radius * 2, radius * 2);
+                }
+                case BOX -> {
+                    double width = obstacle.halfWidth() * 2;
+                    double height = obstacle.halfHeight() * 2;
+                    gc.fillRect(sx - obstacle.halfWidth(), sy - obstacle.halfHeight(), width, height);
+                    gc.strokeRect(sx - obstacle.halfWidth(), sy - obstacle.halfHeight(), width, height);
+                }
+                case CAPSULE -> {
+                    double width = obstacle.halfWidth() * 2;
+                    double height = obstacle.halfHeight() * 2;
+                    double arc = Math.min(width, height);
+                    gc.fillRoundRect(sx - obstacle.halfWidth(), sy - obstacle.halfHeight(), width, height, arc, arc);
+                    gc.strokeRoundRect(sx - obstacle.halfWidth(), sy - obstacle.halfHeight(), width, height, arc, arc);
+                }
+            }
+            gc.strokeLine(sx - 4, sy, sx + 4, sy);
+            gc.strokeLine(sx, sy - 4, sx, sy + 4);
         }
     }
 
@@ -750,6 +857,15 @@ public final class Renderer {
         if (lo != null && lo.stats.loneWolfActive) {
             gc.setFill(Color.rgb(255, 200, 100));
             gc.fillText("⚡ 孤注一掷", 16, 46);
+        }
+        if (w.wizardCount() > 0) {
+            int hero = w.wizard(0);
+            ArenaMap.Terrain terrain = w.arenaMap().terrainAt(w.x[hero], w.y[hero]);
+            if (terrain != null) {
+                gc.setFill(terrain.movementMultiplier() < 1f ? Color.rgb(255, 182, 102) : Color.rgb(126, 232, 255));
+                gc.fillText(terrain.label() + String.format("  移速 x%.2f", terrain.movementMultiplier()),
+                        16, lo != null && lo.stats.loneWolfActive ? 64 : 46);
+            }
         }
 
         if (lo == null) {
