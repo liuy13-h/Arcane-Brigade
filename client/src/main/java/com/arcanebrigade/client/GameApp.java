@@ -77,6 +77,8 @@ public final class GameApp extends Application {
     private boolean manualPause;
     /** 奶蛙 BGM 是否正在播放（用于检测奶蛙出场/消失的瞬间起停音乐） */
     private boolean bossMusicOn;
+    /** 上一帧的奶蛙施法状态，用于捕捉「大笑起手」瞬间播音效 */
+    private int lastMilkyCast;
 
     @Override
     public void start(Stage stage) {
@@ -105,6 +107,9 @@ public final class GameApp extends Application {
         Sprites.load();
 
         world = new World(20260907L);
+        if (System.getProperty("ab.noSpawn") != null) {
+            world.setSpawningEnabled(false);   // 调试：不刷小怪，只留 Boss
+        }
 
         Canvas canvas = new Canvas(1280, 720);
         Pane root = new Pane(canvas);
@@ -232,7 +237,9 @@ public final class GameApp extends Application {
         // 战斗冒烟：跳过大厅，自动选职业直接跑真实模拟+渲染路径做稳定性验证。
         // -Dab.class=N 可指定职业（默认巫师），用来覆盖各职业专属的渲染分支；
         // -Dab.boss=N 直接刷第 N 只 Boss，用来覆盖 Boss 立绘 / 阶段技能渲染路径。
-        if (smokeFrames > 0) {
+        // -Dab.milky=1 可脱离冒烟使用：直接进入战斗并刷出奶蛙（不自动退出，可正常游玩）。
+        boolean directFight = smokeFrames > 0 || System.getProperty("ab.milky") != null;
+        if (directFight) {
             int pick = HeroClass.WIZARD;
             String cls = System.getProperty("ab.class");
             if (cls != null && !cls.isBlank()) {
@@ -244,6 +251,16 @@ public final class GameApp extends Application {
             beginGame(pick);
             if (System.getProperty("ab.milky") != null) {
                 world.forceSpawnMilky();   // 覆盖奶蛙动画 / 技能 / 血条路径
+                // -Dab.milkyHp=N 临时把奶蛙血量调低，方便快速验证技能二（不写回配置）
+                String mhp = System.getProperty("ab.milkyHp");
+                if (mhp != null && !mhp.isBlank()) {
+                    int id = world.milkyId();
+                    float v = Float.parseFloat(mhp);
+                    if (id >= 0 && v > 0f) {
+                        world.maxHp[id] = v;
+                        world.hp[id] = v;
+                    }
+                }
             }
             String bt = System.getProperty("ab.boss");
             if (bt != null && !bt.isBlank()) {
@@ -342,6 +359,14 @@ public final class GameApp extends Application {
                         GameAudio.stopBossBgm();
                     }
                 }
+                // 奶蛙技能二「捧腹大笑」：起手瞬间从头播放，施法结束立即停止
+                int milkyCastNow = world.milkyCast();
+                if (milkyCastNow == 2 && lastMilkyCast != 2) {
+                    GameAudio.playLaugh();
+                } else if (milkyCastNow != 2 && lastMilkyCast == 2) {
+                    GameAudio.stopLaugh();
+                }
+                lastMilkyCast = milkyCastNow;
 
                 // 战斗 BGM 跟着 Boss 走：Boss 在场放它专属的登场音乐，Boss 倒下换回普通战斗曲。
                 // setBattleMusic 内部只在曲目变化时才重起播放器，逐帧调用无额外开销；
