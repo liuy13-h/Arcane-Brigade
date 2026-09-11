@@ -55,6 +55,9 @@ public final class Renderer {
     /** 手动暂停状态，暂停按钮文字 + 暂停罩层用 */
     private boolean paused;
 
+    /** 每个实体的朝向：true=朝左（向左移动时），false=朝右。静止时沿用上一帧方向 */
+    private final boolean[] facesLeft = new boolean[World.MAX];
+
     public Renderer(Canvas canvas) {
         this.canvas = canvas;
         this.gc = canvas.getGraphicsContext2D();
@@ -111,7 +114,7 @@ public final class Renderer {
         return new double[] { vw / 2 - w - 16, vh * 0.56, w, h };
     }
 
-    /** 暂停菜单「退出结算」按钮矩形 [x, y, w, h]。GameApp 命中判定与绘制共用 */
+    /** 暂停菜单「返回大厅」按钮矩形 [x, y, w, h]。GameApp 命中判定与绘制共用 */
     public static double[] pauseQuitRect(double vw, double vh) {
         double w = 200, h = 48;
         return new double[] { vw / 2 + 16, vh * 0.56, w, h };
@@ -419,6 +422,23 @@ public final class Renderer {
         }
     }
 
+    /**
+     * 在屏幕坐标绘制一张精灵，并以角色中心 cx 为轴做水平镜像（flip=true 时朝左）。
+     * 镜像不改变精灵占据的屏幕范围，仅左右翻转像素——用于让 GIF/立绘朝向移动方向。
+     */
+    private void drawSpriteFacing(Image img, double cx, double top, double w, double h, boolean flip) {
+        if (!flip) {
+            gc.drawImage(img, cx - w / 2, top, w, h);
+            return;
+        }
+        gc.save();
+        gc.translate(cx, 0);
+        gc.scale(-1, 1);
+        gc.translate(-cx, 0);
+        gc.drawImage(img, cx - w / 2, top, w, h);
+        gc.restore();
+    }
+
     private void drawEntities(World w, float alpha, double vw, double vh) {
         double left = camX - vw / 2;
         double top = camY - vh / 2;
@@ -448,6 +468,11 @@ public final class Renderer {
                     double mvx = w.x[i] - w.px[i];
                     double mvy = w.y[i] - w.py[i];
                     boolean moving = mvx * mvx + mvy * mvy > 1e-3;
+                    // 移动时更新朝向：向左(mvx<0)朝左，向右朝右；静止时沿用上一帧方向
+                    if (moving) {
+                        facesLeft[i] = mvx < 0;
+                    }
+                    boolean flip = facesLeft[i];
                     Image img = null;
                     boolean fromGif = false;
                     if (moving && ck < Sprites.heroWalk.length) {
@@ -462,13 +487,14 @@ public final class Renderer {
                     }
                     if (img != null) {
                         if (fromGif) {
-                            // GIF 帧是 32×32，放大到与 ×2 立绘一致（64×64），底边贴地
-                            gc.drawImage(img, sx - 32, sy - 44, 64, 64);
+                            // GIF 帧是 32×32，放大到与 ×2 立绘一致（64×64），底边贴地。
+                            // 朝向随移动方向水平镜像（绕角色中心 sx 翻转）。
+                            drawSpriteFacing(img, sx, sy - 44, 64, 64, flip);
                         } else {
                             // ×2 立绘按自然尺寸 1:1 绘制（清晰像素），底边贴角色位置
                             double hw = img.getWidth();
                             double hh = img.getHeight();
-                            gc.drawImage(img, Math.round(sx - hw / 2), Math.round(sy + 4 - hh));
+                            drawSpriteFacing(img, sx, sy + 4 - hh, hw, hh, flip);
                         }
                     }
                     // 战士的武器（Influx Waver 光刃）：握在身侧，朝向跟着移动方向转
@@ -506,7 +532,9 @@ public final class Renderer {
                     }
                 }
                 case World.KIND_MINION -> {
-                    // 宠物：Abigail 仆从（image/Abigail_(minion).gif），带一条细血条
+                    // 宠物：Abigail 仆从（image/Abigail_(minion).gif），带一条细血条。
+                    // 朝向跟随主人（owner）：主人朝左时宠物也朝左。
+                    boolean mflip = (w.owner[i] >= 0 && w.owner[i] < World.MAX) ? facesLeft[w.owner[i]] : false;
                     Image mimg = (Sprites.minionAnim != null) ? Sprites.minionAnim.frameAt(w.time()) : null;
                     if (mimg == null) {
                         mimg = Sprites.minion;
@@ -514,7 +542,7 @@ public final class Renderer {
                     if (mimg != null) {
                         double mh = 32.0;
                         double mw = mimg.getWidth() * (mh / mimg.getHeight());
-                        gc.drawImage(mimg, sx - mw / 2, sy - mh + 5, mw, mh);
+                        drawSpriteFacing(mimg, sx, sy - mh + 5, mw, mh, mflip);
                     }
                     float mf = Math.max(0f, w.hp[i] / Math.max(1f, w.maxHp[i]));
                     gc.setFill(Color.rgb(30, 12, 16, 0.85));
@@ -1437,7 +1465,7 @@ public final class Renderer {
      * 各人显示高度 = 其放大后的自然高度（约 42~50px）。此值仅在美术资源缺失时
      * 当作排版占位高度。
      */
-    /** 手动暂停罩层：半透明蒙版 + "已暂停"提示 + 继续战斗/退出结算按钮。由 GameApp 在手动暂停时调用 */
+    /** 手动暂停罩层：半透明蒙版 + "已暂停"提示 + 继续战斗/返回大厅按钮。由 GameApp 在手动暂停时调用 */
     public void drawPauseOverlay(double vw, double vh) {
         gc.setFill(Color.rgb(10, 8, 18, 0.55));
         gc.fillRect(0, 0, vw, vh);
@@ -1467,7 +1495,7 @@ public final class Renderer {
         gc.fillText("继续战斗", rb[0] + rb[2] / 2 - measureWidth(bf, "继续战斗") / 2,
                 rb[1] + rb[3] / 2 + 6);
 
-        // 「退出结算」按钮
+        // 「返回大厅」按钮
         double[] qb = pauseQuitRect(vw, vh);
         boolean qHover = mouseX >= qb[0] && mouseX <= qb[0] + qb[2]
                 && mouseY >= qb[1] && mouseY <= qb[1] + qb[3];
@@ -1478,7 +1506,7 @@ public final class Renderer {
         gc.strokeRoundRect(qb[0], qb[1], qb[2], qb[3], 10, 10);
         gc.setFont(bf);
         gc.setFill(Color.rgb(245, 225, 220));
-        gc.fillText("退出结算", qb[0] + qb[2] / 2 - measureWidth(bf, "退出结算") / 2,
+        gc.fillText("返回大厅", qb[0] + qb[2] / 2 - measureWidth(bf, "返回大厅") / 2,
                 qb[1] + qb[3] / 2 + 6);
     }
 
@@ -1493,7 +1521,7 @@ public final class Renderer {
 
         gc.setFont(Font.font("Microsoft YaHei", 16));
         gc.setFill(Color.rgb(235, 230, 220));
-        gc.fillText("终焉之影已被击败，奥术旅团凯旋！", vw / 2 - 148, vh * 0.32 + 48);
+        gc.fillText("奶蛙已被击败，奥术旅团凯旋！", vw / 2 - 148, vh * 0.32 + 48);
 
         int wid = w.wizardCount() > 0 ? w.wizard(0) : -1;
         Loadout lo = (wid >= 0) ? w.loadout(wid) : null;
