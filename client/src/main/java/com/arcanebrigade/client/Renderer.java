@@ -139,11 +139,14 @@ public final class Renderer {
             double top = camY - vh / 2;
             double mapX = -battleMap.getWidth() / 2 - left;
             double mapY = -battleMap.getHeight() / 2 - top;
-            gc.setGlobalAlpha(0.94);
+            // 原始图只作为起始记忆层：降低沙漠核心的不透明度，让新的连续地貌能自然接上，
+            // 而不是重新出现一个把玩家困住的旧方框。
+            gc.setGlobalAlpha(w.arenaMap() == ArenaMap.DESERT_RUINS ? 0.76 : 0.94);
             gc.drawImage(battleMap, mapX, mapY, battleMap.getWidth(), battleMap.getHeight());
             gc.setGlobalAlpha(1.0);
             gc.setFill(Color.color(0.02, 0.02, 0.05, 0.12));
             gc.fillRect(0, 0, vw, vh);
+            drawCoreRouteIntegration(w, left, top, pal);
         } else if (battleMap == null) {
             drawObstacles(w, alpha, vw, vh);
         }
@@ -302,6 +305,12 @@ public final class Renderer {
         // 荒漠的路线外是深沙而非黑墙；熔岩与墓室则保留压迫感更强的外缘。
         gc.setFill(map == ArenaMap.DESERT_RUINS ? pal[2].deriveColor(0, 0.84, 0.86, 1) : pal[0]);
         gc.fillRect(0, 0, vw, vh);
+        if (map == ArenaMap.DESERT_RUINS) {
+            drawDesertGroundTexture(left, top, vw, vh);
+            gc.setFill(Color.color(0.16, 0.075, 0.03, 0.28));
+            gc.fillRect(0, 0, vw, vh);
+            drawDesertOuterDunes(left, top, vw, vh, pal);
+        }
 
         gc.setFill(pal[2].deriveColor(0, 1, 1, 0.90));
         for (int i = 0; i < map.routeSectionCount(); i++) {
@@ -310,7 +319,11 @@ public final class Renderer {
             double y = route.y() - route.halfHeight() - top;
             double width = route.halfWidth() * 2;
             double height = route.halfHeight() * 2;
-            gc.fillRoundRect(x, y, width, height, Math.min(120, height), Math.min(120, height));
+            if (map == ArenaMap.DESERT_RUINS) {
+                drawDesertRouteWear(route, left, top, pal);
+            } else {
+                gc.fillRoundRect(x, y, width, height, Math.min(120, height), Math.min(120, height));
+            }
         }
 
         for (int i = 0; i < map.expeditionNodeCount(); i++) {
@@ -319,10 +332,17 @@ public final class Renderer {
             double y = node.y() - node.halfHeight() - top;
             double width = node.halfWidth() * 2;
             double height = node.halfHeight() * 2;
-            gc.setFill(node.role() == ArenaMap.ExpeditionRole.BOSS ? pal[3].deriveColor(0, 1, 1, 0.88)
-                    : node.role() == ArenaMap.ExpeditionRole.REWARD ? pal[1].deriveColor(0, 1, 1.08, 0.96)
-                    : pal[1]);
-            gc.fillRoundRect(x, y, width, height, Math.min(180, height), Math.min(180, height));
+            double arc = Math.min(180, height);
+            if (map == ArenaMap.DESERT_RUINS) {
+                if (node.role() != ArenaMap.ExpeditionRole.CORE) {
+                    drawDesertNodeFloor(node, left, top, pal);
+                }
+            } else {
+                gc.setFill(node.role() == ArenaMap.ExpeditionRole.BOSS ? pal[3].deriveColor(0, 1, 1, 0.88)
+                        : node.role() == ArenaMap.ExpeditionRole.REWARD ? pal[1].deriveColor(0, 1, 1.08, 0.96)
+                        : pal[1]);
+                gc.fillRoundRect(x, y, width, height, arc, arc);
+            }
         }
 
         int c0 = (int) Math.floor(left / TILE);
@@ -336,6 +356,129 @@ public final class Renderer {
                 if (!map.isWalkable((float) wx, (float) wy, 0f)) continue;
                 drawExpeditionDecor(map, c, r, left, top, pal);
             }
+        }
+    }
+
+    /**
+     * 荒漠核心与第一段断墙之间的“可见出口”。它只覆盖路线地表，不新增任何阻挡，
+     * 因而玩家从原图迈入扩展区时看到的通道和真实可走路线完全一致。
+     */
+    private void drawCoreRouteIntegration(World w, double left, double top, Color[] pal) {
+        if (w.arenaMap() != ArenaMap.DESERT_RUINS) {
+            return;
+        }
+        ArenaMap.ExpeditionNode core = w.arenaMap().expeditionNode(0);
+        for (ArenaMap.RouteSection route : w.arenaMap().routeSections()) {
+            boolean meetsCore = route.x() - route.halfWidth() < core.x() + core.halfWidth()
+                    && route.x() + route.halfWidth() > core.x() - core.halfWidth()
+                    && route.y() - route.halfHeight() < core.y() + core.halfHeight()
+                    && route.y() + route.halfHeight() > core.y() - core.halfHeight();
+            if (!meetsCore) continue;
+            double x = route.x() - route.halfWidth() - left;
+            double y = route.y() - route.halfHeight() - top;
+            double width = route.halfWidth() * 2;
+            double height = route.halfHeight() * 2;
+            gc.setFill(Color.color(0.16, 0.08, 0.035, 0.25));
+            gc.fillRoundRect(x + 8, y + 12, width, height, height, height);
+            gc.setFill(pal[1].deriveColor(0, 1.04, 1.04, 0.98));
+            gc.fillRoundRect(x, y, width, height, height, height);
+            gc.setStroke(pal[5].deriveColor(0, 1, 1.10, 0.66));
+            gc.setLineWidth(2.2);
+            gc.strokeRoundRect(x + 3, y + 3, width - 6, height - 6, height - 6, height - 6);
+            for (int mark = 0; mark < 5; mark++) {
+                double mx = x + width * (0.18 + mark * 0.16);
+                double my = y + height * (0.32 + (mark % 2) * 0.25);
+                gc.setStroke(pal[3].deriveColor(0, 1, 0.84, 0.58));
+                gc.setLineWidth(1.4);
+                gc.strokeLine(mx - 14, my + 4, mx + 15, my - 4);
+                gc.strokeLine(mx + 2, my, mx + 8, my - 11);
+            }
+        }
+    }
+
+    /** 无实体地表纹理按世界坐标平铺；它不包含任何石块/墙体，因此不会制造视觉与碰撞的分歧。 */
+    private void drawDesertGroundTexture(double left, double top, double vw, double vh) {
+        Image texture = Sprites.desertExpeditionGround;
+        if (texture == null || texture.getWidth() <= 0 || texture.getHeight() <= 0) {
+            return;
+        }
+        // 以大于常规视口的尺寸铺放，玩家移动时不会频繁看到纹理接缝或重复图案。
+        double tileW = Math.max(2_048d, texture.getWidth());
+        double tileH = Math.max(2_048d, texture.getHeight());
+        double startX = Math.floor(left / tileW) * tileW;
+        double startY = Math.floor(top / tileH) * tileH;
+        gc.setGlobalAlpha(0.98);
+        for (double worldY = startY; worldY < top + vh; worldY += tileH) {
+            for (double worldX = startX; worldX < left + vw; worldX += tileW) {
+                gc.drawImage(texture, worldX - left, worldY - top, tileW, tileH);
+            }
+        }
+        gc.setGlobalAlpha(1.0);
+    }
+
+    /** 连续的风蚀痕迹提示推进方向，但不画成封闭的矩形走廊。 */
+    private void drawDesertRouteWear(ArenaMap.RouteSection route, double left, double top, Color[] pal) {
+        double sx = route.x() - left;
+        double sy = route.y() - top;
+        boolean horizontal = route.halfWidth() >= route.halfHeight();
+        gc.setStroke(pal[5].deriveColor(0, 1, 1.08, 0.24));
+        gc.setLineWidth(2.0);
+        for (int mark = -2; mark <= 2; mark++) {
+            double across = mark * (horizontal ? route.halfHeight() * 0.22 : route.halfWidth() * 0.22);
+            if (horizontal) {
+                gc.strokeLine(sx - route.halfWidth() * 0.70, sy + across + 4,
+                        sx + route.halfWidth() * 0.70, sy + across - 4);
+            } else {
+                gc.strokeLine(sx + across - 4, sy - route.halfHeight() * 0.70,
+                        sx + across + 4, sy + route.halfHeight() * 0.70);
+            }
+        }
+    }
+
+    /** 大尺度沙丘只画在路线外，提供延展感但绝不伪装成可阻挡的场景物件。 */
+    private void drawDesertOuterDunes(double left, double top, double vw, double vh, Color[] pal) {
+        final int duneTile = 240;
+        int c0 = (int) Math.floor(left / duneTile) - 1;
+        int c1 = (int) Math.floor((left + vw) / duneTile) + 1;
+        int r0 = (int) Math.floor(top / duneTile) - 1;
+        int r1 = (int) Math.floor((top + vh) / duneTile) + 1;
+        for (int c = c0; c <= c1; c++) {
+            for (int r = r0; r <= r1; r++) {
+                long h = hash2(c * 13, r * 17 + 41);
+                if ((h & 3L) != 0L) continue;
+                double x = c * duneTile - left + 28 + ((h >>> 8) % 72);
+                double y = r * duneTile - top + 38 + ((h >>> 16) % 68);
+                double width = 130 + ((h >>> 24) % 95);
+                double height = 42 + ((h >>> 32) % 34);
+                gc.setFill(pal[3].deriveColor(0, 0.82, 0.72, 0.18));
+                gc.fillOval(x, y + 11, width, height);
+                gc.setStroke(pal[5].deriveColor(0, 1, 1.12, 0.30));
+                gc.setLineWidth(2.0);
+                gc.strokeArc(x + 8, y, width - 18, height, 198, 132, javafx.scene.shape.ArcType.OPEN);
+            }
+        }
+    }
+
+    /** 节点地面只用纹章、裂纹与风蚀环表达功能，不画会误导玩家的假墙或假石柱。 */
+    private void drawDesertNodeFloor(ArenaMap.ExpeditionNode node, double left, double top, Color[] pal) {
+        double sx = node.x() - left;
+        double sy = node.y() - top;
+        double radius = Math.min(node.halfWidth(), node.halfHeight()) * 0.48;
+        Color accent = node.role() == ArenaMap.ExpeditionRole.REWARD ? Color.rgb(241, 203, 113, 0.62)
+                : node.role() == ArenaMap.ExpeditionRole.ELITE ? Color.rgb(194, 103, 62, 0.58)
+                : node.role() == ArenaMap.ExpeditionRole.BOSS ? Color.rgb(224, 148, 70, 0.70)
+                : Color.rgb(202, 143, 82, 0.46);
+        gc.setStroke(accent);
+        gc.setLineWidth(node.role() == ArenaMap.ExpeditionRole.BOSS ? 4.0 : 2.0);
+        gc.strokeOval(sx - radius, sy - radius * 0.58, radius * 2, radius * 1.16);
+        gc.setLineWidth(1.2);
+        for (int ray = 0; ray < 8; ray++) {
+            double angle = ray * Math.PI / 4;
+            double x0 = sx + Math.cos(angle) * radius * 0.26;
+            double y0 = sy + Math.sin(angle) * radius * 0.16;
+            double x1 = sx + Math.cos(angle) * radius * 0.82;
+            double y1 = sy + Math.sin(angle) * radius * 0.48;
+            gc.strokeLine(x0, y0, x1, y1);
         }
     }
 

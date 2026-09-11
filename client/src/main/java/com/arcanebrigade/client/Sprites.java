@@ -63,6 +63,8 @@ public final class Sprites {
     public static Image[] mapPreviews = new Image[3];
     /** 战斗底图。固定镜头与 core 的单屏碰撞布局共用同一张关卡设计图。 */
     public static Image[] battleMaps = new Image[3];
+    /** 荒漠扩展区的无实体地表纹理；所有真实掩体仍由 ArenaMap 的碰撞数据单独绘制。 */
+    public static Image desertExpeditionGround;
 
     /** 快照需要节点挂在 Scene 下才可靠，用一个离屏容器兜着 */
     private static final Group OFFSCREEN = new Group();
@@ -97,6 +99,7 @@ public final class Sprites {
         battleMaps[0] = loadBattleMap("desert-ruins.png");
         battleMaps[1] = loadBattleMap("lava-dungeon.png");
         battleMaps[2] = loadBattleMap("stone-crypt.png");
+        desertExpeditionGround = loadBattleMap("desert-expedition-ground-v1.png");
         // 细节立绘（右侧角色卡大图），按下标对齐职业。
         // 美术给的多是带纯色底（黑/白）的整幅图，叠到王座厅上会出现一块黑底/白底，
         // 这里把环绕角色、与图边相连的背景色抠成透明（见 knockoutBackground）。
