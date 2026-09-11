@@ -1,7 +1,7 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="启动游戏 (GameLauncher)" type="Application" factoryName="Application">
     <option name="MAIN_CLASS_NAME" value="com.arcanebrigade.client.GameLauncher" />
-    <module name="com.arcanebrigade.client.main" />
+    <module name="client" />
     <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
     <method v="2">
       <option name="Make" enabled="true" />

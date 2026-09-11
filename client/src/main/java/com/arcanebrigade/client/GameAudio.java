@@ -2,6 +2,7 @@ package com.arcanebrigade.client;
 
 import javafx.scene.media.Media;
 import javafx.scene.media.MediaPlayer;
+import javafx.util.Duration;
 
 import java.io.File;
 
@@ -34,6 +35,11 @@ public final class GameAudio {
     private static final String[] BOSS_FILES = {
             "bgm_boss1.mp3", "bgm_boss2.mp3", "bgm_boss3.mp3", "bgm_boss4.mp3"
     };
+    /**
+     * 奶蛙技能二「捧腹大笑」的音效（单次播放，每次释放都从头重播）。
+     * 注意：酷狗的 .kgg 是加密格式，JavaFX 无法解码，这里只接受普通 mp3（缺失时尝试 .wav）。
+     */
+    private static final String LAUGH_FILE = "laugh_milky.mp3";
 
     /** battleTrack 的哨兵值：战斗槽当前不该放任何曲子（未进战斗 / 已结算） */
     private static final int TRACK_NONE = -99;
@@ -43,6 +49,13 @@ public final class GameAudio {
     /** 5 关 Boss 奶蛙在场时的专属循环音乐（优先级高于战斗槽） */
     private static MediaPlayer boss;
     private static MediaPlayer battle;
+    /** 奶蛙「捧腹大笑」音效（单次） */
+    private static MediaPlayer laugh;
+    /**
+     * 音效增益：笑声素材本身比 BGM 轻，这里整体抬一档，避免被背景音乐盖住。
+     * 最终音量 = clamp(总音量 × 音效音量 × SFX_GAIN, 0..1)。
+     */
+    private static final double SFX_GAIN = 1.8;
     /**
      * 战斗槽「应该」播的曲目：TRACK_NONE = 不该播 / -1 = 普通战斗曲 / 0..3 = 对应 Boss 曲。
      * 与实际在播的那首分开记，是为了奶蛙出场时能让位——那时只更新本字段而不起播，
@@ -141,6 +154,39 @@ public final class GameAudio {
         refreshVolume();
     }
 
+    /**
+     * 奶蛙技能二「捧腹大笑」：每次释放都从头重播该音效（单次，不循环）。
+     * 音频缺失时静默跳过，不影响技能与动画。
+     */
+    public static void playLaugh() {
+        if (laugh == null) {
+            laugh = makeSfx(LAUGH_FILE);   // 首次释放时加载
+        }
+        if (laugh == null) {
+            return;
+        }
+        try {
+            laugh.stop();
+            laugh.seek(Duration.ZERO);
+            applyVolume(laugh, sfxVolume());
+            laugh.play();
+        } catch (Throwable ignored) {
+            // 播放器已失效则忽略
+        }
+    }
+
+    /** 技能二释放完毕：立即停止笑声（播放器保留，下次释放从头重播） */
+    public static void stopLaugh() {
+        if (laugh == null) {
+            return;
+        }
+        try {
+            laugh.stop();
+        } catch (Throwable ignored) {
+            // 播放器已失效则忽略
+        }
+    }
+
     /** 音量配置变化后调用：所有在播的 BGM 统一用 总音量 × BGM 音量 */
     public static void refreshVolume() {
         double v = (GameConfig.volume(GameConfig.VOL_MASTER) / 100.0)
@@ -149,6 +195,40 @@ public final class GameAudio {
         applyVolume(lobby, v);
         applyVolume(boss, v);
         applyVolume(battle, v);
+        applyVolume(laugh, sfxVolume());
+    }
+
+    /** 音效音量 = 总音量 × 音效音量 × 增益（上限 1.0） */
+    private static double sfxVolume() {
+        double v = (GameConfig.volume(GameConfig.VOL_MASTER) / 100.0)
+                * (GameConfig.volume(GameConfig.VOL_SFX) / 100.0)
+                * SFX_GAIN;
+        return Math.min(1.0, v);
+    }
+
+    /** 建一个「单次播放」的音效播放器（不自动 play）。mp3 缺失时退回同名 .wav */
+    private static MediaPlayer makeSfx(String fileName) {
+        File f = findAsset("audio", fileName);
+        if (f == null || !f.isFile()) {
+            f = findAsset("audio", fileName.replace(".mp3", ".wav"));
+        }
+        if (f == null || !f.isFile()) {
+            System.err.println("[GameAudio] 缺少音效: audio/" + fileName
+                    + "（.kgg 为酷狗加密格式无法解码，请放一个同名 mp3 或 wav）");
+            return null;
+        }
+        try {
+            Media m = new Media(f.toURI().toString());
+            MediaPlayer p = new MediaPlayer(m);
+            p.setCycleCount(1);
+            p.setOnError(() ->
+                    System.err.println("[GameAudio] 音效播放出错: " + fileName + " " + p.getError()));
+            applyVolume(p, sfxVolume());
+            return p;
+        } catch (Throwable t) {
+            System.err.println("[GameAudio] " + fileName + " 初始化失败，忽略: " + t.getMessage());
+            return null;
+        }
     }
 
     /** 建好一个无限循环的 MediaPlayer（不设错误即失败时置空） */

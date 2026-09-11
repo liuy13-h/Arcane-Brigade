@@ -14,6 +14,8 @@ import com.arcanebrigade.core.enemy.BoneSerpent;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.image.Image;
+import javafx.scene.image.PixelReader;
+import javafx.scene.image.WritableImage;
 import javafx.scene.paint.Color;
 import javafx.scene.paint.CycleMethod;
 import javafx.scene.shape.ArcType;
@@ -23,8 +25,12 @@ import javafx.scene.text.Font;
 import javafx.scene.text.FontWeight;
 import javafx.scene.text.Text;
 
+import java.awt.image.BufferedImage;
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
+
+import javax.imageio.ImageIO;
 
 /**
  * Canvas 立即模式渲染。整个画面在一张 Canvas 上画完，不往 Scene Graph 里塞任何节点。
@@ -68,6 +74,9 @@ public final class Renderer {
     /** 弹层淡入进度 0..1 */
     private double detailFade;
 
+    /** 每个实体的朝向：true=朝左（向左移动时），false=朝右。静止时沿用上一帧方向 */
+    private final boolean[] facesLeft = new boolean[World.MAX];
+
     public Renderer(Canvas canvas) {
         this.canvas = canvas;
         this.gc = canvas.getGraphicsContext2D();
@@ -88,6 +97,32 @@ public final class Renderer {
         this.detailClass = detailClass;
         this.detailScroll = detailScroll;
         this.detailFade = detailFade;
+    }
+
+    /**
+     * 冒烟调试：把当前画面存成 PNG（配合 -Dab.snapshot=路径）。
+     * 用内置 java.desktop 手写像素，不引入任何新依赖；失败只打日志不影响游戏。
+     */
+    public void saveSnapshot(String path) {
+        int w = Math.max(1, (int) canvas.getWidth());
+        int h = Math.max(1, (int) canvas.getHeight());
+        WritableImage img = new WritableImage(w, h);
+        canvas.snapshot(null, img);
+        PixelReader pr = img.getPixelReader();
+        BufferedImage bi = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        int[] row = new int[w];
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                row[x] = pr.getArgb(x, y);
+            }
+            bi.setRGB(0, y, w, 1, row, 0, w);
+        }
+        try {
+            ImageIO.write(bi, "png", new File(path));
+            System.out.println("[shot] " + path);
+        } catch (Exception e) {
+            System.out.println("[shot] failed: " + e);
+        }
     }
 
     public double getCanvasWidth() {
@@ -133,7 +168,7 @@ public final class Renderer {
         return new double[] { vw / 2 - w - 16, vh * 0.56, w, h };
     }
 
-    /** 暂停菜单「退出结算」按钮矩形 [x, y, w, h]。GameApp 命中判定与绘制共用 */
+    /** 暂停菜单「返回大厅」按钮矩形 [x, y, w, h]。GameApp 命中判定与绘制共用 */
     public static double[] pauseQuitRect(double vw, double vh) {
         double w = 200, h = 48;
         return new double[] { vw / 2 + 16, vh * 0.56, w, h };
@@ -441,6 +476,23 @@ public final class Renderer {
         }
     }
 
+    /**
+     * 在屏幕坐标绘制一张精灵，并以角色中心 cx 为轴做水平镜像（flip=true 时朝左）。
+     * 镜像不改变精灵占据的屏幕范围，仅左右翻转像素——用于让 GIF/立绘朝向移动方向。
+     */
+    private void drawSpriteFacing(Image img, double cx, double top, double w, double h, boolean flip) {
+        if (!flip) {
+            gc.drawImage(img, cx - w / 2, top, w, h);
+            return;
+        }
+        gc.save();
+        gc.translate(cx, 0);
+        gc.scale(-1, 1);
+        gc.translate(-cx, 0);
+        gc.drawImage(img, cx - w / 2, top, w, h);
+        gc.restore();
+    }
+
     private void drawEntities(World w, float alpha, double vw, double vh) {
         double left = camX - vw / 2;
         double top = camY - vh / 2;
@@ -470,6 +522,11 @@ public final class Renderer {
                     double mvx = w.x[i] - w.px[i];
                     double mvy = w.y[i] - w.py[i];
                     boolean moving = mvx * mvx + mvy * mvy > 1e-3;
+                    // 移动时更新朝向：向左(mvx<0)朝左，向右朝右；静止时沿用上一帧方向
+                    if (moving) {
+                        facesLeft[i] = mvx < 0;
+                    }
+                    boolean flip = facesLeft[i];
                     Image img = null;
                     boolean fromGif = false;
                     if (moving && ck < Sprites.heroWalk.length) {
@@ -484,13 +541,14 @@ public final class Renderer {
                     }
                     if (img != null) {
                         if (fromGif) {
-                            // GIF 帧是 32×32，放大到与 ×2 立绘一致（64×64），底边贴地
-                            gc.drawImage(img, sx - 32, sy - 44, 64, 64);
+                            // GIF 帧是 32×32，放大到与 ×2 立绘一致（64×64），底边贴地。
+                            // 朝向随移动方向水平镜像（绕角色中心 sx 翻转）。
+                            drawSpriteFacing(img, sx, sy - 44, 64, 64, flip);
                         } else {
                             // ×2 立绘按自然尺寸 1:1 绘制（清晰像素），底边贴角色位置
                             double hw = img.getWidth();
                             double hh = img.getHeight();
-                            gc.drawImage(img, Math.round(sx - hw / 2), Math.round(sy + 4 - hh));
+                            drawSpriteFacing(img, sx, sy + 4 - hh, hw, hh, flip);
                         }
                     }
                     // 战士的武器（Influx Waver 光刃）：握在身侧，朝向跟着移动方向转
@@ -528,7 +586,9 @@ public final class Renderer {
                     }
                 }
                 case World.KIND_MINION -> {
-                    // 宠物：Abigail 仆从（image/Abigail_(minion).gif），带一条细血条
+                    // 宠物：Abigail 仆从（image/Abigail_(minion).gif），带一条细血条。
+                    // 朝向跟随主人（owner）：主人朝左时宠物也朝左。
+                    boolean mflip = (w.owner[i] >= 0 && w.owner[i] < World.MAX) ? facesLeft[w.owner[i]] : false;
                     Image mimg = (Sprites.minionAnim != null) ? Sprites.minionAnim.frameAt(w.time()) : null;
                     if (mimg == null) {
                         mimg = Sprites.minion;
@@ -536,7 +596,7 @@ public final class Renderer {
                     if (mimg != null) {
                         double mh = 32.0;
                         double mw = mimg.getWidth() * (mh / mimg.getHeight());
-                        gc.drawImage(mimg, sx - mw / 2, sy - mh + 5, mw, mh);
+                        drawSpriteFacing(mimg, sx, sy - mh + 5, mw, mh, mflip);
                     }
                     float mf = Math.max(0f, w.hp[i] / Math.max(1f, w.maxHp[i]));
                     gc.setFill(Color.rgb(30, 12, 16, 0.85));
@@ -1129,20 +1189,35 @@ public final class Renderer {
     // 5 关 Boss 奶蛙：动画 / 技能预警 / 专属血条
     // ------------------------------------------------------------------
 
+    /**
+     * 施法动画取帧：按「施法时长」归一化，保证动作刚好完整播完一次。
+     * · GIF 比施法长（如踩地 2.32s 压进 1.5s）→ 加速压缩，播完即结束；
+     * · GIF 比施法短（如大笑 1.12s 配 2.0s）→ 自然速度播完，之后定格最后一帧。
+     */
+    private static Image castFrame(GifDecoder.Animation a, double castT, double castDur) {
+        if (a == null || a.frames.length == 0) {
+            return null;
+        }
+        if (a.total <= 0f) {
+            return a.frames[0];
+        }
+        if (castDur > 0 && castDur < a.total) {
+            double p = Math.min(1.0, castT / castDur);
+            return a.frameAt((float) Math.max(0.0, p * a.total - 0.0001));
+        }
+        return a.frameAt((float) Math.min(castT, Math.max(0f, a.total - 0.001f)));
+    }
+
     /** 奶蛙当前该画的那一帧：按施法状态 / 朝向挑动画 */
     private static Image milkyFrame(World w) {
         int cast = w.milkyCast();
-        if (cast == 1) {
-            GifDecoder.Animation a = w.milkyMirror() ? Sprites.milkyStompMirror : Sprites.milkyStomp;
-            if (a != null) {
-                // 单次播放：进度到末尾就停在最后一帧
-                float t = Math.min(w.milkyCastT(), Math.max(0f, a.total - 0.001f));
-                return a.frameAt(t);
-            }
-        } else if (cast == 2) {
-            GifDecoder.Animation a = Sprites.milkyLaugh;
-            if (a != null) {
-                return a.frameAt(w.milkyCastT());
+        if (cast != 0) {
+            GifDecoder.Animation a = (cast == 1)
+                    ? (w.milkyMirror() ? Sprites.milkyStompMirror : Sprites.milkyStomp)
+                    : Sprites.milkyLaugh;
+            Image f = castFrame(a, w.milkyCastT(), w.milkyCastDur());
+            if (f != null) {
+                return f;
             }
         }
         GifDecoder.Animation walk = w.milkyFaceRight() ? Sprites.milkyWalkRight : Sprites.milkyWalkLeft;
@@ -1176,13 +1251,13 @@ public final class Renderer {
         double ey = w.milkyY() - top;
         float p = Math.min(1f, w.milkyCastT() / Math.max(0.001f, w.milkyCastDur()));
         if (cast == 1) {
+            // 整圆范围（半径与技能二相同）：无死角，靠远离躲避
             double rad = Balance.MILKY_STOMP_RANGE;
-            double start = w.milkyFaceRight() ? -90 : 90;   // 半圆朝玩家一侧
             gc.setFill(Color.rgb(255, 90, 60, 0.16 + 0.16 * p));
-            gc.fillArc(ex - rad, ey - rad, rad * 2, rad * 2, start, 180, ArcType.ROUND);
+            gc.fillOval(ex - rad, ey - rad, rad * 2, rad * 2);
             gc.setStroke(Color.rgb(255, 130, 90, 0.85));
             gc.setLineWidth(2.5);
-            gc.strokeArc(ex - rad, ey - rad, rad * 2, rad * 2, start, 180, ArcType.ROUND);
+            gc.strokeOval(ex - rad, ey - rad, rad * 2, rad * 2);
         } else {
             double rad = Balance.MILKY_LAUGH_RANGE;
             gc.setFill(Color.rgb(255, 80, 90, 0.14 + 0.18 * p));
@@ -1459,7 +1534,7 @@ public final class Renderer {
      * 各人显示高度 = 其放大后的自然高度（约 42~50px）。此值仅在美术资源缺失时
      * 当作排版占位高度。
      */
-    /** 手动暂停罩层：半透明蒙版 + "已暂停"提示 + 继续战斗/退出结算按钮。由 GameApp 在手动暂停时调用 */
+    /** 手动暂停罩层：半透明蒙版 + "已暂停"提示 + 继续战斗/返回大厅按钮。由 GameApp 在手动暂停时调用 */
     public void drawPauseOverlay(double vw, double vh) {
         gc.setFill(Color.rgb(10, 8, 18, 0.55));
         gc.fillRect(0, 0, vw, vh);
@@ -1489,7 +1564,7 @@ public final class Renderer {
         gc.fillText("继续战斗", rb[0] + rb[2] / 2 - measureWidth(bf, "继续战斗") / 2,
                 rb[1] + rb[3] / 2 + 6);
 
-        // 「退出结算」按钮
+        // 「返回大厅」按钮
         double[] qb = pauseQuitRect(vw, vh);
         boolean qHover = mouseX >= qb[0] && mouseX <= qb[0] + qb[2]
                 && mouseY >= qb[1] && mouseY <= qb[1] + qb[3];
@@ -1500,7 +1575,7 @@ public final class Renderer {
         gc.strokeRoundRect(qb[0], qb[1], qb[2], qb[3], 10, 10);
         gc.setFont(bf);
         gc.setFill(Color.rgb(245, 225, 220));
-        gc.fillText("退出结算", qb[0] + qb[2] / 2 - measureWidth(bf, "退出结算") / 2,
+        gc.fillText("返回大厅", qb[0] + qb[2] / 2 - measureWidth(bf, "返回大厅") / 2,
                 qb[1] + qb[3] / 2 + 6);
     }
 
@@ -1515,7 +1590,7 @@ public final class Renderer {
 
         gc.setFont(Font.font("Microsoft YaHei", 16));
         gc.setFill(Color.rgb(235, 230, 220));
-        gc.fillText("终焉之影已被击败，奥术旅团凯旋！", vw / 2 - 148, vh * 0.32 + 48);
+        gc.fillText("奶蛙已被击败，奥术旅团凯旋！", vw / 2 - 148, vh * 0.32 + 48);
 
         int wid = w.wizardCount() > 0 ? w.wizard(0) : -1;
         Loadout lo = (wid >= 0) ? w.loadout(wid) : null;
@@ -1614,6 +1689,27 @@ public final class Renderer {
         gc.setFont(tipF);
         gc.setFill(Color.rgb(150, 146, 166));
         gc.fillText(tip, vw / 2 - measureWidth(tipF, tip) / 2, vh - 26);
+
+        // ---- 被奶蛙击败：屏幕中央展示专属图 + 红色「压力！」 ----
+        Image press = Sprites.milkyPressure;
+        if (w.killedByMilky() && press != null) {
+            double ih = Math.min(210, vh * 0.30);
+            double iw = ih * (press.getWidth() / press.getHeight());
+            double cx = vw / 2;
+            double cy = vh * 0.52;
+            // 底衬，保证在战报之上依然清晰
+            gc.setFill(Color.rgb(8, 5, 12, 0.78));
+            gc.fillRoundRect(cx - iw / 2 - 26, cy - ih / 2 - 22, iw + 52, ih + 104, 16, 16);
+            gc.setStroke(Color.rgb(226, 96, 106, 0.55));
+            gc.setLineWidth(1.5);
+            gc.strokeRoundRect(cx - iw / 2 - 26, cy - ih / 2 - 22, iw + 52, ih + 104, 16, 16);
+            gc.setImageSmoothing(false);   // 像素图：关闭插值保持锐利
+            gc.drawImage(press, cx - iw / 2, cy - ih / 2, iw, ih);
+            gc.setImageSmoothing(true);
+            Font pf = Font.font("Microsoft YaHei", FontWeight.BOLD, 40);
+            drawTextSoft(gc, pf, cx, cy + ih / 2 + 58, "压力！",
+                    Color.rgb(232, 40, 48), Color.rgb(0, 0, 0, 0.75));
+        }
     }
 
     /** 量字符串像素宽度，同时返回宽度（复用 measurer，避免每帧新建 Text 节点） */
@@ -1643,6 +1739,12 @@ public final class Renderer {
     /** 数值条：0..1 的归一值（召唤师已开放，接 main 的真实属性） */
     private static final double[] CARD_LIFE = { 0, 100 / 150.0, 140 / 150.0, 85 / 150.0, 90 / 150.0 };
     private static final double[] CARD_SPEED = { 0, 195 / 235.0, 180 / 235.0, 205 / 235.0, 185 / 235.0 };
+    /**
+     * 起手武器数值条的满格标尺：攻击力 30（最强起手挥砍 26）、攻击范围 800（最远箭矢 760）。
+     * 这两个数值不落数组——直接读 HeroClass.startSpell 的实时值，调平衡时卡片自动跟随。
+     */
+    private static final float CARD_ATK_SCALE = 30f;
+    private static final float CARD_RANGE_SCALE = 800f;
 
     /**
      * 计算大厅布局：随窗口尺寸缩放。GameApp 移动/判定与绘制必须共用它。
@@ -1866,7 +1968,7 @@ public final class Renderer {
         }
 
         // ---- 「查看详情」全屏弹层：盖在整张大厅画面上（含上面的卡与招募条） ----
-        if (detailClass != 0 && detailFade > 0.004) {
+        if (detailClass != 0 && detailFade > 0.001) {
             drawDetail(vw, vh, detailClass, detailFade);
         }
     }
@@ -1884,7 +1986,7 @@ public final class Renderer {
         double fade = Math.pow(r, 1.6);
         Color ac = classAccent(target);
 
-        // 条占屏幕左下部，右侧避开立绘文字面板
+        // 条占屏幕左下部，右侧避开立绘文字面板（宽度取选人卡同一份几何）
         double barH = 92;
         double cardW = classCardW(vw);
         double x0 = 18;
@@ -1939,7 +2041,6 @@ public final class Renderer {
         double x = vw + 40 + (targetX - vw - 40) * p;
         double panelX = x + 8;
         double panelW = cardW - 16;
-        double infoH = Math.min(306, vh * 0.42);
         double panelBottom = vh - 14;
         double innerX = panelX + 14;
         double innerBottom = panelBottom - 12;
@@ -1956,7 +2057,8 @@ public final class Renderer {
     /**
      * 站在角色面前时从屏右滑入的细节卡：上部无底立绘 + 下部双栏面板。
      * 左栏：编号/职业名/真名/定位/特性/数值条；右栏：「角色背景」滚动框 + 查看详情按钮。
-     * 不画任何底板/白底，任其直接叠在王座厅场景上。reveal 0..1 = 展示进度。
+     * 不画任何底板/白底，任其直接叠在王座厅场景上。reveal 0..1 = 展示进度（1 完全到位、0 缩回屏外），
+     * 进出共用同一根 ease-out 曲线，因此离开区域时立绘会原路滑出。
      */
     private void drawClassCard(double vw, double vh, int ck, double reveal) {
         Image art = Sprites.heroPortraits[ck];
@@ -1980,7 +2082,8 @@ public final class Renderer {
         double sc = Math.min((cardW - 2 * pad) / art.getWidth(), artAvailH / art.getHeight());
         double aw = art.getWidth() * sc;
         double ah = art.getHeight() * sc;
-        gc.drawImage(art, Math.round(x + (cardW - aw) / 2), Math.round(artTop + (artAvailH - ah) / 2), aw, ah);
+        gc.drawImage(art, Math.round(x + (cardW - aw) / 2),
+                Math.round(artTop + (artAvailH - ah) / 2), aw, ah);
 
         // ---- 文字信息底：职业色半透明面板（左栏信息 / 右栏背景框共用一块底） ----
         double panelX = x + 8;
@@ -2002,7 +2105,7 @@ public final class Renderer {
         double rightX = innerX + leftW + colGap;
         double rightW = (panelX + panelW - 14) - rightX;
 
-        // ===== 左栏：编号 / 职业名 / 真名 / 定位 / 特性 / 数值条 / 台词 =====
+        // ===== 左栏：编号 / 职业名 / 真名 / 定位 / 特性 / 数值条 =====
         LobbyLore.Lore lore = LobbyLore.byClass(ck);
         double lx = innerX;
         double iy = innerTop;
@@ -2032,13 +2135,20 @@ public final class Renderer {
             iy += 19;
         }
         iy += 4;
-        // 数值条（宽度适配左栏）
-        double barW = Math.max(60, leftW - 74);
+        // 数值条（宽度适配左栏；标签列统一按最宽标签「攻击范围」对齐）
+        double barLabelW = measureWidth(Font.font("Microsoft YaHei", 12.5), "攻击范围");
+        double barW = Math.max(56, leftW - barLabelW - 42);
         drawCardBar(lx, iy, "生命", Math.round(CARD_LIFE[ck] * 150) + "",
-                CARD_LIFE[ck], ac, barW);
+                CARD_LIFE[ck], ac, barW, barLabelW);
         iy += 27;
         drawCardBar(lx, iy, "移速", Math.round(CARD_SPEED[ck] * 235) + "",
-                CARD_SPEED[ck], Color.rgb(120, 220, 255), barW);
+                CARD_SPEED[ck], Color.rgb(120, 220, 255), barW, barLabelW);
+        iy += 27;
+        drawCardBar(lx, iy, "攻击力", Math.round(starterDamage(ck)) + "",
+                starterDamage(ck) / CARD_ATK_SCALE, Color.rgb(255, 140, 105), barW, barLabelW);
+        iy += 27;
+        drawCardBar(lx, iy, "攻击范围", Math.round(starterRange(ck)) + "",
+                starterRange(ck) / CARD_RANGE_SCALE, Color.rgb(165, 175, 255), barW, barLabelW);
 
         // ===== 右栏：「角色背景」滚动框 + 「查看详情」按钮 =====
         double[] btnR = classDetailButton(vw, vh, reveal);
@@ -2114,8 +2224,8 @@ public final class Renderer {
     }
 
     /**
-     * 「查看详情」弹层：杀戮尖塔式档案页。全屏暗幕 + 中央面板：左侧大立绘，
-     * 右侧完整档案（真名/称号/定位固定头部，背景/性格/风格/台词滚轮查看）。
+     * 「查看详情」弹层：全屏暗幕 + 中央档案面板：左侧大立绘，右侧完整档案
+     * （真名/称号/定位固定头部，背景/性格/风格/台词滚轮查看）。
      * fade 0..1 = 淡入进度。detailScroll 由 GameApp 滚轮更新，这里只 clamp 绘制。
      */
     private void drawDetail(double vw, double vh, int ck, double fade) {
@@ -2132,13 +2242,11 @@ public final class Renderer {
             return;
         }
 
-        double pw = Math.min(1040, vw * 0.85);
-        double ph = Math.min(640, vh * 0.88);
-        double px = (vw - pw) / 2;
-        double py = (vh - ph) / 2;
         double[] pr = detailPanelRect(vw, vh);
-        px = pr[0];
-        py = pr[1];
+        double px = pr[0];
+        double py = pr[1];
+        double pw = pr[2];
+        double ph = pr[3];
 
         // 面板底：深色圆角 + 职业色描边
         gc.setFill(Color.rgb(15, 13, 28, 0.97 * ease));
@@ -2270,12 +2378,27 @@ public final class Renderer {
         return new double[] { p[0] + p[2] - 34, p[1] + 18, 26, 26 };
     }
 
-    /** 无底数值条：标签 + 数值（带投影），进度只画彩色圆角条 + 细描边，不留白槽。条宽调用方给定 */
+    /** 起手武器的单发攻击力（读 core 实时值；职业无效时按 0 画空条） */
+    private static float starterDamage(int ck) {
+        SpellDef def = Spells.get(HeroClass.startSpell(ck));
+        return def != null ? def.damage : 0f;
+    }
+
+    /** 起手武器的攻击范围：弹道取射程，近战扇形取弧半径（同一套游戏内像素单位） */
+    private static float starterRange(int ck) {
+        SpellDef def = Spells.get(HeroClass.startSpell(ck));
+        if (def == null) {
+            return 0f;
+        }
+        return def.form == SpellDef.Form.MELEE_ARC ? def.arcRadius : def.range;
+    }
+
+    /** 无底数值条：标签 + 彩色圆角条（带细描边）+ 条尾数值（带投影）。条宽与标签列宽由调用方给定 */
     private void drawCardBar(double x, double y, String label, String value,
-            double frac, Color color, double barW) {
-        shadowLeft(x, y + 6, Font.font("Microsoft YaHei", 11.5), label,
+            double frac, Color color, double barW, double labelW) {
+        shadowLeft(x, y + 6, Font.font("Microsoft YaHei", 12.5), label,
                 Color.rgb(240, 238, 250));
-        double bx = x + 30;
+        double bx = x + labelW + 6;
         double bh = 5;
         double f = Math.max(0, Math.min(1, frac));
         gc.setStroke(Color.color(0, 0, 0, 0.5));
@@ -2335,7 +2458,6 @@ public final class Renderer {
     private static boolean isWordChar(char c) {
         return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
                 || (c >= '0' && c <= '9') || c == ' ' || c == '.' || c == '%' || c == '-';
-
     }
 
     /** 左对齐文字 + 细投影：不垫底色的前提下保证可读性 */
@@ -2458,30 +2580,26 @@ public final class Renderer {
     // menuButtons()/menuHit() 这一份几何，避免"画的框"和"点的框"错位。
     // ------------------------------------------------------------------
 
-    /** 主界面按钮数量 */
-    public static final int MENU_COUNT = 5;
-    /** 覆盖层种类：无 / 操作说明 / 设置 / 多人联机（占位） */
+    /** 覆盖层种类：无 / 操作说明 / 设置 */
     public static final int OVER_NONE = 0;
     public static final int OVER_HELP = 1;
     public static final int OVER_SETTINGS = 2;
-    public static final int OVER_MULTI = 3;
 
     /** 标题画面设计基准尺寸（与美术原图一致）。布局 / 命中区都用它换算。 */
     private static final double TITLE_W = 3072.0;
     private static final double TITLE_H = 2048.0;
 
-    /** 五个菜单按钮在标题画（图像坐标）里的命中矩形：{x0, y0, x1, y1}。 */
+    /** 四个菜单按钮在标题画（图像坐标）里的命中矩形：{x0, y0, x1, y1}。 */
     private static final int[][] MENU_BOX = {
             { 416, 1905, 836, 2048 },   // 0 开始游戏
-            { 866, 1905, 1286, 2048 },  // 1 多人联机 1-4 人
-            { 1330, 1905, 1750, 2048 }, // 2 设置
-            { 1758, 1905, 2178, 2048 }, // 3 操作说明
-            { 2183, 1905, 2603, 2048 }, // 4 退出游戏
+            { 1330, 1905, 1750, 2048 }, // 1 设置
+            { 1758, 1905, 2178, 2048 }, // 2 操作说明
+            { 2183, 1905, 2603, 2048 }, // 3 退出游戏
     };
 
     /** 按钮文字（仅美术缺失兜底绘制时用；美术在位时字是印在图画里的） */
     private static final String[] MENU_LABELS = {
-            "开始游戏", "多人联机 1–4 人", "设置", "操作说明", "退出游戏" };
+            "开始游戏", "设置", "操作说明", "退出游戏" };
 
     private static final String[] HELP_LINES = {
             "移动：WASD / 方向键 —— 本作为幸存者玩法，战斗自动开火，你只管走位。",
@@ -2549,7 +2667,7 @@ public final class Renderer {
 
     /**
      * 画主菜单。contain 布局保证整张标题画可见；hover 高亮只在无覆盖层时出现；
-     * overlay != OVER_NONE 时在最上层画对应面板（操作说明 / 设置 / 多人联机占位）。
+     * overlay != OVER_NONE 时在最上层画对应面板（操作说明 / 设置）。
      */
     public void drawTitle(double t, int hover, int overlay, boolean fullscreen) {
         double vw = canvas.getWidth();
@@ -2617,7 +2735,7 @@ public final class Renderer {
         }
     }
 
-    /** 主界面上层覆盖面板：操作说明 / 设置 / 多人联机（开发中占位） */
+    /** 主界面上层覆盖面板：操作说明 / 设置 */
     private void drawMenuOverlay(int overlay, boolean fullscreen) {
         if (overlay == OVER_SETTINGS) {   // 「设置」面板已重做，走独立绘制
             drawSettingsOverlay();
@@ -2639,7 +2757,7 @@ public final class Renderer {
         String head = switch (overlay) {
             case OVER_HELP -> "操 作 说 明";
             case OVER_SETTINGS -> "设 置";
-            default -> "多人联机 · 敬请期待";
+            default -> "";
         };
         drawTextSoft(gc, Font.font("Microsoft YaHei", FontWeight.BOLD, 23),
                 g.px() + g.pw() / 2, g.py() + 58, head,
@@ -2692,18 +2810,8 @@ public final class Renderer {
                 gc.fillText("标题画面在任意窗口比例下等比完整显示；大厅与战斗画面随窗口自适应。", lx, g.py() + 274);
             }
             default -> {
-                String[] lines = {
-                        "「多人联机 · 1–4 人在线合作」正在开发中，敬请期待！",
-                        "当前为本地单机抢先体验：从准备大厅招募一位勇者出征，",
-                        "在自动开火的幸存者战斗中击败奶蛙 Boss 即可通关（血量归零即失败）。",
-                        "在线合作将在后续版本加入，感谢你的关注！",
-                };
-                double y = g.py() + 152;
-                for (String line : lines) {
-                    drawTextSoft(gc, Font.font("Microsoft YaHei", 15.5),
-                            g.px() + g.pw() / 2, y, line, faint, null);
-                    y += 40;
-                }
+                // 仅 操作说明 / 设置 会进入本面板；其余覆盖层直接返回
+                return;
             }
         }
 
