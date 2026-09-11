@@ -245,9 +245,8 @@ public final class Balance {
     public static final float OBSTACLE_SAFE_RADIUS = 200f;
     /** 障碍散布的最大半径（围绕玩家）。超出这圈在可视范围外没有意义 */
     public static final float OBSTACLE_SPREAD = 1350f;
-    /** 碰撞查询时障碍的最大半径，障碍碰撞查询范围按它放宽 */
-    /** 最大障碍包围半径。矩形/胶囊也要用它扩展空间哈希查询范围。 */
-    public static final float OBSTACLE_MAX_R = 128f;
+    /** 最大障碍包围半径。蛇形战区的长残墙/掩体可到约 176，查询必须覆盖其完整底座。 */
+    public static final float OBSTACLE_MAX_R = 220f;
 
     // ---- 敌人变体（D4）----
     /** 精英：体型 ×6、速度 ×1.1、伤害 ×1.5，带一层护盾 */

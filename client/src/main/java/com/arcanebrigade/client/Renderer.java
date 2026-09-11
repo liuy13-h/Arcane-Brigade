@@ -129,23 +129,25 @@ public final class Renderer {
         Image battleMap = w.arenaMap().ordinal() < Sprites.battleMaps.length
                 ? Sprites.battleMaps[w.arenaMap().ordinal()] : null;
         Color[] pal = arenaPalette(w.arenaMap(), w.stage());
-        if (battleMap != null) {
-            // 底图以原始像素大小放进世界坐标。相机裁切而非缩放整张图，
-            // 因而角色移动时能看到新的地形，而不是永远困在一张静态全景里。
+        // 先铺整条蛇形战区，再把原始 PNG 作为起始核心区叠入；离开核心后不会露出矩形底图边缘或空白。
+        drawExpeditionGround(w, vw, vh, pal);
+        // 原始 PNG 只承担起始核心的美术记忆；进入后续节点后不再把它的矩形边缘带进视野。
+        boolean showCoreArt = Math.abs(camX) < 900f && Math.abs(camY) < 560f;
+        if (battleMap != null && showCoreArt) {
+            // 原始地图仍是核心节点，但以略微融合的方式接到程序化延展地表上。
             double left = camX - vw / 2;
             double top = camY - vh / 2;
             double mapX = -battleMap.getWidth() / 2 - left;
             double mapY = -battleMap.getHeight() / 2 - top;
+            gc.setGlobalAlpha(0.94);
             gc.drawImage(battleMap, mapX, mapY, battleMap.getWidth(), battleMap.getHeight());
+            gc.setGlobalAlpha(1.0);
             gc.setFill(Color.color(0.02, 0.02, 0.05, 0.12));
             gc.fillRect(0, 0, vw, vh);
-        } else {
-            gc.setFill(pal[0]);
-            gc.fillRect(0, 0, vw, vh);
-            drawGround(vw, vh, pal);
-            drawBoundary(vw, vh, pal);
+        } else if (battleMap == null) {
             drawObstacles(w, alpha, vw, vh);
         }
+        if (battleMap != null) drawExtensionObstacles(w, vw, vh);
         drawArenaTerrain(w, vw, vh);
         if (DEBUG_COLLIDERS) drawColliderDebug(w, vw, vh);
         drawArenaTraps(w, vw, vh);
@@ -289,6 +291,87 @@ public final class Renderer {
         }
     }
 
+    /**
+     * 连续地图底板：背景是主题外缘，节点和连接段才是可走地面。圆角、断续描边和主题细节
+     * 用来把路线读成沙丘/岩桥/墓道，而不是一组相互拼接的矩形房间。
+     */
+    private void drawExpeditionGround(World w, double vw, double vh, Color[] pal) {
+        ArenaMap map = w.arenaMap();
+        double left = camX - vw / 2;
+        double top = camY - vh / 2;
+        // 荒漠的路线外是深沙而非黑墙；熔岩与墓室则保留压迫感更强的外缘。
+        gc.setFill(map == ArenaMap.DESERT_RUINS ? pal[2].deriveColor(0, 0.84, 0.86, 1) : pal[0]);
+        gc.fillRect(0, 0, vw, vh);
+
+        gc.setFill(pal[2].deriveColor(0, 1, 1, 0.90));
+        for (int i = 0; i < map.routeSectionCount(); i++) {
+            ArenaMap.RouteSection route = map.routeSection(i);
+            double x = route.x() - route.halfWidth() - left;
+            double y = route.y() - route.halfHeight() - top;
+            double width = route.halfWidth() * 2;
+            double height = route.halfHeight() * 2;
+            gc.fillRoundRect(x, y, width, height, Math.min(120, height), Math.min(120, height));
+        }
+
+        for (int i = 0; i < map.expeditionNodeCount(); i++) {
+            ArenaMap.ExpeditionNode node = map.expeditionNode(i);
+            double x = node.x() - node.halfWidth() - left;
+            double y = node.y() - node.halfHeight() - top;
+            double width = node.halfWidth() * 2;
+            double height = node.halfHeight() * 2;
+            gc.setFill(node.role() == ArenaMap.ExpeditionRole.BOSS ? pal[3].deriveColor(0, 1, 1, 0.88)
+                    : node.role() == ArenaMap.ExpeditionRole.REWARD ? pal[1].deriveColor(0, 1, 1.08, 0.96)
+                    : pal[1]);
+            gc.fillRoundRect(x, y, width, height, Math.min(180, height), Math.min(180, height));
+        }
+
+        int c0 = (int) Math.floor(left / TILE);
+        int c1 = (int) Math.floor((left + vw) / TILE);
+        int r0 = (int) Math.floor(top / TILE);
+        int r1 = (int) Math.floor((top + vh) / TILE);
+        for (int c = c0; c <= c1; c++) {
+            for (int r = r0; r <= r1; r++) {
+                double wx = (c + 0.5) * TILE;
+                double wy = (r + 0.5) * TILE;
+                if (!map.isWalkable((float) wx, (float) wy, 0f)) continue;
+                drawExpeditionDecor(map, c, r, left, top, pal);
+            }
+        }
+    }
+
+    /** 地图主题决定延展区的细节语言：沙丘、熔岩裂痕、墓室石砖不会互相换皮。 */
+    private void drawExpeditionDecor(ArenaMap map, int c, int r, double left, double top, Color[] pal) {
+        long h = hash2(c, r);
+        double bx = c * TILE - left;
+        double by = r * TILE - top;
+        int roll = (int) ((h >>> 3) % 100);
+        switch (map) {
+            case DESERT_RUINS -> drawTileDecor(c, r, left, top, pal);
+            case LAVA_DUNGEON -> {
+                if (roll < 36) {
+                    double px = bx + 10 + ((h >>> 9) % 42);
+                    double py = by + 12 + ((h >>> 15) % 38);
+                    gc.setStroke(pal[7].deriveColor(0, 1, 1.25, 0.72));
+                    gc.setLineWidth(2.2);
+                    gc.strokeLine(px, py, px + 24, py + 8);
+                    gc.strokeLine(px + 13, py + 4, px + 18, py - 14);
+                } else if (roll < 56) {
+                    gc.setFill(pal[6].deriveColor(0, 1, 1, 0.65));
+                    gc.fillOval(bx + 12 + ((h >>> 8) % 30), by + 16 + ((h >>> 14) % 24), 14, 8);
+                }
+            }
+            case STONE_CRYPT -> {
+                gc.setStroke(pal[3].deriveColor(0, 1, 1, 0.52));
+                gc.setLineWidth(1.2);
+                gc.strokeRect(bx + 2, by + 2, TILE - 4, TILE - 4);
+                if (roll < 18) {
+                    gc.setFill(pal[6].deriveColor(0, 1, 1, 0.52));
+                    gc.fillOval(bx + 12 + ((h >>> 9) % 34), by + 15 + ((h >>> 15) % 30), 10, 7);
+                }
+            }
+        }
+    }
+
     /** 每格至多一样装饰：沙丘暗斑 / 龟裂 / 碎石 / 枯灌，全部由哈希决定 */
     private void drawTileDecor(int c, int r, double left, double top, Color[] pal) {
         long h = hash2(c, r);
@@ -419,6 +502,46 @@ public final class Renderer {
                 drawWell(sx, sy, rr, pal);
             } else {
                 drawBoulder(sx, sy, rr, i, pal);
+            }
+        }
+    }
+
+    /**
+     * 核心 PNG 已经包含它自己的美术障碍；延展区没有贴图，所以只画 visual >= 20 的作者碰撞体。
+     * 绘制形状直接读 ArenaMap，保证玩家看到的接地轮廓与 World 的阻挡判定是一份数据。
+     */
+    private void drawExtensionObstacles(World w, double vw, double vh) {
+        double left = camX - vw / 2;
+        double top = camY - vh / 2;
+        Color[] pal = arenaPalette(w.arenaMap(), w.stage());
+        ArenaMap.Obstacle[] obstacles = w.arenaMap().obstacles();
+        for (int i = 0; i < obstacles.length; i++) {
+            ArenaMap.Obstacle obstacle = obstacles[i];
+            if (obstacle.visual() < 20) continue;
+            double sx = obstacle.x() - left;
+            double sy = obstacle.y() - top;
+            double halfW = obstacle.footprintHalfWidth();
+            double halfH = obstacle.shape() == ArenaMap.ObstacleShape.CIRCLE ? obstacle.radius() : obstacle.halfHeight();
+            if (sx + halfW < 0 || sx - halfW > vw || sy + halfH < 0 || sy - halfH > vh) continue;
+            switch (obstacle.shape()) {
+                case CIRCLE -> drawBoulder(sx, sy, obstacle.radius(), 10_000 + i, pal);
+                case BOX, CAPSULE -> {
+                    double width = obstacle.halfWidth() * 2;
+                    double height = obstacle.halfHeight() * 2;
+                    double x = sx - obstacle.halfWidth();
+                    double y = sy - obstacle.halfHeight();
+                    double arc = obstacle.shape() == ArenaMap.ObstacleShape.CAPSULE ? Math.min(width, height) : 12;
+                    gc.setFill(Color.color(0.03, 0.03, 0.05, 0.32));
+                    gc.fillRoundRect(x + 8, y + 10, width, height, arc, arc);
+                    gc.setFill(pal[8]);
+                    gc.fillRoundRect(x, y, width, height, arc, arc);
+                    gc.setStroke(pal[10]);
+                    gc.setLineWidth(3);
+                    gc.strokeRoundRect(x + 2, y + 2, width - 4, height - 4, arc, arc);
+                    gc.setStroke(pal[9].deriveColor(0, 1, 1, 0.68));
+                    gc.setLineWidth(2);
+                    gc.strokeLine(x + 8, y + 8, x + width - 10, y + 8);
+                }
             }
         }
     }
@@ -866,6 +989,9 @@ public final class Renderer {
                 gc.fillText(terrain.label() + String.format("  移速 x%.2f", terrain.movementMultiplier()),
                         16, lo != null && lo.stats.loneWolfActive ? 64 : 46);
             }
+            ArenaMap.ExpeditionNode node = w.currentExpeditionNode();
+            gc.setFill(Color.rgb(232, 220, 180));
+            gc.fillText("推进：" + (node == null ? "连接段" : node.label()), vw - 190, 28);
         }
 
         if (lo == null) {

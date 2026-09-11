@@ -148,6 +148,9 @@ public final class World {
     private final Random rng;
     /** 本局锁定的单屏关卡；所有碰撞与陷阱由这一份关卡数据驱动。 */
     private final ArenaMap arenaMap;
+    /** 刷怪选点缓存：只在生成时写入，避免为路线选点产生临时对象。 */
+    private float routeSpawnX;
+    private float routeSpawnY;
     private final SpatialHash enemyHash = new SpatialHash(64f);
     /** 障碍物空间哈希。障碍是静态的，只在场景切换时整体重建，所以每帧只查询不重建 */
     private final SpatialHash obstacleHash = new SpatialHash(64f);
@@ -580,13 +583,13 @@ public final class World {
         if (w < 0) {
             return;
         }
-        float ang = rng.nextFloat() * (float) (Math.PI * 2);
         float dist = Balance.SPAWN_RING_IN
                 + rng.nextFloat() * (Balance.SPAWN_RING_OUT - Balance.SPAWN_RING_IN);
-        float sx = x[w] + (float) Math.cos(ang) * dist;
-        float sy = y[w] + (float) Math.sin(ang) * dist;
+        if (!pickRouteSpawn(x[w], y[w], dist, Balance.ENEMY_RADIUS)) {
+            return;
+        }
 
-        int id = spawnEnemy(sx, sy);
+        int id = spawnEnemy(routeSpawnX, routeSpawnY);
         if (id < 0) {
             return;
         }
@@ -600,13 +603,13 @@ public final class World {
         if (w < 0) {
             return;
         }
-        float ang = rng.nextFloat() * (float) (Math.PI * 2);
         float dist = Balance.SPAWN_RING_IN
                 + rng.nextFloat() * (Balance.SPAWN_RING_OUT - Balance.SPAWN_RING_IN);
-        float sx = clampX(x[w] + (float) Math.cos(ang) * dist);
-        float sy = clampY(y[w] + (float) Math.sin(ang) * dist);
+        if (!pickRouteSpawn(x[w], y[w], dist, Balance.ENEMY_RADIUS)) {
+            return;
+        }
         // 变体数值（精英×6 / 小偷 / 远程）与时间成长都在 spawnEnemy 里定好
-        spawnEnemy(sx, sy, rng.nextInt(3), variant);
+        spawnEnemy(routeSpawnX, routeSpawnY, rng.nextInt(3), variant);
     }
 
     /**
@@ -622,10 +625,10 @@ public final class World {
         float tx = (w >= 0) ? x[w] : 0f;
         float ty = (w >= 0) ? y[w] : 0f;
         int t = Math.max(0, Math.min(tier, Balance.BOSS_HP_TIERS.length - 1));
-        float ang = rng.nextFloat() * (float) (Math.PI * 2);
-        float sx = clampX(tx + (float) Math.cos(ang) * Balance.BOSS_SPAWN_DIST);
-        float sy = clampY(ty + (float) Math.sin(ang) * Balance.BOSS_SPAWN_DIST);
-        int id = spawnEnemy(sx, sy, rng.nextInt(3), V_BOSS);
+        if (!pickRouteSpawn(tx, ty, Balance.BOSS_SPAWN_DIST, Balance.BOSS_RADIUS)) {
+            return;
+        }
+        int id = spawnEnemy(routeSpawnX, routeSpawnY, rng.nextInt(3), V_BOSS);
         if (id < 0) {
             return;
         }
@@ -640,6 +643,33 @@ public final class World {
         bossTier = t;
         bossWarningTimer = Balance.WARNING_TELEGRAPH + 1.5f;
         bossSummonTimer = Balance.BOSS_SUMMON_INTERVAL;
+    }
+
+    /**
+     * 在蛇形路线内挑选屏幕外生成点。优先使用玩家前后相连的可走段；若当前段没有合适
+     * 的远端落点，退回当前战斗节点的边缘，而不是把怪刷到沙海 / 熔岩 / 坍塌墙体里。
+     */
+    private boolean pickRouteSpawn(float originX, float originY, float desiredDistance, float radius) {
+        float baseAngle = rng.nextFloat() * (float) (Math.PI * 2);
+        for (int attempt = 0; attempt < 24; attempt++) {
+            float angle = baseAngle + attempt * ((float) (Math.PI * 2) / 24f);
+            float distance = desiredDistance * (0.82f + (attempt % 4) * 0.05f);
+            float sx = originX + (float) Math.cos(angle) * distance;
+            float sy = originY + (float) Math.sin(angle) * distance;
+            if (arenaMap.isWalkable(sx, sy, radius)) {
+                routeSpawnX = sx;
+                routeSpawnY = sy;
+                return true;
+            }
+        }
+        ArenaMap.ExpeditionNode node = arenaMap.nodeAt(originX, originY);
+        if (node == null) {
+            return false;
+        }
+        float sign = rng.nextBoolean() ? 1f : -1f;
+        routeSpawnX = node.x() + sign * Math.max(0f, node.halfWidth() - radius - 28f);
+        routeSpawnY = node.y() + (rng.nextFloat() - 0.5f) * Math.max(0f, node.halfHeight() - radius) * 0.8f;
+        return arenaMap.isWalkable(routeSpawnX, routeSpawnY, radius);
     }
 
     // ------------------------------------------------------------------
@@ -1637,8 +1667,17 @@ public final class World {
         return circleOverlaps(cx, cy, radius, ax + sx * t, ay + sy * t, capsuleRadius);
     }
 
-    /** 把实体钳制在可玩区内（城墙内侧边缘，玩家 / 敌人共用） */
+    /**
+     * 把实体留在连续战区。先按节点/连接段的自然边缘回退，再保留一个很远的安全兜底，
+     * 不再把所有移动压回固定矩形房间。
+     */
     private void clampToWorld(int id) {
+        if (!arenaMap.isWalkable(x[id], y[id], r[id])) {
+            if (arenaMap.isWalkable(px[id], py[id], r[id])) {
+                x[id] = px[id];
+                y[id] = py[id];
+            }
+        }
         float hx = arenaMap.halfWidth() - r[id];
         float hy = arenaMap.halfHeight() - r[id];
         if (x[id] < -hx) {
@@ -1661,7 +1700,7 @@ public final class World {
         return HeroClass.baseIframe(ck) + add;
     }
 
-    /** 可滚动地图的生成点钳制，保证单位与事件始终落在作者设计的场地内。 */
+    /** 连续战区的世界安全兜底；正常生成由 pickRouteSpawn 保证落在可走路线内。 */
     private float clampX(float v) {
         return Math.max(-arenaMap.halfWidth(), Math.min(arenaMap.halfWidth(), v));
     }
@@ -2760,6 +2799,12 @@ public final class World {
     /** 本局选中的关卡；客户端只读它来画同一套障碍物与机关预警。 */
     public ArenaMap arenaMap() {
         return arenaMap;
+    }
+
+    /** HUD 用的当前推进节点；位于连接段时明确提示玩家仍在前进而非回到固定房间。 */
+    public ArenaMap.ExpeditionNode currentExpeditionNode() {
+        int hero = firstWizard();
+        return hero < 0 ? null : arenaMap.nodeAt(x[hero], y[hero]);
     }
 
     public int trapCount() {

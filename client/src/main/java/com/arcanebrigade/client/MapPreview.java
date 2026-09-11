@@ -70,6 +70,20 @@ public final class MapPreview extends Application {
             w.step(Balance.FIXED_STEP, in);
         } while (w.stage() < targetStage && guard++ < 40_000);
 
+        // 允许开发者预览蛇形网络中的任意节点，而不必手动跑图。
+        String previewX = System.getProperty("ab.previewX");
+        String previewY = System.getProperty("ab.previewY");
+        if (previewX != null && previewY != null) {
+            try {
+                w.x[wid] = Float.parseFloat(previewX);
+                w.y[wid] = Float.parseFloat(previewY);
+                w.px[wid] = w.x[wid];
+                w.py[wid] = w.y[wid];
+            } catch (NumberFormatException ignored) {
+                // 非法参数仍保留核心区预览，不影响正常开发流程。
+            }
+        }
+
         Canvas canvas = new Canvas(W, H);
         Renderer r = new Renderer(canvas);
         r.draw(w, 0f);

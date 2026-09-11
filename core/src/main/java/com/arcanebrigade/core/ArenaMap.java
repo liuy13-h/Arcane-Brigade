@@ -9,18 +9,25 @@ public enum ArenaMap {
             new Obstacle[] {
                     // 只保留真正位于场内的两块掩体；外墙、散石与植被均由底图表达，不再制造隐形阻挡。
                     capsule(-190, 25, 62, 38, 0),
-                    box(205, -100, 45, 32, 1)
+                    box(205, -100, 45, 32, 1),
+                    // 延展节点的掩体：只落在战斗台地，保证沙漠仍以大范围拉扯为主。
+                    worldCapsule(1_250, 690, 115, 48, 20), worldCircle(1_770, 670, 58, 20),
+                    worldBox(2_250, 900, 50, 140, 21), worldCapsule(3_580, 970, 170, 45, 22)
             },
             new Trap[] { t(-210, 40, 94, 0.9f, 1.2f, 4.0f, 12f, 0), t(260, -5, 94, 0.9f, 1.2f, 4.0f, 12f, 0) },
             new Terrain[] {
                     terrain("流沙", -210, 40, 94, 0.68f, 0), terrain("流沙", 260, -5, 94, 0.68f, 0)
-            }),
+            },
+            desertNodes(), desertRoutes()),
 
     LAVA_DUNGEON("熔岩地牢", "动态危险", "裂缝喷火会周期性封锁走位",
             new Obstacle[] {
                     // 对齐 lava-dungeon.png：两座上方祭坛、两堆中央乱石和下方两段断墙。
                     o(-286, -92, 72, 3), o(282, -92, 72, 3), o(-143, -16, 54, 4),
-                    o(141, -16, 54, 4), o(-285, 116, 64, 5), o(278, 116, 64, 5)
+                    o(141, -16, 54, 4), o(-285, 116, 64, 5), o(278, 116, 64, 5),
+                    // 高压节点用岩柱与断桥残片制造掩体，不把连接桥塞成单线作战。
+                    worldCircle(1_260, -590, 62, 20), worldBox(1_650, -710, 45, 105, 21),
+                    worldCapsule(2_070, -1_180, 130, 45, 22), worldCircle(3_260, -720, 70, 20)
             },
             new Trap[] {
                     // 四处喷口分别落在背景中可见的熔岩喷焰上，不能留在中央石地。
@@ -32,7 +39,8 @@ public enum ArenaMap {
             new Terrain[] {
                     terrain("灼热裂隙", -399, 118, 58, 0.78f, 1), terrain("灼热裂隙", -211, 176, 58, 0.78f, 1),
                     terrain("灼热裂隙", 213, 176, 58, 0.78f, 1), terrain("灼热裂隙", 416, 49, 58, 0.78f, 1)
-            }),
+            },
+            lavaNodes(), lavaRoutes()),
 
     STONE_CRYPT("古老石质遗迹", "机关控制", "地刺与箭矢机关会迫使你改变路线",
             new Obstacle[] {
@@ -40,7 +48,10 @@ public enum ArenaMap {
                     o(-210, -150, 48, 6), o(205, -140, 52, 6), capsule(-175, 80, 75, 45, 7),
                     box(-325, 114, 26, 34, 8),
                     // 右下两口石棺共用同一块接地石座；合为一体，避免留下小于角色直径的假通道。
-                    box(195, 110, 58, 34, 8)
+                    box(195, 110, 58, 34, 8),
+                    // 大厅和墓坑的柱/石棺落在节点侧面，留下可绕柱与躲箭的中央回旋区。
+                    worldCircle(1_270, -360, 62, 20), worldCircle(1_720, -240, 62, 20),
+                    worldBox(2_180, -900, 56, 125, 21), worldCapsule(3_590, 640, 180, 50, 22)
             },
             new Trap[] {
                     // 两块地刺板与背景完全重合；第三个机关是两侧箭槽之间的横向箭道。
@@ -51,9 +62,27 @@ public enum ArenaMap {
             new Terrain[] {
                     // 对齐左右两块地面符文：站上去可快速穿过箭道或绕过地刺。
                     terrain("疾行符文", -395, 59, 56, 1.22f, 2), terrain("疾行符文", 413, 57, 56, 1.22f, 2)
-            });
+            },
+            cryptNodes(), cryptRoutes());
 
     public enum ObstacleShape { CIRCLE, BOX, CAPSULE }
+    /** 连续战区中的功能节点；CORE 复用原始底图，其余节点由主题地表自然延展。 */
+    public enum ExpeditionRole { CORE, TRANSITION, COMBAT, ELITE, REWARD, EVENT, BOSS }
+
+    /** 蛇形推进网络中的可战斗空间。半尺寸用于路线判定与客户端绘制，非屏幕边界。 */
+    public record ExpeditionNode(String label, ExpeditionRole role, float x, float y,
+                                 float halfWidth, float halfHeight) {
+        public boolean contains(float px, float py, float radius) {
+            return Math.abs(px - x) <= halfWidth - radius && Math.abs(py - y) <= halfHeight - radius;
+        }
+    }
+
+    /** 两个节点之间的自然连接段。它只限制可走地形，不会绘制成方形房间墙。 */
+    public record RouteSection(float x, float y, float halfWidth, float halfHeight) {
+        public boolean contains(float px, float py, float radius) {
+            return Math.abs(px - x) <= halfWidth - radius && Math.abs(py - y) <= halfHeight - radius;
+        }
+    }
 
     /**
      * 静态阻挡物的底部轮廓。halfWidth / halfHeight 仅供 BOX 与 CAPSULE 使用；
@@ -133,15 +162,19 @@ public enum ArenaMap {
     private final Obstacle[] obstacles;
     private final Trap[] traps;
     private final Terrain[] terrain;
+    private final ExpeditionNode[] expeditionNodes;
+    private final RouteSection[] routeSections;
 
     ArenaMap(String displayName, String playStyle, String hazardHint, Obstacle[] obstacles, Trap[] traps,
-             Terrain[] terrain) {
+             Terrain[] terrain, ExpeditionNode[] expeditionNodes, RouteSection[] routeSections) {
         this.displayName = displayName;
         this.playStyle = playStyle;
         this.hazardHint = hazardHint;
         this.obstacles = obstacles;
         this.traps = traps;
         this.terrain = terrain;
+        this.expeditionNodes = expeditionNodes;
+        this.routeSections = routeSections;
     }
 
     public String displayName() { return displayName; }
@@ -150,6 +183,28 @@ public enum ArenaMap {
     public Obstacle[] obstacles() { return obstacles.clone(); }
     public Trap[] traps() { return traps.clone(); }
     public Terrain[] terrain() { return terrain.clone(); }
+    public ExpeditionNode[] expeditionNodes() { return expeditionNodes.clone(); }
+    public RouteSection[] routeSections() { return routeSections.clone(); }
+    public int expeditionNodeCount() { return expeditionNodes.length; }
+    public ExpeditionNode expeditionNode(int index) { return expeditionNodes[index]; }
+    public int routeSectionCount() { return routeSections.length; }
+    public RouteSection routeSection(int index) { return routeSections[index]; }
+    /** 路线以“节点 + 连接段”的并集定义；自然地形而非一张矩形地图决定可走区域。 */
+    public boolean isWalkable(float x, float y, float radius) {
+        for (ExpeditionNode node : expeditionNodes) {
+            if (node.contains(x, y, radius)) return true;
+        }
+        for (RouteSection section : routeSections) {
+            if (section.contains(x, y, radius)) return true;
+        }
+        return false;
+    }
+    public ExpeditionNode nodeAt(float x, float y) {
+        for (ExpeditionNode node : expeditionNodes) {
+            if (node.contains(x, y, 0f)) return node;
+        }
+        return null;
+    }
     /** 返回脚下唯一的地形效果；地图设计刻意不让多个速度效果相叠。 */
     public Terrain terrainAt(float x, float y) {
         for (Terrain area : terrain) {
@@ -169,9 +224,90 @@ public enum ArenaMap {
      */
     private static final float ASSET_WORLD_SCALE = 1672f / 1280f;
 
-    /** 原图内侧墙体所包围的可玩边界，保留边缘石墙作为不可进入的视觉缓冲。 */
-    public float halfWidth() { return 784f; }
-    public float halfHeight() { return 431f; }
+    /** 仅作安全兜底的世界范围；实际移动由 isWalkable 的蛇形路线限制。 */
+    public float halfWidth() { return 4_500f; }
+    public float halfHeight() { return 2_600f; }
+
+    // 每套数据都从原始地图核心区起步，但转向节奏与节点功能刻意不同，避免三张图只是换皮。
+    private static ExpeditionNode[] desertNodes() {
+        return new ExpeditionNode[] {
+                n("遗迹前庭", ExpeditionRole.CORE, 0, 0, 760, 410),
+                n("风蚀断墙", ExpeditionRole.TRANSITION, 1_050, 0, 340, 190),
+                n("沙丘遭遇区", ExpeditionRole.COMBAT, 1_480, 520, 550, 410),
+                n("流沙宝藏", ExpeditionRole.REWARD, 780, 1_050, 360, 270),
+                n("坍塌神殿", ExpeditionRole.ELITE, 2_350, 920, 580, 430),
+                n("风暴缓冲台", ExpeditionRole.EVENT, 2_880, 260, 360, 280),
+                n("日蚀台地", ExpeditionRole.BOSS, 3_650, 680, 700, 540)
+        };
+    }
+
+    private static RouteSection[] desertRoutes() {
+        return new RouteSection[] {
+                route(850, 0, 260, 135), route(1_250, 250, 170, 250),
+                route(1_930, 720, 280, 180), route(2_580, 600, 190, 280), route(3_260, 470, 240, 170)
+        };
+    }
+
+    private static ExpeditionNode[] lavaNodes() {
+        return new ExpeditionNode[] {
+                n("熔岩门厅", ExpeditionRole.CORE, 0, 0, 760, 410),
+                n("断桥前哨", ExpeditionRole.TRANSITION, 960, -120, 320, 170),
+                n("火焰祭坛", ExpeditionRole.COMBAT, 1_420, -650, 500, 360),
+                n("冷却岩台", ExpeditionRole.REWARD, 710, -1_160, 350, 250),
+                n("喷火裂谷", ExpeditionRole.ELITE, 2_120, -1_150, 550, 400),
+                n("灰烬避难所", ExpeditionRole.EVENT, 2_700, -510, 350, 260),
+                n("熔炉之心", ExpeditionRole.BOSS, 3_520, -820, 720, 540)
+        };
+    }
+
+    private static RouteSection[] lavaRoutes() {
+        return new RouteSection[] {
+                route(820, -100, 240, 120), route(1_160, -370, 150, 260),
+                route(1_040, -900, 330, 145), route(1_650, -900, 260, 150),
+                route(2_420, -820, 180, 285), route(3_080, -660, 230, 160)
+        };
+    }
+
+    private static ExpeditionNode[] cryptNodes() {
+        return new ExpeditionNode[] {
+                n("初始墓室", ExpeditionRole.CORE, 0, 0, 760, 410),
+                n("墓道转角", ExpeditionRole.TRANSITION, 940, 220, 320, 170),
+                n("石柱大厅", ExpeditionRole.COMBAT, 1_500, -300, 560, 400),
+                n("侧向密室", ExpeditionRole.REWARD, 1_020, -1_030, 350, 260),
+                n("塌陷墓坑", ExpeditionRole.ELITE, 2_250, -820, 590, 430),
+                n("封印前厅", ExpeditionRole.EVENT, 2_820, -130, 360, 280),
+                n("王陵主殿", ExpeditionRole.BOSS, 3_650, 320, 720, 560)
+        };
+    }
+
+    private static RouteSection[] cryptRoutes() {
+        return new RouteSection[] {
+                route(820, 160, 230, 120), route(1_180, -10, 150, 255),
+                route(1_200, -670, 340, 150), route(1_830, -560, 250, 160),
+                route(2_540, -470, 185, 290), route(3_210, 100, 250, 175)
+        };
+    }
+
+    private static ExpeditionNode n(String label, ExpeditionRole role, float x, float y, float halfWidth, float halfHeight) {
+        return new ExpeditionNode(label, role, x, y, halfWidth, halfHeight);
+    }
+
+    private static RouteSection route(float x, float y, float halfWidth, float halfHeight) {
+        return new RouteSection(x, y, halfWidth, halfHeight);
+    }
+
+    /** 延展节点已经使用世界坐标，不能复用旧底图的 scale 坐标转换。visual >= 20 表示无底图掩体。 */
+    private static Obstacle worldCircle(float x, float y, float radius, int visual) {
+        return new Obstacle(x, y, radius, 0f, 0f, ObstacleShape.CIRCLE, visual);
+    }
+
+    private static Obstacle worldBox(float x, float y, float halfWidth, float halfHeight, int visual) {
+        return new Obstacle(x, y, 0f, halfWidth, halfHeight, ObstacleShape.BOX, visual);
+    }
+
+    private static Obstacle worldCapsule(float x, float y, float halfWidth, float halfHeight, int visual) {
+        return new Obstacle(x, y, 0f, halfWidth, halfHeight, ObstacleShape.CAPSULE, visual);
+    }
 
     private static Obstacle o(float x, float y, float radius, int visual) {
         return new Obstacle(scale(x), scale(y), scale(radius), 0f, 0f, ObstacleShape.CIRCLE, visual);

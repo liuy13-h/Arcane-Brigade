@@ -13,6 +13,31 @@ public final class ArenaMapTest {
                     map + " must expose its authored hazards");
             check(map.terrain().length > 0, map + " must expose interactive terrain");
             check(world.arenaMap() == map, "selected map must survive world construction");
+            check(map.expeditionNodeCount() >= 7 && map.routeSectionCount() >= 5,
+                    map + " must expose a multi-node snake expedition instead of one fixed room");
+            check(map.expeditionNode(0).role() == ArenaMap.ExpeditionRole.CORE
+                            && map.isWalkable(0f, 0f, Balance.WIZARD_RADIUS),
+                    map + " original map must remain a walkable expedition core");
+            boolean hasBoss = false;
+            for (int i = 0; i < map.expeditionNodeCount(); i++) {
+                ArenaMap.ExpeditionNode node = map.expeditionNode(i);
+                hasBoss |= node.role() == ArenaMap.ExpeditionRole.BOSS;
+                check(map.isWalkable(node.x(), node.y(), Balance.WIZARD_RADIUS),
+                        map + " every authored expedition node must be physically reachable terrain");
+            }
+            check(hasBoss && !map.isWalkable(map.halfWidth() - 50f, map.halfHeight() - 50f, Balance.WIZARD_RADIUS),
+                    map + " must use a route mask rather than a larger rectangular room");
+
+            World spawnCheck = new World(73L, map);
+            spawnCheck.spawnWizard(0f, 0f, HeroClass.WIZARD);
+            spawnCheck.step(Balance.FIXED_STEP, new InputCommand());
+            for (int n = 0; n < 6; n++) spawnCheck.spawnEnemyVariant(World.V_NORMAL);
+            for (int id = 0; id < spawnCheck.highWater(); id++) {
+                if (spawnCheck.alive[id] && spawnCheck.kind[id] == World.KIND_ENEMY) {
+                    check(map.isWalkable(spawnCheck.x[id], spawnCheck.y[id], spawnCheck.r[id]),
+                            map + " enemies must spawn on reachable snake-route terrain");
+                }
+            }
 
             ArenaMap.Terrain firstTerrain = map.terrain()[0];
             check(map.terrainAt(firstTerrain.x(), firstTerrain.y()) == firstTerrain
