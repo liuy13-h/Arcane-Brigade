@@ -63,6 +63,8 @@ public final class GameApp extends Application {
     private boolean lobbyPosInit;
     /** 大厅里已选职业：0=未选，否则是 LobbyClass.CLASSES 之一（含召唤师 4） */
     private int lobbyChoice = 0;
+    /** 大厅化身朝向：true=朝左（向左移动时），false=朝右。静止时沿用上一帧方向 */
+    private boolean lobbyFacingLeft = false;
     private double lobbyAnimT;
     /** 右侧细节立绘当前展示的职业：0=不展示。跟随「正站在谁面前」变化 */
     private int cardClass;
@@ -83,6 +85,24 @@ public final class GameApp extends Application {
 
     /** 鼠标左键是否按住（战斗阶段用于宠物指挥 + 手动开火） */
     private boolean mouseDown;
+    /** 「角色背景」滚动框偏移（px，上为正；换人时归零） */
+    private double loreScroll;
+    /** 「查看详情」弹层当前职业 id；0 = 未打开 */
+    private int detailClass;
+    /** 弹层正文滚动偏移（px） */
+    private double detailScroll;
+    /** 弹层淡入进度 0..1 */
+    private double detailFade;
+    /** 冒烟调试：截图输出路径（-Dab.snapshot=path，画完当帧存一次） */
+    private String snapshotPath;
+    private boolean snapshotSaved;
+
+    /** ESC 手动暂停（战斗阶段） */
+    private boolean manualPause;
+    /** 奶蛙 BGM 是否正在播放（用于检测奶蛙出场/消失的瞬间起停音乐） */
+    private boolean bossMusicOn;
+    /** 上一帧的奶蛙施法状态，用于捕捉「大笑起手」瞬间播音效 */
+    private int lastMilkyCast;
 
     @Override
     public void start(Stage stage) {
@@ -127,6 +147,13 @@ public final class GameApp extends Application {
             }
             if (inLobby) {
                 // 大厅阶段：WASD 靠 pressed 轮询移动；空格/E 先应答面前勇者的招募，其次光门出发
+                // 「查看详情」弹层打开时：ESC 关闭，其余按键不进入 pressed（国王/卡片全部冻结）
+                if (detailClass != 0) {
+                    if (e.getCode() == KeyCode.ESCAPE) {
+                        closeDetail();
+                    }
+                    return;
+                }
                 pressed.add(e.getCode());
                 if (e.getCode() == KeyCode.E || e.getCode() == KeyCode.SPACE) {
                     lobbyAction();
@@ -152,6 +179,31 @@ public final class GameApp extends Application {
         scene.setOnMouseMoved(e -> {
             mouseX = e.getX();
             mouseY = e.getY();
+        });
+        // 滚轮：详情弹层打开时滚档案正文；选人卡展开且悬停在卡面上时滚「角色背景」框
+        scene.setOnScroll(e -> {
+            double vw = renderer != null ? renderer.getCanvasWidth() : canvas.getWidth();
+            double vh = renderer != null ? renderer.getCanvasHeight() : canvas.getHeight();
+            double dy = e.getDeltaY();
+            if (dy == 0 || inTitle) {
+                return;
+            }
+            if (detailClass != 0) {
+                // 向上滚看上文（偏移减小）、向下滚看下文
+                detailScroll -= dy;
+                detailScroll = Math.max(0, detailScroll);
+                return;
+            }
+            if (inLobby && cardClass != 0 && cardReveal > 0.6 && mouseX >= 0) {
+                double cardX = vw - Renderer.classCardW(vw) - 12;
+                double panelTop = vh - 18 - Math.min(306, vh * 0.42) - 6;
+                boolean overCard = mouseX >= cardX - 8 && mouseX <= cardX + Renderer.classCardW(vw)
+                        && mouseY >= panelTop - 8 && mouseY <= vh - 8;
+                if (overCard) {
+                    loreScroll -= dy;
+                    loreScroll = Math.max(0, loreScroll);
+                }
+            }
         });
         // 音量滑块：按下即定位、按住拖动连续调节；同时记录左键按下状态供战斗阶段使用
         scene.setOnMousePressed(e -> {
@@ -231,6 +283,31 @@ public final class GameApp extends Application {
                         }
                     }
                 }
+                // 「查看详情」弹层打开：点 ✕ 或面板外 = 关闭；点在面板内不响应
+                if (detailClass != 0) {
+                    double[] p = Renderer.detailPanelRect(vw, vh);
+                    double[] c = Renderer.detailCloseRect(vw, vh);
+                    boolean inClose = e.getX() >= c[0] && e.getX() <= c[0] + c[2]
+                            && e.getY() >= c[1] && e.getY() <= c[1] + c[3];
+                    boolean inPanel = e.getX() >= p[0] && e.getX() <= p[0] + p[2]
+                            && e.getY() >= p[1] && e.getY() <= p[1] + p[3];
+                    if (inClose || !inPanel) {
+                        closeDetail();
+                    }
+                    return;
+                }
+                // 选人卡展示中：点「查看详情」打开全屏档案弹层
+                if (cardClass != 0 && cardReveal > 0.9) {
+                    double[] b = Renderer.classDetailButton(vw, vh, cardReveal);
+                    if (e.getX() >= b[0] && e.getX() <= b[0] + b[2]
+                            && e.getY() >= b[1] && e.getY() <= b[1] + b[3]) {
+                        detailClass = cardClass;
+                        detailFade = 0;
+                        detailScroll = 0;
+                        return;
+                    }
+                }
+                // 其余情况鼠标只用于指引的收起/展开，角色交互仍走空格/E
                 Renderer.GuideGeom gg = Renderer.lobbyGuideGeom(vw, vh);
                 Renderer.Rect r = lobbyGuide ? gg.hide() : gg.open();
                 if (r.hit(e.getX(), e.getY())) {
@@ -265,15 +342,33 @@ public final class GameApp extends Application {
                     lx = g0.altarC()[i][0];
                     ly = g0.altarC()[i][1];
                     lobbyPosInit = true;
+                    // 冒烟截图发生在第一帧，滑入动画尚在起点（卡片还在屏外）。
+                    // 直接把卡片预置为展开到位，保证截图拍到完整版面。
+                    cardClass = smokeStandBy;
+                    cardReveal = 1;
                     break;
                 }
             }
         }
 
+        // 冒烟用：ab.lobbyDetail=N 直接打开某位勇者的「查看详情」弹层（覆盖弹层绘制路径）
+        String lobbyDetail = System.getProperty("ab.lobbyDetail");
+        if (lobbyDetail != null && !lobbyDetail.isBlank()) {
+            detailClass = Integer.parseInt(lobbyDetail);
+            detailFade = 1;
+        }
+        // 冒烟用：ab.snapshot=路径 把大厅当帧画面存成 PNG（版面回访 / 文案校对用）
+        String lobbyShot = System.getProperty("ab.snapshot");
+        if (lobbyShot != null && !lobbyShot.isBlank()) {
+            snapshotPath = lobbyShot;
+        }
+
         // 战斗冒烟：跳过大厅，自动选职业直接跑真实模拟+渲染路径做稳定性验证。
         // -Dab.class=N 可指定职业（默认巫师），用来覆盖各职业专属的渲染分支；
         // -Dab.boss=N 直接刷第 N 只 Boss，用来覆盖 Boss 立绘 / 阶段技能渲染路径。
-        if (smokeFrames > 0) {
+        // -Dab.milky=1 可脱离冒烟使用：直接进入战斗并刷出奶蛙（不自动退出，可正常游玩）。
+        boolean directFight = smokeFrames > 0 || System.getProperty("ab.milky") != null;
+        if (directFight) {
             int pick = HeroClass.WIZARD;
             String cls = System.getProperty("ab.class");
             if (cls != null && !cls.isBlank()) {
@@ -283,12 +378,39 @@ public final class GameApp extends Application {
                 }
             }
             beginGame(pick);
+            World fightWorld = battle.world();
+            if (System.getProperty("ab.milky") != null) {
+                fightWorld.forceSpawnMilky();   // 覆盖奶蛙动画 / 技能 / 血条路径
+                // -Dab.milkyHp=N 临时把奶蛙血量调低，方便快速验证技能二（不写回配置）
+                String mhp = System.getProperty("ab.milkyHp");
+                if (mhp != null && !mhp.isBlank()) {
+                    int id = fightWorld.milkyId();
+                    float v = Float.parseFloat(mhp);
+                    if (id >= 0 && v > 0f) {
+                        fightWorld.maxHp[id] = v;
+                        fightWorld.hp[id] = v;
+                    }
+                }
+            }
             String bt = System.getProperty("ab.boss");
             if (bt != null && !bt.isBlank()) {
                 int tier = Integer.parseInt(bt);
                 if (tier >= 0 && tier < 4) {
                     battle.spawnBossForSmoke(tier);
                 }
+            }
+            // -Dab.level=N 直接把主控玩家等级拉到 N，用于覆盖骨蛇登场后的渲染路径
+            String lvl = System.getProperty("ab.level");
+            if (lvl != null && !lvl.isBlank()) {
+                int target = Integer.parseInt(lvl);
+                int wid = fightWorld.firstWizard();
+                com.arcanebrigade.core.Loadout lo = fightWorld.loadout(wid);
+                if (lo != null) {
+                    lo.level = target;
+                }
+                // 同时把血撑满：跑长时间冒烟时被骨蛇咬死会提前进结算，看不到骨蛇
+                fightWorld.maxHp[wid] = 99999f;
+                fightWorld.hp[wid] = 99999f;
             }
         }
 
@@ -340,10 +462,20 @@ public final class GameApp extends Application {
                     double vh = canvas.getHeight();
                     Renderer.LobbyGeom g = Renderer.geom(vw, vh);
                     stepLobby(dt, g);
+                    // 弹层淡入推进 + 滚动/弹层状态同步给渲染器（drawLobby 内部读取）
+                    if (detailClass != 0 && detailFade < 1) {
+                        detailFade = Math.min(1, detailFade + dt / 0.18);
+                    }
+                    renderer.setLobbyUi(loreScroll, detailClass, detailScroll, detailFade);
                     if (drawNow) {
                         renderer.setFps(fps[0]);
-                        renderer.drawLobby(g, lx, ly, lobbyChoice, lobbyAnimT, cardClass, cardReveal,
+                        renderer.drawLobby(g, lx, ly, lobbyChoice, lobbyFacingLeft, lobbyAnimT, cardClass, cardReveal,
                                 lobbyGuide, tasks, lobbyTaskCategory, lobbyTasksOpen, lobbyArenaMap, lobbyMapOpen);
+                        // 冒烟调试：截图（ab.snapshot）在画完当帧立即保存
+                        if (snapshotPath != null && !snapshotSaved) {
+                            snapshotSaved = true;
+                            renderer.saveSnapshot(snapshotPath);
+                        }
                         if (lobbySmokeFrames > 0 && ++lobbyRendered >= lobbySmokeFrames) {
                             System.out.printf("[lobby] 渲染 %d 帧完成（大厅），退出%n", lobbyRendered);
                             Platform.exit();
@@ -367,9 +499,35 @@ public final class GameApp extends Application {
                     return;
                 }
 
+                // 奶蛙 BGM：在场时循环播放，血量归零消失/重开一局时停止。
+                // 奶蛙优先级高于战斗槽——出场时战斗曲让位，倒下后自动恢复（见 GameAudio）。
+                boolean milkyNow = world.milkyAlive();
+                if (milkyNow != bossMusicOn) {
+                    bossMusicOn = milkyNow;
+                    if (milkyNow) {
+                        GameAudio.startBossBgm();
+                    } else {
+                        GameAudio.stopBossBgm();
+                    }
+                }
+                // 奶蛙技能二「捧腹大笑」：起手瞬间从头播放，施法结束立即停止
+                int milkyCastNow = world.milkyCast();
+                if (milkyCastNow == 2 && lastMilkyCast != 2) {
+                    GameAudio.playLaugh();
+                } else if (milkyCastNow != 2 && lastMilkyCast == 2) {
+                    GameAudio.stopLaugh();
+                }
+                lastMilkyCast = milkyCastNow;
+
+                // 战斗 BGM 跟着 Boss 走：Boss 在场放它专属的登场音乐，Boss 倒下换回普通战斗曲。
+                // setBattleMusic 内部只在曲目变化时才重起播放器，逐帧调用无额外开销；
+                // 奶蛙曲在播时它只记录不抢占（奶蛙优先）。
+                GameAudio.setBattleMusic(world.bossTier());
+
                 // 胜利：冻结模拟，罩层结算。模拟一旦停了就不再推进，直到按 R 重开
                 if (world.victory()) {
                     finishRun(world);
+                    GameAudio.stopBattleBgm();   // 通关：让位给结算画面，不再循环战斗曲
                     renderer.setFps(fps[0]);
                     renderer.draw(world, 0f);
                     renderer.drawVictory(world, canvas.getWidth(), canvas.getHeight());
@@ -382,8 +540,9 @@ public final class GameApp extends Application {
 
                 // 阵亡：同样冻结模拟，弹结算战报，点「继续」或按 R 回大厅。
                 // 之前玩家倒下后没有任何终局状态，游戏会一直空转却永远不结束。
-                if (world.defeat()) {
+                if (world.defeat() || world.abandoned()) {
                     finishRun(world);
+                    GameAudio.stopBattleBgm();   // 结算：冻结模拟时不再放战斗曲
                     renderer.setFps(fps[0]);
                     renderer.draw(world, 0f);
                     renderer.drawDefeatOverlay(world, canvas.getWidth(), canvas.getHeight());
@@ -433,10 +592,13 @@ public final class GameApp extends Application {
         inLobby = true;
         overlay = Renderer.OVER_NONE;
         lobbyPosInit = false;    // 首帧按出生点落位
+        lobbyFacingLeft = false; // 默认朝右
         cardClass = 0;
         cardReveal = 0;
+        closeDetail();           // 重进大厅清掉可能残留的档案弹层状态
         GameAudio.stopMenuBgm();        // 离开主界面
         GameAudio.startLobbyBgm();      // 大厅主音乐循环
+        GameAudio.stopBattleBgm();      // 从战斗退回大厅（阵亡结算 / 重开）时收掉战斗曲
         pressed.clear();
     }
 
@@ -459,7 +621,7 @@ public final class GameApp extends Application {
     }
 
     /**
-     * 主界面点击：无覆盖层时命中底部五个菜单按钮；覆盖层内「设置」走专用逻辑，
+     * 主界面点击：无覆盖层时命中底部四个菜单按钮；覆盖层内「设置」走专用逻辑，
      * 其余覆盖层只认「返回」钮。
      */
     private void handleTitleClick(double mx, double my) {
@@ -468,10 +630,9 @@ public final class GameApp extends Application {
         if (overlay == Renderer.OVER_NONE) {
             switch (Renderer.menuHit(mx, my, vw, vh)) {
                 case 0 -> enterLobby();                     // 开始游戏 → 准备大厅
-                case 1 -> overlay = Renderer.OVER_MULTI;    // 多人联机（开发中占位）
-                case 2 -> overlay = Renderer.OVER_SETTINGS; // 设置
-                case 3 -> overlay = Renderer.OVER_HELP;     // 操作说明
-                case 4 -> Platform.exit();                  // 退出游戏
+                case 1 -> overlay = Renderer.OVER_SETTINGS; // 设置
+                case 2 -> overlay = Renderer.OVER_HELP;     // 操作说明
+                case 3 -> Platform.exit();                  // 退出游戏
                 default -> { /* 空白区不响应 */ }
             }
             return;
@@ -588,6 +749,9 @@ public final class GameApp extends Application {
 
     /** 大厅一帧：按 WASD 移动并夹紧在可走范围内，靠近角色即选中（含召唤师可高亮） */
     private void stepLobby(double dt, Renderer.LobbyGeom g) {
+        if (detailClass != 0) {
+            return;              // 档案弹层打开时冻结大厅：国王站定、卡片保持原位
+        }
         if (!lobbyPosInit) {
             // 国王从王座台阶出发：站在四人一字排开之上、出征光门之下的纵深
             double[] sp = g.kingSpawn();
@@ -606,6 +770,9 @@ public final class GameApp extends Application {
             ly += dy * inv * LOBBY_SPEED * dt;
             lx = Math.max(g.minX(), Math.min(g.maxX(), lx));
             ly = Math.max(g.minY(), Math.min(g.maxY(), ly));
+            // 水平移动决定化身朝向：左移朝左、右移朝右；纯上下移动时沿用上一帧
+            if (dx < 0) lobbyFacingLeft = true;
+            else if (dx > 0) lobbyFacingLeft = false;
         }
         // 圆-圆检测：正站在谁面前（只做判定，不自动选人——选人由空格确认触发）
         int[] cls = LobbyClass.CLASSES;
@@ -623,6 +790,7 @@ public final class GameApp extends Application {
         if (want && cardClass != near) {
             cardClass = near;
             cardReveal = 0;
+            loreScroll = 0;      // 换人：背景框回到顶部
         }
         double target = want ? 1 : 0;
         double spd = dt / (want ? 0.30 : 0.22);   // 滑入略缓、缩回略快
@@ -677,6 +845,13 @@ public final class GameApp extends Application {
         }
     }
 
+    /** 关闭「查看详情」弹层：清状态回大厅（按 ESC / 点 ✕ / 点面板外共用） */
+    private void closeDetail() {
+        detailClass = 0;
+        detailFade = 0;
+        detailScroll = 0;
+    }
+
     /** 玩家确认职业：生成对应勇者，退出大厅/主菜单，正式开局 */
     private void beginGame(int classKind) {
         if (!inTitle && !inLobby) {
@@ -689,8 +864,11 @@ public final class GameApp extends Application {
         inTitle = false;
         inLobby = false;
         overlay = Renderer.OVER_NONE;
+        manualPause = false;
+        closeDetail();           // 进战斗前也清一次（防御性）
         GameAudio.stopMenuBgm();  // 出征 / 战斗冒烟都离开主界面
-        GameAudio.stopLobbyBgm(); // 战斗中暂时没有 BGM
+        GameAudio.stopLobbyBgm(); // 出大厅，交棒给战斗 BGM
+        GameAudio.setBattleMusic(-1);   // 开局先上普通战斗曲，Boss 登场时自动换它的曲
         pressed.clear();
     }
 

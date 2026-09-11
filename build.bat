@@ -54,7 +54,7 @@ rem Compile from the source folder so the javac argument file contains only
 rem ASCII-relative paths. This keeps the launcher usable from Chinese paths.
 pushd core\src\main\java
 dir /s /b *.java > "%TEMP%\ab_core_src.txt"
-"%JAVAC_EXE%" -encoding UTF-8 -d "..\..\..\target\classes" @"%TEMP%\ab_core_src.txt"
+"%JAVAC_EXE%" --release 17 -encoding UTF-8 -d "..\..\..\target\classes" @"%TEMP%\ab_core_src.txt"
 set "CORE_RC=%ERRORLEVEL%"
 popd
 if not "%CORE_RC%"=="0" goto :fail
@@ -64,16 +64,21 @@ rem A local JAR keeps the client dependency path ASCII-relative and portable.
 powershell -NoProfile -Command "Remove-Item -LiteralPath 'core\target\arcane-core.jar' -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath 'core\target\arcane-core.zip' -Force -ErrorAction SilentlyContinue; Compress-Archive -Path 'core\target\classes\*' -DestinationPath 'core\target\arcane-core.zip' -Force; Move-Item -LiteralPath 'core\target\arcane-core.zip' -Destination 'core\target\arcane-core.jar' -Force"
 if errorlevel 1 goto :fail
 
-set "M2=%USERPROFILE%\.m2\repository"
+set "M2=D:\.m2\repository"
+if not exist "%M2%\org\openjfx\javafx-base\21.0.12" set "M2=%USERPROFILE%\.m2\repository"
 rem Use platform jars: generic JavaFX jars contain only Maven metadata.
 rem The client also requires javafx-media for GameAudio.
 set "FXCP=%M2%\org\openjfx\javafx-controls\21.0.12\javafx-controls-21.0.12-win.jar;%M2%\org\openjfx\javafx-graphics\21.0.12\javafx-graphics-21.0.12-win.jar;%M2%\org\openjfx\javafx-base\21.0.12\javafx-base-21.0.12-win.jar;%M2%\org\openjfx\javafx-media\21.0.12\javafx-media-21.0.12-win.jar"
 pushd client\src\main\java
 dir /s /b *.java > "%TEMP%\ab_client_src.txt"
-"%JAVAC_EXE%" -encoding UTF-8 -cp "..\..\..\..\core\target\arcane-core.jar;%FXCP%" -d "..\..\..\target\classes" @"%TEMP%\ab_client_src.txt"
+"%JAVAC_EXE%" --release 17 -encoding UTF-8 -cp "..\..\..\..\core\target\arcane-core.jar;%FXCP%" -d "..\..\..\target\classes" @"%TEMP%\ab_client_src.txt"
 set "CLIENT_RC=%ERRORLEVEL%"
 popd
 if not "%CLIENT_RC%"=="0" goto :fail
+rem javac does NOT copy resources (art, walk GIFs, boss art, icon are all read
+rem from /sprites/... on the classpath), so sync them by hand here. The Maven
+rem path above already does this via maven-resources-plugin.
+if exist "client\src\main\resources" xcopy /e /i /y /q "client\src\main\resources\*" "client\target\classes\" >nul
 set "BUILT=1"
 
 :check

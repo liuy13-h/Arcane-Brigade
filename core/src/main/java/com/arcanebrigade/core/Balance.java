@@ -327,6 +327,38 @@ public final class Balance {
     /** 采集蘑菇：数量 + 存活时长（秒） */
     public static final int   MUSHROOM_COUNT  = 8;
     public static final float MUSHROOM_LIFE   = 120f;
+    /**
+     * 蘑菇直接撒在玩家周围的一圈上（内/外半径），而不是撒在事件中心外——
+     * 事件中心本身离玩家就有 260~520，再往外散布最远的一朵能到 900+ 单位，
+     * 玩家满地图乱撞也找不齐。角度按等分 + 轻微抖动，避免几朵叠在一起。
+     */
+    public static final float MUSHROOM_SPAWN_MIN = 130f;
+    public static final float MUSHROOM_SPAWN_MAX = 300f;
+    /** 蘑菇的吸附半径，比普通经验宝石大一圈——任务道具不该考验走位精度 */
+    public static final float MUSHROOM_PICKUP_RADIUS = 110f;
+
+    // ---- 5 关 Boss：奶蛙（玩家等级达到 25 级时从场地中央刷新，独立技能组）----
+    /** 刷新条件：玩家等级达到该值 */
+    public static final int   MILKY_LEVEL         = 25;
+    public static final float MILKY_HP            = 8000f;
+    public static final float MILKY_SPEED         = 220f;
+    public static final float MILKY_RADIUS        = 48f;
+    /** 接触伤害（技能伤害另算） */
+    public static final float MILKY_DMG           = 18f;
+    /** 靠近玩家到这个距离才起手放技能 */
+    public static final float MILKY_TRIGGER_RANGE = 300f;
+    /** 技能一 · 蓄力踩地：以自身为中心的整圆，半径与技能二相同，伤害 50（施法 1.5s） */
+    public static final float MILKY_STOMP_RANGE   = 253f;
+    public static final float MILKY_STOMP_DMG     = 50f;
+    public static final float MILKY_STOMP_CD      = 3.0f;
+    public static final float MILKY_STOMP_CAST    = 1.5f;
+    /** 技能二 · 捧腹大笑：半血以下才会用，圆形范围（比初版缩小 1/3）、伤害 100 */
+    public static final float MILKY_LAUGH_RANGE   = 253f;
+    public static final float MILKY_LAUGH_DMG     = 100f;
+    public static final float MILKY_LAUGH_CD      = 6.0f;
+    public static final float MILKY_LAUGH_CAST    = 2.0f;
+    /** 触发大笑的血量比例（低于此值才会大笑） */
+    public static final float MILKY_LAUGH_HP      = 0.5f;
 
     // ---- 世界 ----
     public static final float FIXED_STEP     = 1f / 60f;
