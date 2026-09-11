@@ -56,7 +56,8 @@ rem "class file has wrong version 70.0, should be 61.0". run.bat does the same.
 "%JAVAC_EXE%" --release 17 -encoding UTF-8 -d core\target\classes @"%TEMP%\ab_core_src.txt"
 if errorlevel 1 goto :fail
 
-set "M2=%USERPROFILE%\.m2\repository"
+set "M2=D:\.m2\repository"
+if not exist "%M2%\org\openjfx\javafx-base\21.0.12" set "M2=%USERPROFILE%\.m2\repository"
 rem Use the -win classifier jars. The plain javafx-*.jar artifacts carry no
 rem classes (the platform bits live in the classified ones), so compiling
 rem against them fails with "package javafx.scene.image does not exist".

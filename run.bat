@@ -26,7 +26,9 @@ if not defined JAVAC (
 )
 if "%JAVAC%"=="javac" (set "JAVAEXE=java") else (set "JAVAEXE=%JAVAC:javac.exe=java.exe%")
 
-set "FX=%USERPROFILE%\.m2\repository\org\openjfx"
+set "M2=D:\.m2\repository"
+if not exist "%M2%\org\openjfx\javafx-base\21.0.12" set "M2=%USERPROFILE%\.m2\repository"
+set "FX=%M2%\org\openjfx"
 set "FB=%FX%\javafx-base\21.0.12\javafx-base-21.0.12-win.jar"
 set "FG=%FX%\javafx-graphics\21.0.12\javafx-graphics-21.0.12-win.jar"
 set "FC=%FX%\javafx-controls\21.0.12\javafx-controls-21.0.12-win.jar"
@@ -57,7 +59,7 @@ set "CP=%COREOUT%;%CLIENTOUT%;%FB%;%FG%;%FC%;%FM%"
 echo Launching Arcane Brigade ...
 set "SMK="
 if defined AB_SMOKE set "SMK=-Dab.smoke=%AB_SMOKE%"
-"%JAVAEXE%" -Dfile.encoding=UTF-8 -Dsun.java2d.dpiaware=true %SMK% -cp "%CP%" com.arcanebrigade.client.GameLauncher
+"%JAVAEXE%" --enable-native-access=ALL-UNNAMED --sun-misc-unsafe-memory-access=allow -Dfile.encoding=UTF-8 -Dsun.java2d.dpiaware=true %SMK% -cp "%CP%" com.arcanebrigade.client.GameLauncher
 set "RC=%ERRORLEVEL%"
 endlocal & exit /b %RC%
 
