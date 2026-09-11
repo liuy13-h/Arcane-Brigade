@@ -131,11 +131,9 @@ public final class Renderer {
         Color[] pal = arenaPalette(w.arenaMap(), w.stage());
         // 先铺整条蛇形战区，再把原始 PNG 作为起始核心区叠入；离开核心后不会露出矩形底图边缘或空白。
         drawExpeditionGround(w, vw, vh, pal);
-        // 原始 PNG 只承担起始核心的美术记忆；进入后续节点后不再把它的矩形边缘带进视野。
-        // 荒漠遗迹已不再是“旧 PNG 房间 + 外侧背景”：核心和外环共用连续地表与实体掩体。
-        // 熔岩 / 墓室仍保留原图核心，后续会采用同一套整合流程。
-        boolean showCoreArt = w.arenaMap() != ArenaMap.DESERT_RUINS
-                && Math.abs(camX) < 900f && Math.abs(camY) < 560f;
+        // 三张地图都改为连续战区渲染：旧 PNG 不再覆盖成“核心小房间”，
+        // 以免把可进入的外部节点误读成背景层。
+        boolean showCoreArt = false;
         if (battleMap != null && showCoreArt) {
             // 原始地图仍是核心节点，但以略微融合的方式接到程序化延展地表上。
             double left = camX - vw / 2;
@@ -310,6 +308,10 @@ public final class Renderer {
         if (map == ArenaMap.DESERT_RUINS) {
             drawDesertGroundMaterial(left, top, vw, vh, pal);
             drawDesertOuterDunes(left, top, vw, vh, pal);
+        } else if (map == ArenaMap.LAVA_DUNGEON) {
+            drawLavaOuterHazard(left, top, vw, vh, pal);
+        } else {
+            drawCryptOuterBoundary(left, top, vw, vh, pal);
         }
 
         gc.setFill(pal[2].deriveColor(0, 1, 1, 0.90));
@@ -321,8 +323,10 @@ public final class Renderer {
             double height = route.halfHeight() * 2;
             if (map == ArenaMap.DESERT_RUINS) {
                 drawDesertRouteWear(route, left, top, pal);
+            } else if (map == ArenaMap.LAVA_DUNGEON) {
+                drawLavaFloor(x, y, width, height, Math.min(120, height), pal, false);
             } else {
-                gc.fillRoundRect(x, y, width, height, Math.min(120, height), Math.min(120, height));
+                drawCryptFloor(x, y, width, height, Math.min(120, height), pal, false);
             }
         }
 
@@ -337,11 +341,10 @@ public final class Renderer {
                 if (node.role() != ArenaMap.ExpeditionRole.CORE) {
                     drawDesertNodeFloor(node, left, top, pal);
                 }
+            } else if (map == ArenaMap.LAVA_DUNGEON) {
+                drawLavaFloor(x, y, width, height, arc, pal, true);
             } else {
-                gc.setFill(node.role() == ArenaMap.ExpeditionRole.BOSS ? pal[3].deriveColor(0, 1, 1, 0.88)
-                        : node.role() == ArenaMap.ExpeditionRole.REWARD ? pal[1].deriveColor(0, 1, 1.08, 0.96)
-                        : pal[1]);
-                gc.fillRoundRect(x, y, width, height, arc, arc);
+                drawCryptFloor(x, y, width, height, arc, pal, true);
             }
         }
 
@@ -356,6 +359,9 @@ public final class Renderer {
                 if (!map.isWalkable((float) wx, (float) wy, 0f)) continue;
                 drawExpeditionDecor(map, c, r, left, top, pal);
             }
+        }
+        if (map != ArenaMap.DESERT_RUINS) {
+            drawThemedRoutePerimeter(map, left, top, vw, vh, pal);
         }
     }
 
@@ -467,6 +473,137 @@ public final class Renderer {
             double x1 = sx + Math.cos(angle) * radius * 0.82;
             double y1 = sy + Math.sin(angle) * radius * 0.48;
             gc.strokeLine(x0, y0, x1, y1);
+        }
+    }
+
+    /** 熔岩区的不可行走外缘：深熔岩、裂谷阴影与火光共同说明“这里是地图尽头”。 */
+    private void drawLavaOuterHazard(double left, double top, double vw, double vh, Color[] pal) {
+        // 先铺连续熔岩河：随后只有 route mask 覆盖为安全玄武岩，边界不需要依赖无形阻挡或规整方框。
+        gc.setFill(Color.rgb(73, 25, 18, 1.0));
+        gc.fillRect(0, 0, vw, vh);
+        final int flowBand = 260;
+        int bandStart = (int) Math.floor((top - flowBand) / flowBand);
+        int bandEnd = (int) Math.floor((top + vh + flowBand) / flowBand);
+        for (int band = bandStart; band <= bandEnd; band++) {
+            long h = hash2(101, band);
+            double y = band * flowBand + ((h >>> 9) % 84) - 42 - top;
+            double height = 34 + ((h >>> 18) % 34);
+            gc.setFill(Color.rgb(178, 48, 22, 0.42));
+            gc.fillRoundRect(-120, y, vw + 240, height, height, height);
+            gc.setStroke(Color.rgb(255, 126, 43, 0.68));
+            gc.setLineWidth(2.5);
+            gc.strokeArc(-80, y - height * 0.45, vw + 160, height * 1.6,
+                    194, 150, javafx.scene.shape.ArcType.OPEN);
+        }
+        final int cell = 190;
+        int c0 = (int) Math.floor(left / cell) - 1;
+        int c1 = (int) Math.floor((left + vw) / cell) + 1;
+        int r0 = (int) Math.floor(top / cell) - 1;
+        int r1 = (int) Math.floor((top + vh) / cell) + 1;
+        for (int c = c0; c <= c1; c++) {
+            for (int r = r0; r <= r1; r++) {
+                long h = hash2(c * 31 + 5, r * 37 + 17);
+                double x = c * cell + 10 + ((h >>> 8) % 70) - left;
+                double y = r * cell + 18 + ((h >>> 18) % 66) - top;
+                if ((h & 3L) == 0L) {
+                    double width = 110 + ((h >>> 27) % 94);
+                    gc.setFill(pal[7].deriveColor(0, 1.18, 1.10, 0.32));
+                    gc.fillOval(x, y, width, 28 + ((h >>> 35) % 34));
+                    gc.setStroke(Color.rgb(255, 117, 42, 0.76));
+                    gc.setLineWidth(2.4);
+                    gc.strokeArc(x + 8, y + 5, width - 18, 26, 190, 160, javafx.scene.shape.ArcType.OPEN);
+                } else if ((h & 7L) == 1L) {
+                    gc.setStroke(pal[7].deriveColor(0, 1.22, 1.06, 0.58));
+                    gc.setLineWidth(2.2);
+                    gc.strokeLine(x, y, x + 36, y + 18);
+                    gc.strokeLine(x + 23, y + 11, x + 48, y - 8);
+                }
+            }
+        }
+    }
+
+    /** 地牢外缘保持为深坑与塌陷层；安全石砖会在其上叠出，避免“外面像另一张背景”。 */
+    private void drawCryptOuterBoundary(double left, double top, double vw, double vh, Color[] pal) {
+        final int cell = 220;
+        int c0 = (int) Math.floor(left / cell) - 1;
+        int c1 = (int) Math.floor((left + vw) / cell) + 1;
+        int r0 = (int) Math.floor(top / cell) - 1;
+        int r1 = (int) Math.floor((top + vh) / cell) + 1;
+        for (int c = c0; c <= c1; c++) {
+            for (int r = r0; r <= r1; r++) {
+                long h = hash2(c * 29 + 13, r * 43 + 7);
+                if ((h & 3L) != 0L) continue;
+                double x = c * cell + 22 + ((h >>> 9) % 60) - left;
+                double y = r * cell + 16 + ((h >>> 17) % 76) - top;
+                double width = 118 + ((h >>> 25) % 86);
+                double height = 54 + ((h >>> 34) % 54);
+                gc.setFill(Color.color(0.01, 0.015, 0.025, 0.50));
+                gc.fillOval(x + 9, y + 13, width, height);
+                gc.setStroke(pal[6].deriveColor(0, 0.88, 0.82, 0.62));
+                gc.setLineWidth(2.4);
+                gc.strokeArc(x, y, width, height, 190, 160, javafx.scene.shape.ArcType.OPEN);
+            }
+        }
+    }
+
+    /** 同一套暗色玄武岩铺在门厅与外环；只有火光和机关改变其危险度。 */
+    private void drawLavaFloor(double x, double y, double width, double height, double arc,
+                               Color[] pal, boolean node) {
+        gc.setFill(node ? pal[1].deriveColor(0, 1.04, 1.04, 0.98) : pal[2].deriveColor(0, 0.94, 0.92, 0.96));
+        gc.fillRoundRect(x, y, width, height, arc, arc);
+        gc.setStroke(pal[7].deriveColor(0, 1.12, 1.08, node ? 0.38 : 0.25));
+        gc.setLineWidth(1.6);
+        gc.strokeLine(x + 22, y + 18, x + width - 28, y + 18);
+    }
+
+    /** 石质遗迹从核心到外庭使用同一套冷灰石砖，只让外缘掉入深坑。 */
+    private void drawCryptFloor(double x, double y, double width, double height, double arc,
+                                Color[] pal, boolean node) {
+        gc.setFill(node ? pal[1].deriveColor(0, 1.02, 1.04, 0.98) : pal[2].deriveColor(0, 0.92, 0.94, 0.96));
+        gc.fillRoundRect(x, y, width, height, arc, arc);
+        gc.setStroke(pal[5].deriveColor(0, 1.05, 1.05, 0.38));
+        gc.setLineWidth(1.5);
+        gc.strokeLine(x + 18, y + 18, x + width - 24, y + 18);
+    }
+
+    /**
+     * 只沿“可走地面 / 危险外缘”的交界画主题边界。它读取同一份 route mask，
+     * 因而裂谷、深坑与真实不可通行范围一致，而不是另铺一圈空气墙。
+     */
+    private void drawThemedRoutePerimeter(ArenaMap map, double left, double top, double vw, double vh, Color[] pal) {
+        final int cell = 72;
+        int c0 = (int) Math.floor(left / cell) - 1;
+        int c1 = (int) Math.floor((left + vw) / cell) + 1;
+        int r0 = (int) Math.floor(top / cell) - 1;
+        int r1 = (int) Math.floor((top + vh) / cell) + 1;
+        Color deep = map == ArenaMap.LAVA_DUNGEON ? Color.rgb(23, 12, 12, 0.96) : Color.rgb(8, 11, 16, 0.96);
+        Color edge = map == ArenaMap.LAVA_DUNGEON ? Color.rgb(245, 100, 37, 0.80) : pal[5].deriveColor(0, 1, 1, 0.80);
+        for (int c = c0; c <= c1; c++) {
+            for (int r = r0; r <= r1; r++) {
+                float wx = (c + 0.5f) * cell;
+                float wy = (r + 0.5f) * cell;
+                if (!map.isWalkable(wx, wy, 0f)) continue;
+                double x = c * cell - left;
+                double y = r * cell - top;
+                gc.setStroke(deep);
+                gc.setLineWidth(map == ArenaMap.LAVA_DUNGEON ? 7 : 18);
+                if (!map.isWalkable(wx - cell, wy, 0f)) gc.strokeLine(x, y, x, y + cell);
+                if (!map.isWalkable(wx + cell, wy, 0f)) gc.strokeLine(x + cell, y, x + cell, y + cell);
+                if (!map.isWalkable(wx, wy - cell, 0f)) gc.strokeLine(x, y, x + cell, y);
+                if (!map.isWalkable(wx, wy + cell, 0f)) gc.strokeLine(x, y + cell, x + cell, y + cell);
+                gc.setStroke(edge);
+                gc.setLineWidth(map == ArenaMap.LAVA_DUNGEON ? 1.6 : 3.0);
+                // 熔岩边缘只露出断续的烧灼亮边，避免把岩台勾成一张规则方框。
+                long edgeHash = hash2(c * 53 + 3, r * 59 + 7);
+                boolean markLeft = (edgeHash & 1L) == 0L;
+                boolean markRight = (edgeHash & 2L) == 0L;
+                boolean markTop = (edgeHash & 4L) == 0L;
+                boolean markBottom = (edgeHash & 8L) == 0L;
+                if (!map.isWalkable(wx - cell, wy, 0f) && (map != ArenaMap.LAVA_DUNGEON || markLeft)) gc.strokeLine(x, y, x, y + cell);
+                if (!map.isWalkable(wx + cell, wy, 0f) && (map != ArenaMap.LAVA_DUNGEON || markRight)) gc.strokeLine(x + cell, y, x + cell, y + cell);
+                if (!map.isWalkable(wx, wy - cell, 0f) && (map != ArenaMap.LAVA_DUNGEON || markTop)) gc.strokeLine(x, y, x + cell, y);
+                if (!map.isWalkable(wx, wy + cell, 0f) && (map != ArenaMap.LAVA_DUNGEON || markBottom)) gc.strokeLine(x, y + cell, x + cell, y + cell);
+            }
         }
     }
 
@@ -648,7 +785,6 @@ public final class Renderer {
         ArenaMap.Obstacle[] obstacles = w.arenaMap().obstacles();
         for (int i = 0; i < obstacles.length; i++) {
             ArenaMap.Obstacle obstacle = obstacles[i];
-            if (w.arenaMap() != ArenaMap.DESERT_RUINS && obstacle.visual() < 20) continue;
             double sx = obstacle.x() - left;
             double sy = obstacle.y() - top;
             double halfW = obstacle.footprintHalfWidth();

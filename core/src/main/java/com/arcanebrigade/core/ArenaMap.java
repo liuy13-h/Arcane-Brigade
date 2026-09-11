@@ -39,7 +39,8 @@ public enum ArenaMap {
                     // 对齐 lava-dungeon.png：两座上方祭坛、两堆中央乱石和下方两段断墙。
                     o(-286, -92, 72, 3), o(282, -92, 72, 3), o(-143, -16, 54, 4),
                     o(141, -16, 54, 4), o(-285, 116, 64, 5), o(278, 116, 64, 5),
-                    // 高压节点用岩柱与断桥残片制造掩体，不把连接桥塞成单线作战。
+                    // 外环掩体与高压节点同样落在真实战区内，不把连接桥塞成单线作战。
+                    worldCircle(-340, 560, 58, 20), worldBox(420, 650, 48, 98, 21),
                     worldCircle(1_260, -590, 62, 20), worldBox(1_650, -710, 45, 105, 21),
                     worldCapsule(2_070, -1_180, 130, 45, 22), worldCircle(3_260, -720, 70, 20)
             },
@@ -49,11 +50,15 @@ public enum ArenaMap {
                     t(-211, 176, 42, 0.80f, 0.30f, 0.70f, 3.1f, 18f, 1),
                     t(213, 176, 42, 0.80f, 0.30f, 0.70f, 3.1f, 18f, 1),
                     t(416, 49, 42, 0.80f, 0.30f, 0.70f, 3.1f, 18f, 1),
+                    worldTrap(-180, 560, 50, 0.80f, 0.30f, 0.68f, 3.1f, 16f, 1),
+                    worldTrap(610, 620, 54, 0.75f, 0.30f, 0.70f, 3.0f, 18f, 1),
                     worldTrap(1_420, -480, 52, 0.75f, 0.30f, 0.70f, 2.9f, 18f, 1)
             },
             new Terrain[] {
                     terrain("灼热裂隙", -399, 118, 58, 0.78f, 1), terrain("灼热裂隙", -211, 176, 58, 0.78f, 1),
-                    terrain("灼热裂隙", 213, 176, 58, 0.78f, 1), terrain("灼热裂隙", 416, 49, 58, 0.78f, 1)
+                    terrain("灼热裂隙", 213, 176, 58, 0.78f, 1), terrain("灼热裂隙", 416, 49, 58, 0.78f, 1),
+                    worldTerrain("灼热岩板", -180, 560, 88, 0.86f, 1),
+                    worldTerrain("灼热岩板", 610, 620, 96, 0.84f, 1)
             },
             lavaNodes(), lavaRoutes()),
 
@@ -64,7 +69,8 @@ public enum ArenaMap {
                     box(-325, 114, 26, 34, 8),
                     // 右下两口石棺共用同一块接地石座；合为一体，避免留下小于角色直径的假通道。
                     box(195, 110, 58, 34, 8),
-                    // 大厅和墓坑的柱/石棺落在节点侧面，留下可绕柱与躲箭的中央回旋区。
+                    // 外庭、大厅和墓坑的柱/石棺落在节点侧面，留下可绕柱与躲箭的中央回旋区。
+                    worldCapsule(-330, -560, 115, 42, 20), worldBox(500, 610, 54, 112, 21),
                     worldCircle(1_270, -360, 62, 20), worldCircle(1_720, -240, 62, 20),
                     worldBox(2_180, -900, 56, 125, 21), worldCapsule(3_590, 640, 180, 50, 22)
             },
@@ -73,11 +79,15 @@ public enum ArenaMap {
                     t(-285, -48, 45, 1.0f, 0.32f, 0.65f, 3.8f, 20f, 2),
                     t(286, -15, 48, 1.0f, 0.32f, 0.65f, 3.8f, 20f, 2),
                     lane(0, -55, 548, 24, 1.0f, 0.32f, 0.60f, 4.2f, 16f, 3),
+                    worldTrap(-160, -560, 50, 0.95f, 0.30f, 0.60f, 3.2f, 18f, 2),
+                    worldTrap(690, 600, 54, 0.95f, 0.30f, 0.60f, 3.1f, 20f, 2),
                     worldTrap(1_500, -520, 54, 0.95f, 0.30f, 0.60f, 3.1f, 20f, 2)
             },
             new Terrain[] {
                     // 对齐左右两块地面符文：站上去可快速穿过箭道或绕过地刺。
-                    terrain("疾行符文", -395, 59, 56, 1.22f, 2), terrain("疾行符文", 413, 57, 56, 1.22f, 2)
+                    terrain("疾行符文", -395, 59, 56, 1.22f, 2), terrain("疾行符文", 413, 57, 56, 1.22f, 2),
+                    worldTerrain("墓道符文", -160, -560, 90, 1.10f, 2),
+                    worldTerrain("墓道符文", 690, 600, 90, 1.08f, 2)
             },
             cryptNodes(), cryptRoutes());
 
@@ -310,6 +320,9 @@ public enum ArenaMap {
     private static ExpeditionNode[] lavaNodes() {
         return new ExpeditionNode[] {
                 n("熔岩门厅", ExpeditionRole.CORE, 0, 0, 760, 410),
+                // 门厅下侧的余烬外环与核心宽幅重叠，断桥主线和侧向战区都不是背景。
+                n("余烬外环", ExpeditionRole.TRANSITION, -80, 560, 720, 250),
+                n("熔岩侧台", ExpeditionRole.COMBAT, 420, 650, 700, 290),
                 n("断桥前哨", ExpeditionRole.TRANSITION, 960, -120, 320, 170),
                 n("火焰祭坛", ExpeditionRole.COMBAT, 1_420, -650, 500, 360),
                 n("冷却岩台", ExpeditionRole.REWARD, 710, -1_160, 350, 250),
@@ -330,6 +343,9 @@ public enum ArenaMap {
     private static ExpeditionNode[] cryptNodes() {
         return new ExpeditionNode[] {
                 n("初始墓室", ExpeditionRole.CORE, 0, 0, 760, 410),
+                // 坍塌外庭与南侧环廊直接咬合初始墓室，让外部墓道可进可退并承载战斗。
+                n("坍塌外庭", ExpeditionRole.TRANSITION, -60, -560, 700, 260),
+                n("南侧墓道环廊", ExpeditionRole.COMBAT, 340, 600, 820, 270),
                 n("墓道转角", ExpeditionRole.TRANSITION, 940, 220, 320, 170),
                 n("石柱大厅", ExpeditionRole.COMBAT, 1_500, -300, 560, 400),
                 n("侧向密室", ExpeditionRole.REWARD, 1_020, -1_030, 350, 260),

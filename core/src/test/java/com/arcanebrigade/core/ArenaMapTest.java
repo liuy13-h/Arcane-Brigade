@@ -35,10 +35,32 @@ public final class ArenaMapTest {
                         "desert core must connect to its north and south exterior battle terrain without a hidden wall");
                 check(map.nodeAt(-80f, -560f) != null && map.nodeAt(360f, 620f) != null,
                         "desert exterior must be real expedition nodes rather than a decorative backdrop");
-                assertDesertExteriorTravel(-1f, -500f,
+                assertExteriorTravel(map, -1f, -500f,
                         "player must be able to walk from the core into the north exterior ring");
-                assertDesertExteriorTravel(1f, 550f,
+                assertExteriorTravel(map, 1f, 550f,
                         "player must be able to walk from the core into the south exterior battle zone");
+            }
+            if (map == ArenaMap.LAVA_DUNGEON) {
+                check(map.isWalkable(0f, 360f, Balance.WIZARD_RADIUS)
+                                && map.isWalkable(-80f, 560f, Balance.WIZARD_RADIUS)
+                                && map.isWalkable(420f, 650f, Balance.WIZARD_RADIUS),
+                        "lava core must open naturally into its ember exterior ring and side platform");
+                check(map.nodeAt(-80f, 560f) != null && map.nodeAt(420f, 650f) != null,
+                        "lava exterior must be authored combat terrain, not a decorative lava backdrop");
+                assertExteriorTravel(map, 1f, 520f,
+                        "player must be able to walk from the lava hall into the exterior ring");
+            }
+            if (map == ArenaMap.STONE_CRYPT) {
+                check(map.isWalkable(0f, -350f, Balance.WIZARD_RADIUS)
+                                && map.isWalkable(-60f, -560f, Balance.WIZARD_RADIUS)
+                                && map.isWalkable(340f, 600f, Balance.WIZARD_RADIUS),
+                        "crypt core must open naturally into its collapsed courtyard and south gallery");
+                check(map.nodeAt(-60f, -560f) != null && map.nodeAt(340f, 600f) != null,
+                        "crypt exterior must be authored exploration terrain, not a decorative backdrop");
+                assertExteriorTravel(map, -1f, -500f,
+                        "player must be able to walk from the crypt room into the collapsed exterior courtyard");
+                assertExteriorTravel(map, 1f, 540f,
+                        "player must be able to walk from the crypt room into the south gallery");
             }
 
             World spawnCheck = new World(73L, map);
@@ -139,8 +161,8 @@ public final class ArenaMapTest {
     }
 
     /** Verifies actual World movement, rather than only asking the route mask whether a point is valid. */
-    private static void assertDesertExteriorTravel(float dy, float destinationY, String message) {
-        World travel = new World(97L, ArenaMap.DESERT_RUINS);
+    private static void assertExteriorTravel(ArenaMap map, float dy, float destinationY, String message) {
+        World travel = new World(97L, map);
         int traveler = travel.spawnWizard(0f, 0f, HeroClass.WIZARD);
         InputCommand move = new InputCommand();
         move.set(0f, dy);
