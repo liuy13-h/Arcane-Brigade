@@ -1,24 +1,34 @@
-package com.arcanebrigade.core;
+package com.arcanebrigade.core.enemy;
+
+import com.arcanebrigade.core.Balance;
+import com.arcanebrigade.core.World;
 
 import java.util.Random;
 
 /**
  * 刷怪节奏控制器（D4 内容阶段）。
  *
- * 三件事：
+ * 四件事：
  *   1) 基础刷怪：速率随时间爬升，但封顶；场上数量受"软上限"约束，
  *      所以玩家看到的怪明显变少，难度改由敌人血量成长曲线承担。
  *   2) 变体怪：随时间解锁精英 / 小偷 / 远程，按概率混入普通刷怪。
  *   3) Boss：玩家升到 Balance.BOSS_LEVELS 里的等级时登场，一局共 4 只。
  *      Boss 在场时普通刷怪降速，把舞台让给 Boss 战。
+ *   4) 小 Boss（骨蛇）：登场等级卡在四只大 Boss 中间（EnemyStats.SERPENT_LEVELS），
+ *      与大 Boss 共用 bossId 通道因而互斥——两次"考试"之间插一场遭遇战。
  *
- * 等级阈值与刷怪数值全部读 Balance，改 Boss 出场节奏这里自动跟着变。
+ * 刷怪数值读 Balance（main 的权威），骨蛇档位读同包的 EnemyStats。
+ *
+ * 从 com.arcanebrigade.core 迁到本包，是为了让"敌怪"的节奏、数值、行为
+ * 三件事待在一起——改敌人只翻这一个包，与 lobby-king 分支的目录结构保持一致。
  */
 public final class WaveDirector {
 
     private float acc;
     /** 每只 Boss 是否已登场，长度对齐 Balance.BOSS_LEVELS */
     private final boolean[] bossSpawned = new boolean[Balance.BOSS_LEVELS.length];
+    /** 每条骨蛇（小 Boss）是否已登场，长度对齐 EnemyStats.SERPENT_LEVELS */
+    private final boolean[] serpentSpawned = new boolean[EnemyStats.SERPENT_LEVELS.length];
     private final Random rng = new Random(0x5EEDL);
 
     public void update(World w, float dt) {
@@ -30,6 +40,16 @@ public final class WaveDirector {
             if (!bossSpawned[i] && level >= Balance.BOSS_LEVELS[i] && w.bossId() < 0) {
                 bossSpawned[i] = true;
                 w.spawnBoss(i);
+            }
+        }
+
+        // --- 骨蛇（小 Boss）：夹在四只大 Boss 的等级中间登场 ---
+        // 与 Boss 共用 bossId 这一条通道，所以它们天然互斥：同一时刻场上只有一只 Boss 级目标。
+        // 正因为互斥，玩家不会遇到"大 Boss 和骨蛇一起来"的混乱场面。
+        for (int i = 0; i < EnemyStats.SERPENT_LEVELS.length; i++) {
+            if (!serpentSpawned[i] && level >= EnemyStats.SERPENT_LEVELS[i] && w.bossId() < 0) {
+                serpentSpawned[i] = true;
+                w.spawnBoneSerpent();
             }
         }
 
@@ -49,7 +69,9 @@ public final class WaveDirector {
             rate = Balance.SPAWN_RATE_CAP;
         }
         if (w.bossId() >= 0) {
-            rate *= Balance.BOSS_SPAWN_SUPPRESS;
+            // 小 Boss 只减档、不清场：骨蛇是遭遇战而非 Boss 战，小怪该继续刷
+            rate *= w.serpentActive()
+                    ? EnemyStats.SERPENT_SPAWN_SUPPRESS : Balance.BOSS_SPAWN_SUPPRESS;
         }
         acc += dt * rate;
         while (acc >= 1f) {

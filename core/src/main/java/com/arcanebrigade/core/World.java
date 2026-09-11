@@ -2,6 +2,10 @@ package com.arcanebrigade.core;
 
 import java.util.Random;
 
+import com.arcanebrigade.core.enemy.BoneSerpent;
+import com.arcanebrigade.core.enemy.EnemyStats;
+import com.arcanebrigade.core.enemy.WaveDirector;
+
 /**
  * 世界模拟。这是整个游戏的权威状态，不依赖任何 UI 框架。
  *
@@ -44,6 +48,18 @@ public final class World {
     public static final int V_RANGED = 3;   // 远程：保持距离发射弹幕
     public static final int V_SPLIT  = 4;   // 分裂：死亡裂成数只
     public static final int V_BOSS   = 5;   // Boss：多阶段
+    public static final int V_STATUE = 6;   // 战斗事件「摧毁雕像」：不移动不攻击的静态靶子
+    /**
+     * 骨蛇（小 Boss）：一个"怪"由多个实体拼成，全身共享一份血。
+     * id 取自 EnemyStats.V_SERPENT（7），这里再导出一次是为了让 World 的 switch
+     * 与其它变体写在一起，读代码时不必去 enemy 包里查号。
+     */
+    public static final int V_SERPENT = com.arcanebrigade.core.enemy.EnemyStats.V_SERPENT;
+
+    /** 拾取物 meta 子类型 */
+    public static final int PICKUP_GEM      = 0;
+    public static final int PICKUP_CHEST    = 1;
+    public static final int PICKUP_MUSHROOM = 2;   // 战斗事件「采集蘑菇」
 
     /**
      * FX 子类型。为了不再为特效开新数组，借用现有字段：
@@ -103,6 +119,14 @@ public final class World {
     public final float[] enemyShield = new float[MAX];
     /** 小偷携带的宝石数，死亡时翻倍掉落 */
     public final float[] carry = new float[MAX];
+    /**
+     * 骨蛇每一节归属的**头节点 id**（头节点存自己）。非骨蛇恒为 -1。
+     *
+     * 骨蛇是"一个怪、十二个实体"：每节都是普通 KIND_ENEMY（所以索敌、碰撞、
+     * 弹幕命中、空间哈希全部照旧白嫖），但血量只有一份，存在头节点上。
+     * damage() 靠这张表把任意一节的挨打转发到头——玩家打头打身子一个价。
+     */
+    public final int[] serpent = new int[MAX];
 
     // ---- 元素与状态 ----
     /** 附着的元素 id（Element.*）。目前只挂在敌人身上 */
@@ -133,6 +157,19 @@ public final class World {
     private final IntList minions = new IntList(16);
     private int enemiesAlive;
     private int kills;
+    /**
+     * 骨蛇的节链，**按顺序**存放（0 = 头，末尾 = 尾），生成时一次填好。
+     * 渲染与链式跟随都要"第 n 节"，而 SoA 只有 id 没有顺序——靠这张表补上。
+     * 场上同时最多一条骨蛇（WaveDirector 等上一条倒下才刷下一条）。
+     */
+    private final IntList serpentSegments =
+            new IntList(com.arcanebrigade.core.enemy.EnemyStats.SERPENT_SEGMENTS);
+    /**
+     * 骨蛇上一次结算伤害的**世界时间戳**，用于"一帧只挨一次打"。
+     * time 每步递增一个 FIXED_STEP，同一帧内的多次 damage() 拿到的是同一个值，
+     * 所以相等即同帧。初值 -1f 永远不会等于正常时间，无需在生成时重置。
+     */
+    private float serpentHitT = -1f;
 
     private float time;
     private final Random rng;
@@ -141,6 +178,91 @@ public final class World {
     private final SpatialHash obstacleHash = new SpatialHash(64f);
     private final WaveDirector director = new WaveDirector();
 
+    // ---- 骨蛇（lobby-king 引入的小 Boss，多段软体）----
+    /** 场上同时最多 N 条骨蛇，避免段数把实体池撑爆 */
+    public static final int MAX_BONE_SERPENT = 4;
+    /** 每条骨蛇的段数（含头尾），决定了 int[SEGMENT_COUNT] 的尺寸 */
+    public static final int BONE_SERPENT_SEG = BoneSerpent.SEGMENT_COUNT;
+    /** 当前在场骨蛇实例：head=-1 表示该槽空 */
+    private final int[] boneSerpentHead = new int[MAX_BONE_SERPENT];
+    {
+        // 槽位默认 -1（空），不用 Arrays.fill 也行，但显式一次更直观
+        for (int i = 0; i < MAX_BONE_SERPENT; i++) boneSerpentHead[i] = -1;
+    }
+    /**
+     * 每条骨蛇自己的段 id 列表（按 slot 索引）。每条蛇的段独立存，与 lobby-king
+     * 「一条共享 IntList」的设计不同——后者同时只能放一条在更新的蛇，多条并存会
+     * 互相覆盖。本字段让 MAX_BONE_SERPENT=4 条蛇能同时存活、同时被顺序更新。
+     */
+    private final IntList[] serpentSegsBySlot = new IntList[MAX_BONE_SERPENT];
+    /** 各段之间的历史位置（骨蛇的「拖尾」用）。每槽 int[BONE_SERPENT_SEG][HIST]，存 World.x/y 的副本 */
+    private final float[][][] serpentHistX = new float[MAX_BONE_SERPENT][BONE_SERPENT_SEG][BoneSerpent.HIST];
+    private final float[][][] serpentHistY = new float[MAX_BONE_SERPENT][BONE_SERPENT_SEG][BoneSerpent.HIST];
+
+    /**
+     * 当前正在被 BoneSerpent.update 处理的骨蛇段数组。
+     * 用作「更新上下文」——BoneSerpent.update 只接收 head 一个参数，不知道自己
+     * 是第几条蛇；让它读 w.serpentSegmentCount() / w.serpentSegment(n) 时，本字段
+     * 已经在 updateBoneSerpent(int slot) 开头被填好。
+     *
+     * 为什么不用 thread-local：World 是单线程的，而且同一帧里多条蛇是顺序更新的，
+     * 一个字段就够用。线程/上下文切换只会让代码复杂、不会带来性能。
+     */
+    private final int[] curSerpentSegs = new int[BONE_SERPENT_SEG];
+
+    /** 把槽 slot 的段快照到 curSerpentSegs，供 BoneSerpent.update 访问 */
+    private void setSerpentContext(int slot) {
+        IntList list = serpentSegsBySlot[slot];
+        int n = (list != null) ? Math.min(list.size(), BONE_SERPENT_SEG) : 0;
+        for (int i = 0; i < n; i++) {
+            curSerpentSegs[i] = list.get(i);
+        }
+        // 剩余槽位填 -1，BoneSerpent.followBody 看到 -1 会 skip
+        for (int i = n; i < BONE_SERPENT_SEG; i++) {
+            curSerpentSegs[i] = -1;
+        }
+    }
+
+    /** BoneSerpent.update 用：当前正在更新的骨蛇总段数 */
+    public int serpentSegmentCount() {
+        return BONE_SERPENT_SEG;
+    }
+
+    /** BoneSerpent.update 用：当前正在更新的骨蛇第 n 段的 enemies[] id（无效时返回 -1） */
+    public int serpentSegment(int n) {
+        if (n < 0 || n >= BONE_SERPENT_SEG) {
+            return -1;
+        }
+        int id = curSerpentSegs[n];
+        return (id >= 0 && alive[id]) ? id : -1;
+    }
+
+    /** 推进骨蛇 slot（由 updateEnemies 调用）。头死了就释放槽位 */
+    private void updateBoneSerpent(int slot, float dt) {
+        int head = boneSerpentHead[slot];
+        if (head < 0 || !alive[head] || serpent[head] != head) {
+            boneSerpentHead[slot] = -1;
+            return;
+        }
+        // head 死时 kill 会清掉自己槽位的段列表（serpentSegsBySlot[slot]），那时跳过
+        IntList list = serpentSegsBySlot[slot];
+        if (list == null || list.size() == 0) {
+            boneSerpentHead[slot] = -1;
+            if (bossId == head) {
+                bossId = -1;
+            }
+            return;
+        }
+        setSerpentContext(slot);
+        BoneSerpent.update(this, head, dt);
+        if (!alive[head]) {
+            boneSerpentHead[slot] = -1;
+            if (bossId == head) {
+                bossId = -1;
+            }
+        }
+    }
+
     // ---- 场景 / 阶段 ----
     private int stage;
     private float stageTimer;
@@ -148,7 +270,7 @@ public final class World {
     private int bossId = -1;
     /** 当前 Boss 是第几只（BOSS_LEVELS 的下标），HUD 显示名字用 */
     private int bossTier;
-    /** 击败最后一只 Boss 后置位，客户端据此暂停并弹胜利画面 */
+    /** 击败奶蛙（5 关 Boss）后置位，客户端据此暂停并弹胜利画面 */
     private boolean victory;
     /** 主控玩家阵亡后置位，客户端据此冻结并弹结算画面 */
     private boolean defeat;
@@ -156,10 +278,44 @@ public final class World {
     private int bossKills;
     /** 终局战报快照：胜利或阵亡时冻结一份，避免结算画面上的数字继续跳动 */
     private Summary summary;
+    /** 主动退出（暂停菜单「退出结算」）：与阵亡同屏展示战报，但标题不同 */
+    private boolean abandoned;
     /** 开火模式：true=自动索敌开火，false=手动（朝鼠标方向，按住开火） */
     private boolean autoFire = true;
     private float bossWarningTimer;
     private float bossSummonTimer;
+
+    // ---- 战斗事件（小任务）状态 ----
+    /** 下一个待触发事件的 EVENT_TIMES 下标 */
+    private int eventIndex;
+    /** 当前进行中的事件类型（Balance.EVENT_RIFT / STATUE / MUSHROOM，0=无） */
+    private int eventType;
+    /** 进度：裂隙=已坚持秒数；雕像=已摧毁数；蘑菇=已采集数 */
+    private float eventProgress;
+    /** 目标：裂隙=RIFT_HOLD_TIME；雕像=STATUE_COUNT；蘑菇=MUSHROOM_COUNT */
+    private float eventGoal;
+    /** 事件区域中心（裂隙圈 / 雕像与蘑菇的散布中心） */
+    private float eventX;
+    private float eventY;
+    /** 本局已完成的事件数（结算显示） */
+    private int eventCompleted;
+    /** 「任务完成 +经验」横幅剩余显示秒数 */
+    private float eventBannerT;
+    /** 事件生成的雕像 / 蘑菇实体 id，用于清理与统计 */
+    private final IntList eventIds = new IntList(16);
+
+    // ---- 5 关 Boss：奶蛙（玩家等级触发，场地中央） ----
+    private int milkyId = -1;
+    private boolean milkySpawned;
+    private float milkyStompCd;
+    private float milkyLaughCd;
+    /** 奶蛙施法状态：0=移动/待机，1=蓄力踩地，2=捧腹大笑 */
+    private int milkyCast;
+    private float milkyCastT;
+    /** true=朝右（用右向动画/镜像判断） */
+    private boolean milkyFaceRight;
+    /** 踩地动画是否用镜像版（玩家在左侧时） */
+    private boolean milkyMirror;
 
     /**
      * 玩家的指挥指令：鼠标点击（或按住）时记下世界坐标。
@@ -242,6 +398,7 @@ public final class World {
         variant[id] = V_NORMAL;
         enemyShield[id] = 0f;
         carry[id] = 0f;
+        serpent[id] = -1;          // 非骨蛇：没有归属的头节点
         summonT[id] = 0f;
         slot[id] = 0;
         liveCount++;
@@ -253,19 +410,44 @@ public final class World {
             return;
         }
         alive[id] = false;
-        if (id == bossId) {
-            // 击败最后一只 Boss = 通关。前几只倒下只清标记，不打断对局。
-            if (bossTier == Balance.BOSS_LEVELS.length - 1) {
-                victory = true;
-                summary = snapshot(true, firstWizard());
+        // 骨蛇：头一死，整条散架。身体/尾巴走 despawn（不计击杀、不掉宝石），
+        // 所以一条蛇只算一次击杀、只掉一次战利品。
+        if (variant[id] == V_SERPENT && serpent[id] == id) {
+            // 找出 head 所在的槽，把该槽的整条段列表都散架
+            int slot = -1;
+            for (int s2 = 0; s2 < MAX_BONE_SERPENT; s2++) {
+                if (boneSerpentHead[s2] == id) { slot = s2; break; }
             }
+            if (slot >= 0) {
+                IntList list = serpentSegsBySlot[slot];
+                if (list != null) {
+                    for (int p = 0; p < list.size(); p++) {
+                        int seg = list.get(p);
+                        if (seg != id && seg >= 0 && alive[seg] && serpent[seg] == id) {
+                            despawn(seg);
+                        }
+                    }
+                    list.clear();
+                }
+                boneSerpentHead[slot] = -1;
+            }
+        }
+        if (id == bossId) {
+            // 按等级刷的 Boss 现在只是中途精英：倒下只清阶段标记，不再结束对局
             bossId = -1;   // Boss 倒下：清掉阶段技能标记，下一帧 updateBossPhase 也会兜底
+        }
+        if (id == milkyId) {
+            milkyId = -1;  // 奶蛙血量归零：消失（客户端据此停掉专属 BGM）
+            // 结束规则之二：击败奶蛙 = 通关
+            victory = true;
+            summary = snapshot(true, false, firstWizard());
         }
         int k = kind[id];
         if (k == KIND_ENEMY) {
             enemiesAlive--;
             kills++;
-            if (variant[id] == V_BOSS) {
+            // 骨蛇按 Boss 计（否则它的击杀会混进"普通击杀"里，结算数字对不上）
+            if (variant[id] == V_BOSS || variant[id] == V_SERPENT) {
                 bossKills++;
             }
             healWarriorsOnKill();
@@ -273,7 +455,15 @@ public final class World {
                 killListener.onKill(id, x[id], y[id], meta[id]);
             }
             int v = variant[id];
-            if (v == V_THIEF) {
+            if (v == V_SERPENT) {
+                // 小 Boss：一圈宝石铺开，别全叠在一个点上
+                int drop = com.arcanebrigade.core.enemy.EnemyStats.SERPENT_GEM_DROP;
+                for (int g = 0; g < drop; g++) {
+                    float a = (float) (Math.PI * 2) * g / drop;
+                    spawnXpGem(x[id] + (float) Math.cos(a) * 30f,
+                            y[id] + (float) Math.sin(a) * 30f, Balance.GEM_VALUE);
+                }
+            } else if (v == V_THIEF) {
                 // 小偷：掉落携带的 2 倍宝石（至少 1 个）
                 int drop = Math.max(1, (int) (carry[id] * 2f));
                 for (int g = 0; g < drop; g++) {
@@ -303,7 +493,7 @@ public final class World {
             // 主控玩家阵亡：立刻冻一份战报，客户端据此停止推进并弹结算画面。
             // 之前这里什么都不做，玩家死后游戏会一直空转（没有单位可操作）却永远不结束。
             defeat = true;
-            summary = snapshot(false, id);
+            summary = snapshot(false, false, id);
         }
         kind[id] = KIND_FREE;
         liveCount--;
@@ -394,6 +584,11 @@ public final class World {
             hp0 = Balance.RANGED_HP;
             sp0 = Balance.RANGED_SPEED;
             dm0 = 0f;       // 伤害来自弹幕而非接触
+        } else if (variant == V_STATUE) {
+            // 战斗事件「摧毁雕像」：不移动、不攻击的静态靶子，血偏厚
+            hp0 = Balance.STATUE_HP;
+            sp0 = 0f;
+            dm0 = 0f;
         }
         // 血量随时间成长：怪的数量砍掉后，难度主要由这条曲线承担。
         // 统一在这里乘，避免每个生成点各乘一次导致叠加。
@@ -403,6 +598,9 @@ public final class World {
         hp[id] = maxHp[id];
         speed[id] = sp0;
         dmg[id] = dm0;
+        if (variant == V_STATUE) {
+            r[id] = Balance.STATUE_RADIUS;   // 雕像更大，作为可摧毁目标更醒目
+        }
         if (variant == V_ELITE) {
             // 护盾也跟着涨，但涨幅封顶，否则后期精英变成打不破的壳
             enemyShield[id] = Balance.ELITE_SHIELD * Math.min(scale, 6f);
@@ -495,6 +693,20 @@ public final class World {
         return id;
     }
 
+    /** 蘑菇（战斗事件「采集蘑菇」）：玩家走过即拾取，计入事件进度并给少量经验。 */
+    public int spawnMushroom(float sx, float sy) {
+        int id = alloc(KIND_PICKUP, sx, sy, 9f, TEAM_PLAYER);
+        if (id < 0) {
+            return -1;
+        }
+        vx[id] = 0f;
+        vy[id] = 0f;
+        dmg[id] = Balance.GEM_VALUE;
+        life[id] = Balance.MUSHROOM_LIFE;
+        meta[id] = PICKUP_MUSHROOM;
+        return id;
+    }
+
     /**
      * 视觉特效。FX 不移动，所以 vx/vy 借给 FX_BEAM 存终点坐标，
      * speed 借给总寿命（渲染要按 life/speed 算淡出比例）。
@@ -582,6 +794,91 @@ public final class World {
         bossSummonTimer = Balance.BOSS_SUMMON_INTERVAL;
     }
 
+    /**
+     * 生成一条骨蛇（小 Boss）。在 WaveDirector 判定玩家等级到 SERPENT_LEVELS
+     * 且大 Boss 不在场时调用。
+     *
+     * 一条骨蛇是 N 个 V_SERPENT 敌人实体（头 / 身体×N / 尾），共享血池、共用 head id。
+     * 这里把段全塞进 slot 自己的 serpentSegsBySlot[slot]（按槽独立存），每段的 serpent[i]
+     * 都指向 head，这样 damage(id) 看到非头节点就把伤害转到头节点；kill(head) 时按 V_SERPENT
+     * 分支把整条蛇的段一并 despawn。head 自己也用 bossId 通道占位，从而和大 Boss 互斥。
+     *
+     * 段内沿主轴排开，让 followBody 立刻有合理的初值，避免开怪时蛇身"瞬移"到轨迹上。
+     */
+    public int spawnBoneSerpent() {
+        int slot = -1;
+        for (int i = 0; i < MAX_BONE_SERPENT; i++) {
+            if (boneSerpentHead[i] < 0) { slot = i; break; }
+        }
+        if (slot < 0) {
+            return -1;   // 槽位满了：现在最多 4 条并存，足够用了
+        }
+        int wiz = firstWizard();
+        if (wiz < 0) {
+            return -1;
+        }
+        float tx = x[wiz];
+        float ty = y[wiz];
+        float ang = rng.nextFloat() * (float) (Math.PI * 2);
+        float sx = clampCoord(tx + (float) Math.cos(ang) * EnemyStats.SERPENT_SPAWN_DIST);
+        float sy = clampCoord(ty + (float) Math.sin(ang) * EnemyStats.SERPENT_SPAWN_DIST);
+
+        // 给本槽建一个独立的段列表，理论上前一条已经死了（slot=-1 时不会到这）
+        IntList segList = serpentSegsBySlot[slot];
+        if (segList == null) {
+            segList = new IntList(BONE_SERPENT_SEG);
+            serpentSegsBySlot[slot] = segList;
+        } else {
+            segList.clear();
+        }
+        int head = -1;
+        for (int s = 0; s < BONE_SERPENT_SEG; s++) {
+            int id = alloc(KIND_ENEMY, sx + s * EnemyStats.SERPENT_SPACING, sy,
+                    (s == 0) ? EnemyStats.SERPENT_HEAD_RADIUS : EnemyStats.SERPENT_BODY_RADIUS,
+                    TEAM_ENEMY);
+            if (id < 0) {
+                // 池满了：把已分配的段散架
+                for (int p = 0; p < segList.size(); p++) {
+                    despawn(segList.get(p));
+                }
+                segList.clear();
+                boneSerpentHead[slot] = -1;
+                return -1;
+            }
+            // 头一节（s==0）作为 bossId 占位，让 spawnBoneSerpent 与 spawnBoss 天然互斥
+            if (s == 0) {
+                head = id;
+                boneSerpentHead[slot] = head;
+                bossId = head;            // 与大 Boss 互斥的通道
+                bossTier = -2;            // 标记是骨蛇；HUD/阶段逻辑按 bossTier 走
+                bossWarningTimer = 0f;    // 小 Boss 不需要预警圈，直接出现
+                bossSummonTimer = 0f;
+            }
+            variant[id] = V_SERPENT;
+            meta[id] = 0;
+            maxHp[id] = EnemyStats.SERPENT_HP;
+            hp[id] = EnemyStats.SERPENT_HP;
+            speed[id] = EnemyStats.SERPENT_SPEED;
+            dmg[id] = EnemyStats.SERPENT_DMG;
+            cd[id] = 0f;
+            enemyShield[id] = 0f;
+            carry[id] = 0f;
+            summonT[id] = 0f;
+            serpent[id] = head;          // 每一节都指向 head（head 自己 serpent==head）
+            enemiesAlive++;
+            segList.add(id);
+        }
+        return head;
+    }
+
+    /** 当前场上是否有骨蛇存活。大 Boss 优先级仍更高（共用 bossId 通道时只可能有一只） */
+    public boolean serpentActive() {
+        return boneSerpentHead[0] >= 0
+                || boneSerpentHead[1] >= 0
+                || boneSerpentHead[2] >= 0
+                || boneSerpentHead[3] >= 0;
+    }
+
     // ------------------------------------------------------------------
     // 推进
     // ------------------------------------------------------------------
@@ -600,12 +897,20 @@ public final class World {
         updateStatus(dt);
         updateWizards(dt, in);
         updateSummoners(dt);      // 召唤师：到点召唤一批宠物
+        updateEvents(dt);         // 战斗事件：到点触发 + 进度推进 + 完成发经验
         specialPassiveTick(dt);
         director.update(this, dt);
         updateEnemies(dt);
         updateMinions(dt);        // 宠物 AI：护主 / 听指挥 / 拴绳
         if (bossId >= 0) {
             updateBossPhase(dt);  // Boss 阶段技能（预警圈 / 召唤）
+        }
+        // 奶蛙：玩家等级达到 MILKY_LEVEL 时从场地中央刷新，之后走自己的状态机
+        if (!milkySpawned && firstWizard() >= 0 && playerLevel() >= Balance.MILKY_LEVEL) {
+            spawnMilky();
+        }
+        if (milkyId >= 0) {
+            updateMilky(dt);
         }
         castSpells(dt, in);
         updateProjectiles(dt);
@@ -724,6 +1029,165 @@ public final class World {
         }
     }
 
+    // ------------------------------------------------------------------
+    // 战斗事件（小任务）
+    // ------------------------------------------------------------------
+
+    /** 到点触发下一个小任务，并推进当前任务进度；完成后发放经验。 */
+    private void updateEvents(float dt) {
+        if (victory || defeat) {
+            return;
+        }
+        if (eventBannerT > 0f) {
+            eventBannerT -= dt;
+        }
+        // 到点触发：若上一个任务还没做完，则顶掉它（旧实体清理、无奖励），保证节奏不被拖死
+        if (eventType == 0 && eventIndex < Balance.EVENT_TIMES.length
+                && time >= Balance.EVENT_TIMES[eventIndex]) {
+            startEvent(eventIndex);
+            eventIndex++;
+        }
+        if (eventType == 0) {
+            return;
+        }
+
+        int w = firstWizard();
+        if (w < 0) {
+            return;
+        }
+        switch (eventType) {
+            case Balance.EVENT_RIFT -> {
+                float dx = x[w] - eventX;
+                float dy = y[w] - eventY;
+                float d2 = dx * dx + dy * dy;
+                float rr = Balance.RIFT_RADIUS + Balance.WIZARD_RADIUS;
+                if (d2 <= rr * rr) {
+                    eventProgress += dt;
+                }
+                if (eventProgress >= eventGoal) {
+                    completeEvent();
+                }
+            }
+            case Balance.EVENT_STATUE -> {
+                // 雕像被击杀会从 eventIds 里剔除，剩余数量即进度
+                int remain = 0;
+                for (int n = 0; n < eventIds.size(); n++) {
+                    int e = eventIds.get(n);
+                    if (alive[e] && kind[e] == KIND_ENEMY) {
+                        remain++;
+                    }
+                }
+                eventProgress = Balance.STATUE_COUNT - remain;
+                if (remain == 0) {
+                    completeEvent();
+                }
+            }
+            case Balance.EVENT_MUSHROOM -> {
+                if (eventProgress >= eventGoal) {
+                    completeEvent();
+                }
+            }
+            default -> { }
+        }
+    }
+
+    /** 开启第 idx 个事件（下标对齐 Balance.EVENT_TIMES）。 */
+    private void startEvent(int idx) {
+        int w = firstWizard();
+        if (w < 0) {
+            return;
+        }
+        // 事件中心：离玩家一小段距离，避免直接压在玩家脸上
+        float ang = rng.nextFloat() * (float) (Math.PI * 2);
+        float dist = 260f + rng.nextFloat() * 260f;
+        eventX = clampCoord(x[w] + (float) Math.cos(ang) * dist);
+        eventY = clampCoord(y[w] + (float) Math.sin(ang) * dist);
+        eventProgress = 0f;
+        eventIds.clear();
+
+        if (idx == 0) {   // 封印裂隙
+            eventType = Balance.EVENT_RIFT;
+            eventGoal = Balance.RIFT_HOLD_TIME;
+        } else if (idx == 1) {   // 摧毁雕像
+            eventType = Balance.EVENT_STATUE;
+            eventGoal = Balance.STATUE_COUNT;
+            for (int s = 0; s < Balance.STATUE_COUNT; s++) {
+                float a = rng.nextFloat() * (float) (Math.PI * 2);
+                float d = 70f + rng.nextFloat() * 150f;
+                int id = spawnEnemy(clampCoord(eventX + (float) Math.cos(a) * d),
+                        clampCoord(eventY + (float) Math.sin(a) * d), 0, V_STATUE);
+                if (id >= 0) {
+                    eventIds.add(id);
+                }
+            }
+        } else {   // 采集蘑菇
+            eventType = Balance.EVENT_MUSHROOM;
+            eventGoal = Balance.MUSHROOM_COUNT;
+            // 以玩家为圆心撒一圈：事件中心离玩家几百单位，继续围着中心散布的话
+            // 最远的一朵会跑到 900+ 单位外，找齐 8 朵全靠运气。
+            eventX = x[w];
+            eventY = y[w];
+            for (int m = 0; m < Balance.MUSHROOM_COUNT; m++) {
+                // 等分角度 + 抖动：既铺满一圈，又不会几朵挤在一处
+                float a = (float) (Math.PI * 2 * m / Balance.MUSHROOM_COUNT)
+                        + (rng.nextFloat() - 0.5f) * 0.8f;
+                float d = Balance.MUSHROOM_SPAWN_MIN
+                        + rng.nextFloat() * (Balance.MUSHROOM_SPAWN_MAX - Balance.MUSHROOM_SPAWN_MIN);
+                int id = spawnMushroom(clampCoord(eventX + (float) Math.cos(a) * d),
+                        clampCoord(eventY + (float) Math.sin(a) * d));
+                if (id >= 0) {
+                    eventIds.add(id);
+                }
+            }
+        }
+    }
+
+    /** 完成任务：清场 + 发经验 + 横幅提示。 */
+    private void completeEvent() {
+        if (eventType == 0) {
+            return;
+        }
+        // 清理事件实体（蘑菇/雕像），裂隙无实体
+        for (int n = 0; n < eventIds.size(); n++) {
+            int e = eventIds.get(n);
+            if (alive[e] && (kind[e] == KIND_ENEMY || kind[e] == KIND_PICKUP)) {
+                despawn(e);
+            }
+        }
+        eventIds.clear();
+        // 发经验：所有存活玩家（当前是单主控，但写通用点没坏处）
+        for (int n = 0; n < wizards.size(); n++) {
+            int id = wizards.get(n);
+            if (!alive[id] || loadout[id] == null) {
+                continue;
+            }
+            Loadout lo = loadout[id];
+            float mul = Balance.EVENT_XP_MUL[eventIndex - 1 < 0 ? 0 : eventIndex - 1];
+            lo.gainXp(Loadout.xpForLevel(lo.level) * mul);
+        }
+        eventCompleted++;
+        eventBannerT = 3.5f;
+        eventType = 0;
+        eventProgress = 0f;
+        eventGoal = 0f;
+    }
+
+    /** 暂停菜单「退出结算」：主动结束本局，冻结战报（标题与阵亡区分）。 */
+    public void abandon() {
+        if (victory || defeat || abandoned) {
+            return;
+        }
+        abandoned = true;
+        summary = snapshot(false, true, firstWizard());
+    }
+
+    /** 采集一朵蘑菇：由 updatePickups 在玩家拾取时回调，推进蘑菇事件进度。 */
+    private void takeMushroom() {
+        if (eventType == Balance.EVENT_MUSHROOM) {
+            eventProgress++;
+        }
+    }
+
     /** 元素状态的持续效果：燃烧跳伤害、到期清除。冰霜与雷电是被动修正，在读取处生效 */
     private void updateStatus(float dt) {
         // 每帧算一次就够，别在上千实体的循环里反复调 exp
@@ -826,6 +1290,24 @@ public final class World {
             }
             if (v == V_RANGED) {
                 updateRanged(i, dt);
+                continue;
+            }
+            if (v == V_STATUE) {
+                // 战斗事件「摧毁雕像」：不移动、不攻击，纯靶子
+                continue;
+            }
+            if (v == V_SERPENT) {
+                // 骨蛇：只在头节点（serpent[i] == i）调度一次整蛇更新，
+                // 身体/尾巴走 updateBoneSerpent 内的 context 跳过
+                if (serpent[i] == i) {
+                    int slot = -1;
+                    for (int s2 = 0; s2 < MAX_BONE_SERPENT; s2++) {
+                        if (boneSerpentHead[s2] == i) { slot = s2; break; }
+                    }
+                    if (slot >= 0) {
+                        updateBoneSerpent(slot, dt);
+                    }
+                }
                 continue;
             }
             // 其余（普通 / 精英 / 分裂 / Boss）走下方通用追击 + 接触伤害
@@ -1045,6 +1527,135 @@ public final class World {
     }
 
     // ------------------------------------------------------------------
+    // 5 关 Boss：奶蛙
+    // ------------------------------------------------------------------
+
+    /** 在场地中央生成奶蛙。属性取 Balance.MILKY_*，不带护盾。 */
+    private void spawnMilky() {
+        int id = spawnEnemy(0f, 0f, 0, V_BOSS);
+        if (id < 0) {
+            return;
+        }
+        maxHp[id] = Balance.MILKY_HP;
+        hp[id] = maxHp[id];
+        speed[id] = Balance.MILKY_SPEED;
+        r[id] = Balance.MILKY_RADIUS;
+        dmg[id] = Balance.MILKY_DMG;
+        enemyShield[id] = 0f;
+        milkyId = id;
+        milkySpawned = true;
+        milkyStompCd = Balance.MILKY_STOMP_CD;
+        milkyLaughCd = Balance.MILKY_LAUGH_CD;
+        milkyCast = 0;
+        milkyCastT = 0f;
+        milkyFaceRight = true;
+        milkyMirror = false;
+    }
+
+    /**
+     * 奶蛙行为：靠近玩家才起手；施法期间原地不动。
+     * 技能一「蓄力踩地」→ 朝玩家所在侧的半圆，伤害 50；
+     * 技能二「捧腹大笑」→ 半血以下才用，圆形大范围伤害 100，频率低。
+     * 未施法时的追击由通用 updateEnemies 按 speed 驱动。
+     */
+    private void updateMilky(float dt) {
+        int m = milkyId;
+        if (!alive[m]) {
+            milkyId = -1;
+            return;
+        }
+        int w = firstWizard();
+        if (w < 0) {
+            return;
+        }
+        float dx = x[w] - x[m];
+        float dy = y[w] - y[m];
+        milkyFaceRight = dx >= 0f;
+
+        if (milkyStompCd > 0f) {
+            milkyStompCd -= dt;
+        }
+        if (milkyLaughCd > 0f) {
+            milkyLaughCd -= dt;
+        }
+
+        if (milkyCast != 0) {
+            speed[m] = 0f;      // 释放技能期间无法移动
+            dmg[m] = 0f;        // 施法中也不造成接触伤害
+            milkyCastT += dt;
+            float dur = (milkyCast == 2) ? Balance.MILKY_LAUGH_CAST : Balance.MILKY_STOMP_CAST;
+            if (milkyCastT >= dur) {
+                if (milkyCast == 2) {
+                    damagePlayersInRadius(x[m], y[m], Balance.MILKY_LAUGH_RANGE,
+                            Balance.MILKY_LAUGH_DMG);
+                    milkyLaughCd = Balance.MILKY_LAUGH_CD;
+                } else {
+                    damagePlayersInSemicircle(x[m], y[m], Balance.MILKY_STOMP_RANGE,
+                            Balance.MILKY_STOMP_DMG, milkyFaceRight ? 1 : -1);
+                    milkyStompCd = Balance.MILKY_STOMP_CD;
+                }
+                milkyCast = 0;
+                milkyCastT = 0f;
+            }
+            return;
+        }
+
+        speed[m] = Balance.MILKY_SPEED;
+        dmg[m] = Balance.MILKY_DMG;
+
+        boolean near = dx * dx + dy * dy
+                <= Balance.MILKY_TRIGGER_RANGE * Balance.MILKY_TRIGGER_RANGE;
+        if (!near) {
+            return;
+        }
+        boolean half = hp[m] <= maxHp[m] * Balance.MILKY_LAUGH_HP;
+        if (half && milkyLaughCd <= 0f) {
+            milkyCast = 2;
+            milkyCastT = 0f;
+        } else if (milkyStompCd <= 0f) {
+            milkyCast = 1;
+            milkyCastT = 0f;
+            milkyMirror = !milkyFaceRight;   // 玩家在左侧 → 用镜像动画
+        }
+    }
+
+    /** 半圆范围伤害：side>=0 打右半侧，side<0 打左半侧（圆心 ex,ey） */
+    private void damagePlayersInSemicircle(float ex, float ey, float radius, float dmg, int side) {
+        for (int n = 0; n < wizards.size(); n++) {
+            int wz = wizards.get(n);
+            if (!alive[wz]) {
+                continue;
+            }
+            float dx = x[wz] - ex;
+            float dy = y[wz] - ey;
+            if (side >= 0 ? dx < 0f : dx > 0f) {
+                continue;
+            }
+            float rr = radius + r[wz];
+            if (dx * dx + dy * dy <= rr * rr && iframe[wz] <= 0f) {
+                damage(wz, dmg);
+                iframe[wz] = heroIframe(wz);
+            }
+        }
+        for (int n = 0; n < minions.size(); n++) {
+            int mi = minions.get(n);
+            if (!alive[mi]) {
+                continue;
+            }
+            float dx = x[mi] - ex;
+            float dy = y[mi] - ey;
+            if (side >= 0 ? dx < 0f : dx > 0f) {
+                continue;
+            }
+            float rr = radius + r[mi];
+            if (dx * dx + dy * dy <= rr * rr && iframe[mi] <= 0f) {
+                damage(mi, dmg);
+                iframe[mi] = Balance.MINION_IFRAME;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
     // 召唤物（召唤师的宠物）
     // ------------------------------------------------------------------
 
@@ -1247,7 +1858,7 @@ public final class World {
     }
 
     /** 玩家的"可攻击目标"：本体 + 宠物。宠物挡在路上就会被怪优先啃（护主的实质） */
-    private int nearestPlayerUnit(float sx, float sy) {
+    public int nearestPlayerUnit(float sx, float sy) {
         int best = -1;
         float bestScore = Float.MAX_VALUE;
         for (int n = 0; n < wizards.size(); n++) {
@@ -1287,7 +1898,8 @@ public final class World {
     }
 
     /** 把实体推出与之重叠的障碍物（玩家与敌人共用） */
-    private void resolveObstacles(int id) {
+    /** 与障碍做一次碰撞推出。public 是为了让 BoneSerpent 这类外部 AI 模块能复用 */
+    public void resolveObstacles(int id) {
         obstacleHash.query(x[id], y[id], r[id] + Balance.OBSTACLE_MAX_R, scratch2);
         for (int n = 0; n < scratch2.size(); n++) {
             int o = scratch2.get(n);
@@ -1307,8 +1919,8 @@ public final class World {
         }
     }
 
-    /** 把实体钳制在可玩区内（城墙内侧边缘，玩家 / 敌人共用） */
-    private void clampToWorld(int id) {
+    /** 把实体钳制在可玩区内（城墙内侧边缘，玩家 / 敌人共用）。public：见上 */
+    public void clampToWorld(int id) {
         float h = Balance.PLAY_HALF;
         if (x[id] < -h) {
             x[id] = -h;
@@ -1322,8 +1934,8 @@ public final class World {
         }
     }
 
-    /** 玩家受击无敌帧：按职业取基础值 + 灵巧被动加成 */
-    private float heroIframe(int wid) {
+    /** 玩家受击无敌帧：按职业取基础值 + 灵巧被动加成。public：BoneSerpent.bite() 复用 */
+    public float heroIframe(int wid) {
         Loadout lo = loadout[wid];
         int ck = (lo != null) ? lo.classKind : HeroClass.WIZARD;
         float add = (lo != null && lo.stats != null) ? lo.stats.iframeAdd : 0f;
@@ -1821,7 +2433,10 @@ public final class World {
                 continue;
             }
             Loadout lo = loadout[nearest];
-            float radius = Balance.PICKUP_RADIUS * (lo != null ? lo.stats.pickupMul : 1f);
+            // 蘑菇的吸附范围单独放宽（任务道具，不该考验走位精度），其余拾取物沿用宝石半径
+            boolean isMushroom = (meta[i] == PICKUP_MUSHROOM);
+            float base = isMushroom ? Balance.MUSHROOM_PICKUP_RADIUS : Balance.PICKUP_RADIUS;
+            float radius = base * (lo != null ? lo.stats.pickupMul : 1f);
             if (bestD2 <= radius * radius) {
                 // 进入拾取范围：吸附
                 float d = (float) Math.sqrt(bestD2);
@@ -1838,11 +2453,17 @@ public final class World {
             y[i] += vy[i] * dt;
             // 拾取判定：足够近就吸收
             if (bestD2 <= (r[i] + Balance.WIZARD_RADIUS) * (r[i] + Balance.WIZARD_RADIUS)) {
-                if (meta[i] == 1) {
+                if (meta[i] == PICKUP_CHEST) {
                     // 宝箱：直接给一次升级
                     if (lo != null) {
                         lo.gainXp(Loadout.xpForLevel(lo.level) - lo.xp + 1);
                     }
+                } else if (meta[i] == PICKUP_MUSHROOM) {
+                    // 蘑菇：给少量经验并推进「采集蘑菇」事件进度
+                    if (lo != null) {
+                        lo.gainXp(dmg[i]);
+                    }
+                    takeMushroom();
                 } else if (lo != null) {
                     lo.gainXp(dmg[i]);
                 }
@@ -2228,7 +2849,15 @@ public final class World {
             }
             // Boss 不回收：它移速（52）远低于玩家（195），跑远了就被删掉的话
             // Boss 战会莫名其妙自己结束。由 updateBossPhase 负责它的生命周期。
-            if (i == bossId) {
+            if (i == bossId || i == milkyId) {
+                continue;
+            }
+            // 雕像事件靶子不回收：玩家跑远了任务就永远完不成
+            if (variant[i] == V_STATUE) {
+                continue;
+            }
+            // 骨蛇的每一节都不回收：尾巴被判出局的话，蛇会自己掉尾巴
+            if (variant[i] == V_SERPENT) {
                 continue;
             }
             float dx = x[i] - wx;
@@ -2290,8 +2919,8 @@ public final class World {
         return best;
     }
 
-    /** 第一个活着玩家的 id。WaveDirector 也要用，做成包级可见 */
-    int firstWizard() {
+    /** 第一个活着玩家的 id。WaveDirector 与客户端冒烟参数注入都要用，提升为 public */
+    public int firstWizard() {
         for (int n = 0; n < wizards.size(); n++) {
             int w = wizards.get(n);
             if (alive[w]) {
@@ -2339,6 +2968,13 @@ public final class World {
     public void damage(int id, float amount) {
         if (id < 0 || !alive[id] || amount <= 0f) {
             return;
+        }
+        // 骨蛇：所有节共享一个血池，统一扣在头上。身体挨打也算血
+        if (kind[id] == KIND_ENEMY && variant[id] == V_SERPENT && serpent[id] >= 0 && serpent[id] != id) {
+            id = serpent[id];
+            if (id < 0 || !alive[id]) {
+                return;
+            }
         }
         // 附着雷电的目标更脆
         float amt = (elem[id] == Element.SHOCK)
@@ -2415,6 +3051,57 @@ public final class World {
         return time;
     }
 
+    // ---- 5 关 Boss 奶蛙（客户端渲染 / 音乐用） ----
+
+    /** 冒烟 / 调试用：立即刷新奶蛙（忽略等级条件） */
+    public void forceSpawnMilky() {
+        if (!milkySpawned) {
+            spawnMilky();
+        }
+    }
+
+    /** 奶蛙实体 id；-1 表示不在场 */
+    public int milkyId() {
+        return milkyId;
+    }
+
+    /** 奶蛙是否在场且存活 */
+    public boolean milkyAlive() {
+        return milkyId >= 0 && alive[milkyId];
+    }
+
+    /** 奶蛙施法状态：0=移动/待机，1=蓄力踩地，2=捧腹大笑 */
+    public int milkyCast() {
+        return milkyCast;
+    }
+
+    /** 当前施法已进行时间 / 总时长（渲染动画进度用） */
+    public float milkyCastT() {
+        return milkyCastT;
+    }
+
+    public float milkyCastDur() {
+        return (milkyCast == 2) ? Balance.MILKY_LAUGH_CAST : Balance.MILKY_STOMP_CAST;
+    }
+
+    /** true=奶蛙朝右（决定用哪套行走动画） */
+    public boolean milkyFaceRight() {
+        return milkyFaceRight;
+    }
+
+    /** 踩地动画是否用镜像版（玩家在左侧时为 true） */
+    public boolean milkyMirror() {
+        return milkyMirror;
+    }
+
+    public float milkyX() {
+        return milkyId >= 0 ? x[milkyId] : 0f;
+    }
+
+    public float milkyY() {
+        return milkyId >= 0 ? y[milkyId] : 0f;
+    }
+
     public int enemyCount() {
         return enemiesAlive;
     }
@@ -2462,7 +3149,7 @@ public final class World {
         return bossId;
     }
 
-    /** 是否已击败最终 Boss（胜利判定）。一旦置位不会复位 */
+    /** 是否已击败奶蛙 Boss（胜利判定）。一旦置位不会复位 */
     public boolean victory() {
         return victory;
     }
@@ -2591,6 +3278,8 @@ public final class World {
      */
     public static final class Summary {
         public final boolean victory;
+        /** true = 玩家从暂停菜单「退出结算」主动结束（标题与阵亡区分） */
+        public final boolean abandoned;
         public final float time;
         public final int level;
         /** 小怪击杀数（已扣除 Boss） */
@@ -2600,16 +3289,20 @@ public final class World {
         public final int spells;
         /** 被动总层数 */
         public final int passives;
+        /** 本局完成的小任务数（共 3） */
+        public final int events;
 
-        Summary(boolean victory, float time, int level, int minionKills,
-                int bossKills, int spells, int passives) {
+        Summary(boolean victory, boolean abandoned, float time, int level, int minionKills,
+                int bossKills, int spells, int passives, int events) {
             this.victory = victory;
+            this.abandoned = abandoned;
             this.time = time;
             this.level = level;
             this.minionKills = minionKills;
             this.bossKills = bossKills;
             this.spells = spells;
             this.passives = passives;
+            this.events = events;
         }
     }
 
@@ -2618,7 +3311,7 @@ public final class World {
      * wid 必须显式传入：阵亡快照是在 kill() 里取的，那时 alive 已置 false，
      * firstWizard() 会返回 -1，拿不到 Loadout。
      */
-    private Summary snapshot(boolean won, int wid) {
+    private Summary snapshot(boolean won, boolean aband, int wid) {
         Loadout lo = (wid >= 0) ? loadout[wid] : null;
         int lv = (lo != null) ? lo.level : 0;
         int sp = (lo != null) ? lo.activeCount() : 0;
@@ -2628,12 +3321,67 @@ public final class World {
                 pas += lo.pstacks.get(i);
             }
         }
-        return new Summary(won, time, lv, kills - bossKills, bossKills, sp, pas);
+        return new Summary(won, aband, time, lv, kills - bossKills, bossKills, sp, pas,
+                eventCompleted);
     }
 
     /** 主控玩家是否已阵亡。客户端据此冻结模拟并弹结算画面 */
     public boolean defeat() {
         return defeat;
+    }
+
+    /** 玩家是否从暂停菜单主动退出（「退出结算」）。与阵亡同屏展示战报，但标题不同 */
+    public boolean abandoned() {
+        return abandoned;
+    }
+
+    // ---- 战斗事件（小任务）只读访问器 ----
+    /** 当前事件类型：Balance.EVENT_RIFT / EVENT_STATUE / EVENT_MUSHROOM，0=无 */
+    public int eventType() {
+        return eventType;
+    }
+
+    /** 当前事件进度（裂隙=已坚持秒；雕像=已摧毁数；蘑菇=已采集数） */
+    public float eventProgress() {
+        return eventProgress;
+    }
+
+    /** 当前事件目标值 */
+    public float eventGoal() {
+        return eventGoal;
+    }
+
+    /** 事件区域中心坐标（裂隙圈圆心 / 雕像与蘑菇散布中心） */
+    public float eventX() {
+        return eventX;
+    }
+
+    public float eventY() {
+        return eventY;
+    }
+
+    /** 「任务完成 +经验」横幅剩余显示秒数（>0 显示） */
+    public float eventBannerT() {
+        return eventBannerT;
+    }
+
+    /** 本局已完成的小任务数 */
+    public int eventCompletedCount() {
+        return eventCompleted;
+    }
+
+    /** 当前事件名字（无事件时返回空串） */
+    public String eventName() {
+        if (eventType == Balance.EVENT_RIFT) {
+            return Balance.EVENT_NAMES[0];
+        }
+        if (eventType == Balance.EVENT_STATUE) {
+            return Balance.EVENT_NAMES[1];
+        }
+        if (eventType == Balance.EVENT_MUSHROOM) {
+            return Balance.EVENT_NAMES[2];
+        }
+        return "";
     }
 
     /** 本局击败的 Boss 数量 */

@@ -85,6 +85,8 @@ public final class GameApp extends Application {
     private boolean mouseDown;
     /** ESC 手动暂停（战斗阶段） */
     private boolean manualPause;
+    /** 奶蛙 BGM 是否正在播放（用于检测奶蛙出场/消失的瞬间起停音乐） */
+    private boolean bossMusicOn;
 
     @Override
     public void start(Stage stage) {
@@ -142,15 +144,15 @@ public final class GameApp extends Application {
                 return;
             }
             pressed.add(e.getCode());
-            // 战斗阶段：ESC 手动暂停；R 键在胜利/阵亡后重开，在升级面板弹出时重抽
+            // 战斗阶段：ESC 手动暂停；R 键在胜利/阵亡/退出结算后重开，在升级面板弹出时重抽
             if (e.getCode() == KeyCode.ESCAPE) {
-                if (!world.victory() && !world.defeat()) {
+                if (!world.victory() && !world.defeat() && !world.abandoned()) {
                     manualPause = !manualPause;
                 }
                 return;
             }
             if (e.getCode() == KeyCode.R) {
-                if (world.victory() || world.defeat()) {
+                if (world.victory() || world.defeat() || world.abandoned()) {
                     restart();
                     return;
                 }
@@ -308,12 +310,28 @@ public final class GameApp extends Application {
                 }
             }
             beginGame(pick);
+            if (System.getProperty("ab.milky") != null) {
+                world.forceSpawnMilky();   // 覆盖奶蛙动画 / 技能 / 血条路径
+            }
             String bt = System.getProperty("ab.boss");
             if (bt != null && !bt.isBlank()) {
                 int tier = Integer.parseInt(bt);
                 if (tier >= 0 && tier < 4) {
                     world.spawnBoss(tier);
                 }
+            }
+            // -Dab.level=N 直接把主控玩家等级拉到 N，用于覆盖骨蛇登场后的渲染路径
+            String lvl = System.getProperty("ab.level");
+            if (lvl != null && !lvl.isBlank()) {
+                int target = Integer.parseInt(lvl);
+                int wid = world.firstWizard();
+                com.arcanebrigade.core.Loadout lo = world.loadout(wid);
+                if (lo != null) {
+                    lo.level = target;
+                }
+                // 同时把血撑满：跑长时间冒烟时被骨蛇咬死会提前进结算，看不到骨蛇
+                world.maxHp[wid] = 99999f;
+                world.hp[wid] = 99999f;
             }
         }
 
@@ -387,8 +405,26 @@ public final class GameApp extends Application {
                 // ---- 正式战斗阶段（逻辑推进与画面刷新解耦） ----
                 renderer.setMouse(mouseX, mouseY);
 
+                // 奶蛙 BGM：在场时循环播放，血量归零消失/重开一局时停止。
+                // 奶蛙优先级高于战斗槽——出场时战斗曲让位，倒下后自动恢复（见 GameAudio）。
+                boolean milkyNow = world.milkyAlive();
+                if (milkyNow != bossMusicOn) {
+                    bossMusicOn = milkyNow;
+                    if (milkyNow) {
+                        GameAudio.startBossBgm();
+                    } else {
+                        GameAudio.stopBossBgm();
+                    }
+                }
+
+                // 战斗 BGM 跟着 Boss 走：Boss 在场放它专属的登场音乐，Boss 倒下换回普通战斗曲。
+                // setBattleMusic 内部只在曲目变化时才重起播放器，逐帧调用无额外开销；
+                // 奶蛙曲在播时它只记录不抢占（奶蛙优先）。
+                GameAudio.setBattleMusic(world.bossTier());
+
                 // 胜利：冻结模拟，罩层结算。模拟一旦停了就不再推进，直到按 R 重开
                 if (world.victory()) {
+                    GameAudio.stopBattleBgm();   // 通关：让位给结算画面，不再循环战斗曲
                     renderer.setFps(fps[0]);
                     renderer.draw(world, 0f);
                     renderer.drawVictory(world, canvas.getWidth(), canvas.getHeight());
@@ -399,14 +435,15 @@ public final class GameApp extends Application {
                     return;
                 }
 
-                // 阵亡：同样冻结模拟，弹结算战报，点「继续」或按 R 回大厅。
+                // 阵亡 / 主动退出结算：同样冻结模拟，弹结算战报，点「继续」或按 R 回大厅。
                 // 之前玩家倒下后没有任何终局状态，游戏会一直空转却永远不结束。
-                if (world.defeat()) {
+                if (world.defeat() || world.abandoned()) {
+                    GameAudio.stopBattleBgm();   // 结算：冻结模拟时不再放战斗曲
                     renderer.setFps(fps[0]);
                     renderer.draw(world, 0f);
                     renderer.drawDefeatOverlay(world, canvas.getWidth(), canvas.getHeight());
                     if (smokeFrames > 0 && ++renderedFrames >= smokeFrames) {
-                        System.out.printf("[smoke] 阵亡结算，渲染 %d 帧完成，退出%n", renderedFrames);
+                        System.out.printf("[smoke] 结算画面，渲染 %d 帧完成，退出%n", renderedFrames);
                         Platform.exit();
                     }
                     return;
@@ -471,6 +508,7 @@ public final class GameApp extends Application {
         cardReveal = 0;
         GameAudio.stopMenuBgm();        // 离开主界面
         GameAudio.startLobbyBgm();      // 大厅主音乐循环
+        GameAudio.stopBattleBgm();      // 从战斗退回大厅（阵亡结算 / 重开）时收掉战斗曲
         pressed.clear();
     }
 
@@ -735,7 +773,8 @@ public final class GameApp extends Application {
         manualPause = false;
         closeDetail();    // 进战斗前也清一次（防御性）
         GameAudio.stopMenuBgm();  // 出征 / 战斗冒烟都离开主界面
-        GameAudio.stopLobbyBgm(); // 战斗中暂时没有 BGM
+        GameAudio.stopLobbyBgm(); // 出大厅，交棒给战斗 BGM
+        GameAudio.setBattleMusic(-1);   // 开局先上普通战斗曲，Boss 登场时自动换它的曲
         pressed.clear();
     }
 
@@ -763,8 +802,8 @@ public final class GameApp extends Application {
         double vw = renderer.getCanvasWidth();
         double vh = renderer.getCanvasHeight();
 
-        // 1) 阵亡结算：右下角「继续」回到准备大厅
-        if (world.defeat()) {
+        // 1) 阵亡 / 退出结算：右下角「继续」回到准备大厅
+        if (world.defeat() || world.abandoned()) {
             if (hit(Renderer.continueButtonRect(vw, vh), mx, my)) {
                 restart();
             }
@@ -774,18 +813,32 @@ public final class GameApp extends Application {
             return;                      // 胜利画面只认 R 键
         }
 
-        // 2) HUD 按钮：开火模式切换（自动 / 手动）
+        // 2) 手动暂停菜单：「继续战斗」/「退出结算」
+        if (manualPause) {
+            if (hit(Renderer.pauseResumeRect(vw, vh), mx, my)) {
+                manualPause = false;
+                return;
+            }
+            if (hit(Renderer.pauseQuitRect(vw, vh), mx, my)) {
+                world.abandon();          // 主动结束本局 → 结算画面 → 继续回大厅
+                manualPause = false;
+                return;
+            }
+            return;                       // 暂停菜单内点击其它区域不响应
+        }
+
+        // 3) HUD 按钮：开火模式切换（自动 / 手动）
         if (hit(Renderer.fireButtonRect(vw, vh), mx, my)) {
             world.setAutoFire(!world.isAutoFire());
             return;
         }
-        // 3) HUD 按钮：暂停 / 继续
+        // 4) HUD 按钮：暂停 / 继续
         if (hit(Renderer.pauseButtonRect(vw, vh), mx, my)) {
             manualPause = !manualPause;
             return;
         }
 
-        // 4) 升级三选一
+        // 5) 升级三选一
         if (world.wizardCount() == 0) {
             return;
         }
