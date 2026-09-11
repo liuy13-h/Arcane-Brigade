@@ -456,7 +456,7 @@ public final class GameApp extends Application {
     }
 
     /**
-     * 主界面点击：无覆盖层时命中底部五个菜单按钮；覆盖层内「设置」走专用逻辑，
+     * 主界面点击：无覆盖层时命中底部四个菜单按钮；覆盖层内「设置」走专用逻辑，
      * 其余覆盖层只认「返回」钮。
      */
     private void handleTitleClick(double mx, double my) {
@@ -465,10 +465,9 @@ public final class GameApp extends Application {
         if (overlay == Renderer.OVER_NONE) {
             switch (Renderer.menuHit(mx, my, vw, vh)) {
                 case 0 -> enterLobby();                     // 开始游戏 → 准备大厅
-                case 1 -> overlay = Renderer.OVER_MULTI;    // 多人联机（开发中占位）
-                case 2 -> overlay = Renderer.OVER_SETTINGS; // 设置
-                case 3 -> overlay = Renderer.OVER_HELP;     // 操作说明
-                case 4 -> Platform.exit();                  // 退出游戏
+                case 1 -> overlay = Renderer.OVER_SETTINGS; // 设置
+                case 2 -> overlay = Renderer.OVER_HELP;     // 操作说明
+                case 3 -> Platform.exit();                  // 退出游戏
                 default -> { /* 空白区不响应 */ }
             }
             return;
