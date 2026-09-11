@@ -11,6 +11,9 @@ public enum ArenaMap {
                     capsule(-190, 25, 62, 38, 0),
                     box(205, -100, 45, 32, 1),
                     // 延展节点的掩体：只落在战斗台地，保证沙漠仍以大范围拉扯为主。
+                    // 核心外环与南侧战区也放置真实掩体；所有可见的大型石体都拥有同一份底座碰撞。
+                    worldCapsule(-360, -560, 105, 42, 20), worldCircle(440, 610, 64, 20),
+                    worldBox(800, 680, 45, 92, 21),
                     worldCapsule(1_250, 690, 115, 48, 20), worldCircle(1_770, 670, 58, 20),
                     worldBox(2_250, 900, 50, 140, 21), worldCapsule(3_580, 970, 170, 45, 22)
             },
@@ -18,10 +21,15 @@ public enum ArenaMap {
                     // 流沙负责持续减速；沙尘喷口才是短促、可预判的伤害机关。
                     t(-210, 40, 68, 0.80f, 0.35f, 0.75f, 3.0f, 12f, 0),
                     t(260, -5, 68, 0.80f, 0.35f, 0.75f, 3.0f, 12f, 0),
+                    // 外环只是轻度压迫，仍留下大范围绕行与撤退空间。
+                    worldTrap(-220, -560, 54, 0.90f, 0.35f, 0.70f, 3.4f, 10f, 0),
+                    worldTrap(720, 580, 58, 0.85f, 0.35f, 0.75f, 3.2f, 12f, 0),
                     worldTrap(1_500, 320, 62, 0.85f, 0.35f, 0.75f, 3.2f, 12f, 0)
             },
             new Terrain[] {
                     terrain("流沙", -210, 40, 94, 0.68f, 0), terrain("流沙", 260, -5, 94, 0.68f, 0),
+                    worldTerrain("风蚀缓沙", -220, -560, 100, 0.84f, 0),
+                    worldTerrain("流沙", 420, 620, 130, 0.74f, 0),
                     worldTerrain("流沙", 1_480, 700, 130, 0.70f, 0)
             },
             desertNodes(), desertRoutes()),
@@ -280,6 +288,9 @@ public enum ArenaMap {
     private static ExpeditionNode[] desertNodes() {
         return new ExpeditionNode[] {
                 n("遗迹前庭", ExpeditionRole.CORE, 0, 0, 760, 410),
+                // 两块外环与核心宽重叠：玩家可从上、下两侧自然进出，不再只有一个勉强的门洞。
+                n("北侧风蚀外环", ExpeditionRole.TRANSITION, -80, -560, 720, 260),
+                n("南侧流沙战区", ExpeditionRole.COMBAT, 360, 620, 920, 360),
                 n("风蚀断墙", ExpeditionRole.TRANSITION, 1_050, 0, 340, 190),
                 n("沙丘遭遇区", ExpeditionRole.COMBAT, 1_480, 520, 550, 410),
                 n("流沙宝藏", ExpeditionRole.REWARD, 780, 1_050, 360, 270),

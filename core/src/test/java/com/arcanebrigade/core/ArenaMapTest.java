@@ -27,6 +27,19 @@ public final class ArenaMapTest {
             }
             check(hasBoss && !map.isWalkable(map.halfWidth() - 50f, map.halfHeight() - 50f, Balance.WIZARD_RADIUS),
                     map + " must use a route mask rather than a larger rectangular room");
+            if (map == ArenaMap.DESERT_RUINS) {
+                check(map.isWalkable(0f, -350f, Balance.WIZARD_RADIUS)
+                                && map.isWalkable(-80f, -560f, Balance.WIZARD_RADIUS)
+                                && map.isWalkable(360f, 500f, Balance.WIZARD_RADIUS)
+                                && map.isWalkable(360f, 620f, Balance.WIZARD_RADIUS),
+                        "desert core must connect to its north and south exterior battle terrain without a hidden wall");
+                check(map.nodeAt(-80f, -560f) != null && map.nodeAt(360f, 620f) != null,
+                        "desert exterior must be real expedition nodes rather than a decorative backdrop");
+                assertDesertExteriorTravel(-1f, -500f,
+                        "player must be able to walk from the core into the north exterior ring");
+                assertDesertExteriorTravel(1f, 550f,
+                        "player must be able to walk from the core into the south exterior battle zone");
+            }
 
             World spawnCheck = new World(73L, map);
             spawnCheck.spawnWizard(0f, 0f, HeroClass.WIZARD);
@@ -123,6 +136,19 @@ public final class ArenaMapTest {
             if (obstacle.shape() == shape) return true;
         }
         return false;
+    }
+
+    /** Verifies actual World movement, rather than only asking the route mask whether a point is valid. */
+    private static void assertDesertExteriorTravel(float dy, float destinationY, String message) {
+        World travel = new World(97L, ArenaMap.DESERT_RUINS);
+        int traveler = travel.spawnWizard(0f, 0f, HeroClass.WIZARD);
+        InputCommand move = new InputCommand();
+        move.set(0f, dy);
+        for (int frame = 0; frame < 320; frame++) {
+            travel.step(Balance.FIXED_STEP, move);
+        }
+        check(dy < 0f ? travel.y[traveler] <= destinationY : travel.y[traveler] >= destinationY,
+                message + "; stopped at y=" + travel.y[traveler]);
     }
 
     private static void assertFourTrapStages(ArenaMap map, ArenaMap.Trap trap) {

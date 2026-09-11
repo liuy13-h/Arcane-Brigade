@@ -132,7 +132,10 @@ public final class Renderer {
         // 先铺整条蛇形战区，再把原始 PNG 作为起始核心区叠入；离开核心后不会露出矩形底图边缘或空白。
         drawExpeditionGround(w, vw, vh, pal);
         // 原始 PNG 只承担起始核心的美术记忆；进入后续节点后不再把它的矩形边缘带进视野。
-        boolean showCoreArt = Math.abs(camX) < 900f && Math.abs(camY) < 560f;
+        // 荒漠遗迹已不再是“旧 PNG 房间 + 外侧背景”：核心和外环共用连续地表与实体掩体。
+        // 熔岩 / 墓室仍保留原图核心，后续会采用同一套整合流程。
+        boolean showCoreArt = w.arenaMap() != ArenaMap.DESERT_RUINS
+                && Math.abs(camX) < 900f && Math.abs(camY) < 560f;
         if (battleMap != null && showCoreArt) {
             // 原始地图仍是核心节点，但以略微融合的方式接到程序化延展地表上。
             double left = camX - vw / 2;
@@ -146,7 +149,6 @@ public final class Renderer {
             gc.setGlobalAlpha(1.0);
             gc.setFill(Color.color(0.02, 0.02, 0.05, 0.12));
             gc.fillRect(0, 0, vw, vh);
-            drawCoreRouteIntegration(w, left, top, pal);
         } else if (battleMap == null) {
             drawObstacles(w, alpha, vw, vh);
         }
@@ -306,9 +308,7 @@ public final class Renderer {
         gc.setFill(map == ArenaMap.DESERT_RUINS ? pal[2].deriveColor(0, 0.84, 0.86, 1) : pal[0]);
         gc.fillRect(0, 0, vw, vh);
         if (map == ArenaMap.DESERT_RUINS) {
-            drawDesertGroundTexture(left, top, vw, vh);
-            gc.setFill(Color.color(0.16, 0.075, 0.03, 0.28));
-            gc.fillRect(0, 0, vw, vh);
+            drawDesertGroundMaterial(left, top, vw, vh, pal);
             drawDesertOuterDunes(left, top, vw, vh, pal);
         }
 
@@ -360,60 +360,48 @@ public final class Renderer {
     }
 
     /**
-     * 荒漠核心与第一段断墙之间的“可见出口”。它只覆盖路线地表，不新增任何阻挡，
-     * 因而玩家从原图迈入扩展区时看到的通道和真实可走路线完全一致。
+     * 无缝的世界坐标沙地：不再平铺一张带边缘的位图，因而镜头移动不会露出“内区/外区”接缝。
+     * 所有起伏、风纹和碎屑仅是地表材质，不具备实体碰撞，真实阻挡仍完全来自 ArenaMap 的障碍数据。
      */
-    private void drawCoreRouteIntegration(World w, double left, double top, Color[] pal) {
-        if (w.arenaMap() != ArenaMap.DESERT_RUINS) {
-            return;
+    private void drawDesertGroundMaterial(double left, double top, double vw, double vh, Color[] pal) {
+        final int band = 360;
+        int bandStart = (int) Math.floor((top - band) / band);
+        int bandEnd = (int) Math.floor((top + vh + band) / band);
+        for (int row = bandStart; row <= bandEnd; row++) {
+            long h = hash2(71, row);
+            double y = row * band + ((h >>> 8) % 104) - 52 - top;
+            double height = 48 + ((h >>> 18) % 52);
+            gc.setFill(pal[3].deriveColor(0, 0.92, 0.88, 0.16));
+            gc.fillRoundRect(-180, y, vw + 360, height, height, height);
+            gc.setStroke(pal[5].deriveColor(0, 1.04, 1.06, 0.20));
+            gc.setLineWidth(1.6);
+            gc.strokeArc(-110, y - height * 0.42, vw + 220, height * 1.55,
+                    196, 148, javafx.scene.shape.ArcType.OPEN);
         }
-        ArenaMap.ExpeditionNode core = w.arenaMap().expeditionNode(0);
-        for (ArenaMap.RouteSection route : w.arenaMap().routeSections()) {
-            boolean meetsCore = route.x() - route.halfWidth() < core.x() + core.halfWidth()
-                    && route.x() + route.halfWidth() > core.x() - core.halfWidth()
-                    && route.y() - route.halfHeight() < core.y() + core.halfHeight()
-                    && route.y() + route.halfHeight() > core.y() - core.halfHeight();
-            if (!meetsCore) continue;
-            double x = route.x() - route.halfWidth() - left;
-            double y = route.y() - route.halfHeight() - top;
-            double width = route.halfWidth() * 2;
-            double height = route.halfHeight() * 2;
-            gc.setFill(Color.color(0.16, 0.08, 0.035, 0.25));
-            gc.fillRoundRect(x + 8, y + 12, width, height, height, height);
-            gc.setFill(pal[1].deriveColor(0, 1.04, 1.04, 0.98));
-            gc.fillRoundRect(x, y, width, height, height, height);
-            gc.setStroke(pal[5].deriveColor(0, 1, 1.10, 0.66));
-            gc.setLineWidth(2.2);
-            gc.strokeRoundRect(x + 3, y + 3, width - 6, height - 6, height - 6, height - 6);
-            for (int mark = 0; mark < 5; mark++) {
-                double mx = x + width * (0.18 + mark * 0.16);
-                double my = y + height * (0.32 + (mark % 2) * 0.25);
-                gc.setStroke(pal[3].deriveColor(0, 1, 0.84, 0.58));
-                gc.setLineWidth(1.4);
-                gc.strokeLine(mx - 14, my + 4, mx + 15, my - 4);
-                gc.strokeLine(mx + 2, my, mx + 8, my - 11);
-            }
-        }
-    }
 
-    /** 无实体地表纹理按世界坐标平铺；它不包含任何石块/墙体，因此不会制造视觉与碰撞的分歧。 */
-    private void drawDesertGroundTexture(double left, double top, double vw, double vh) {
-        Image texture = Sprites.desertExpeditionGround;
-        if (texture == null || texture.getWidth() <= 0 || texture.getHeight() <= 0) {
-            return;
-        }
-        // 以大于常规视口的尺寸铺放，玩家移动时不会频繁看到纹理接缝或重复图案。
-        double tileW = Math.max(2_048d, texture.getWidth());
-        double tileH = Math.max(2_048d, texture.getHeight());
-        double startX = Math.floor(left / tileW) * tileW;
-        double startY = Math.floor(top / tileH) * tileH;
-        gc.setGlobalAlpha(0.98);
-        for (double worldY = startY; worldY < top + vh; worldY += tileH) {
-            for (double worldX = startX; worldX < left + vw; worldX += tileW) {
-                gc.drawImage(texture, worldX - left, worldY - top, tileW, tileH);
+        final int patch = 150;
+        int c0 = (int) Math.floor(left / patch) - 1;
+        int c1 = (int) Math.floor((left + vw) / patch) + 1;
+        int r0 = (int) Math.floor(top / patch) - 1;
+        int r1 = (int) Math.floor((top + vh) / patch) + 1;
+        for (int c = c0; c <= c1; c++) {
+            for (int r = r0; r <= r1; r++) {
+                long h = hash2(c * 19 + 7, r * 23 + 11);
+                int roll = (int) ((h >>> 7) % 100);
+                double x = c * patch + 16 + ((h >>> 15) % 102) - left;
+                double y = r * patch + 12 + ((h >>> 27) % 108) - top;
+                if (roll < 16) {
+                    double w = 28 + ((h >>> 37) % 42);
+                    gc.setFill(pal[1].deriveColor(0, 1.04, 1.02, 0.13));
+                    gc.fillOval(x, y, w, w * 0.32);
+                } else if (roll < 30) {
+                    gc.setStroke(pal[4].deriveColor(0, 0.94, 0.88, 0.28));
+                    gc.setLineWidth(1.25);
+                    gc.strokeLine(x, y, x + 16, y + 5);
+                    gc.strokeLine(x + 8, y + 3, x + 12, y - 7);
+                }
             }
         }
-        gc.setGlobalAlpha(1.0);
     }
 
     /** 连续的风蚀痕迹提示推进方向，但不画成封闭的矩形走廊。 */
@@ -650,8 +638,8 @@ public final class Renderer {
     }
 
     /**
-     * 核心 PNG 已经包含它自己的美术障碍；延展区没有贴图，所以只画 visual >= 20 的作者碰撞体。
-     * 绘制形状直接读 ArenaMap，保证玩家看到的接地轮廓与 World 的阻挡判定是一份数据。
+     * 仍使用旧核心 PNG 的地图只画 visual >= 20 的延展掩体；荒漠已经改为连续地表，
+     * 故核心和外环的全部作者碰撞体都在这里绘制。轮廓直接读 ArenaMap，确保画面与判定同源。
      */
     private void drawExtensionObstacles(World w, double vw, double vh) {
         double left = camX - vw / 2;
@@ -660,7 +648,7 @@ public final class Renderer {
         ArenaMap.Obstacle[] obstacles = w.arenaMap().obstacles();
         for (int i = 0; i < obstacles.length; i++) {
             ArenaMap.Obstacle obstacle = obstacles[i];
-            if (obstacle.visual() < 20) continue;
+            if (w.arenaMap() != ArenaMap.DESERT_RUINS && obstacle.visual() < 20) continue;
             double sx = obstacle.x() - left;
             double sy = obstacle.y() - top;
             double halfW = obstacle.footprintHalfWidth();
