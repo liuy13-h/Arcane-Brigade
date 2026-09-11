@@ -1792,8 +1792,8 @@ public final class Renderer {
      * 底图是美术提供的皇宫王座大厅背景（整屏铺满裁切）；四个角色站在同一
      * 条脚底线上均匀一字排开。px/py 是化身圆心，与 geom 坐标同参考系。
      */
-    public void drawLobby(LobbyGeom g, double px, double py, int chosen, double t,
-            int cardClass, double reveal, boolean showGuide) {
+    public void drawLobby(LobbyGeom g, double px, double py, int chosen, boolean facingLeft,
+            double t, int cardClass, double reveal, boolean showGuide) {
         double vw = canvas.getWidth();
         double vh = canvas.getHeight();
         double pulse = 0.5 + 0.5 * Math.sin(t * 2.4);
@@ -1938,7 +1938,8 @@ public final class Renderer {
         if (av != null) {
             double aw = av.getWidth();
             double ah = av.getHeight();
-            gc.drawImage(av, Math.round(px - aw / 2), Math.round(py - 4 - ah));
+            // 化身按移动方向镜像：向左移朝左、向右移朝右（复用战斗的 drawSpriteFacing）
+            drawSpriteFacing(av, px, py - 4 - ah, aw, ah, facingLeft);
         }
         if (chosen != 0) {
             // 化身头顶的已选状态小卡（和名牌同一套"徽章"语言）

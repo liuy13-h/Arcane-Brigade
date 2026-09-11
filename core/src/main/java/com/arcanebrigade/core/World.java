@@ -11,9 +11,9 @@ import com.arcanebrigade.core.enemy.WaveDirector;
  *
  * 存储采用 SoA（Structure of Arrays）+ 空闲链表复用，目的是：
  *   1. 上千实体时避免逐对象 GC；
- *   2. 快照序列化时可以直接按数组批量打包（D5 联机会用到）。
+ *   2. 快照序列化时可以直接按数组批量打包。
  *
- * 固定步长推进，dt 恒为 Balance.FIXED_STEP，保证可重放、可联机。
+ * 固定步长推进，dt 恒为 Balance.FIXED_STEP，保证可重放、帧间一致。
  */
 public final class World {
 
@@ -2742,7 +2742,7 @@ public final class World {
     }
 
     /** 找造成这次反应的攻击者所属玩家的 stats（用于反应乘算）。
-     *  当前用最近玩家简化处理，D6 联机时改成按 owner 找 */
+     *  当前用最近玩家简化处理，后续可改成按 owner 找 */
     private float statsMulForReaction(int target) {
         int w = firstWizard();
         if (w < 0 || loadout[w] == null) {

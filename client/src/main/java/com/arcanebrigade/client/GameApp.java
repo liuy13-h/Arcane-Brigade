@@ -63,6 +63,8 @@ public final class GameApp extends Application {
     private boolean lobbyPosInit;
     /** 大厅里已选职业：0=未选，否则是 LobbyClass.CLASSES 之一（含召唤师 4） */
     private int lobbyChoice = 0;
+    /** 大厅化身朝向：true=朝左（向左移动时），false=朝右。静止时沿用上一帧方向 */
+    private boolean lobbyFacingLeft = false;
     private double lobbyAnimT;
     /** 右侧细节立绘当前展示的职业：0=不展示。跟随「正站在谁面前」变化 */
     private int cardClass;
@@ -423,7 +425,7 @@ public final class GameApp extends Application {
                     renderer.setLobbyUi(loreScroll, detailClass, detailScroll, detailFade);
                     if (drawNow) {
                         renderer.setFps(fps[0]);
-                        renderer.drawLobby(g, lx, ly, lobbyChoice, lobbyAnimT, cardClass, cardReveal,
+                        renderer.drawLobby(g, lx, ly, lobbyChoice, lobbyFacingLeft, lobbyAnimT, cardClass, cardReveal,
                                 lobbyGuide);
                         // 冒烟调试：截图（ab.snapshot）在画完当帧立即保存
                         if (snapshotPath != null && !snapshotSaved) {
@@ -547,6 +549,7 @@ public final class GameApp extends Application {
         inLobby = true;
         overlay = Renderer.OVER_NONE;
         lobbyPosInit = false;    // 首帧按出生点落位
+        lobbyFacingLeft = false; // 默认朝右
         cardClass = 0;
         cardReveal = 0;
         closeDetail();           // 重进大厅清掉可能残留的档案弹层状态
@@ -724,6 +727,9 @@ public final class GameApp extends Application {
             ly += dy * inv * LOBBY_SPEED * dt;
             lx = Math.max(g.minX(), Math.min(g.maxX(), lx));
             ly = Math.max(g.minY(), Math.min(g.maxY(), ly));
+            // 水平移动决定化身朝向：左移朝左、右移朝右；纯上下移动时沿用上一帧
+            if (dx < 0) lobbyFacingLeft = true;
+            else if (dx > 0) lobbyFacingLeft = false;
         }
         // 圆-圆检测：正站在谁面前（只做判定，不自动选人——选人由空格确认触发）
         int[] cls = LobbyClass.CLASSES;
