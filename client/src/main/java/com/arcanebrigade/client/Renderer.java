@@ -2580,30 +2580,26 @@ public final class Renderer {
     // menuButtons()/menuHit() 这一份几何，避免"画的框"和"点的框"错位。
     // ------------------------------------------------------------------
 
-    /** 主界面按钮数量 */
-    public static final int MENU_COUNT = 5;
-    /** 覆盖层种类：无 / 操作说明 / 设置 / 多人联机（占位） */
+    /** 覆盖层种类：无 / 操作说明 / 设置 */
     public static final int OVER_NONE = 0;
     public static final int OVER_HELP = 1;
     public static final int OVER_SETTINGS = 2;
-    public static final int OVER_MULTI = 3;
 
     /** 标题画面设计基准尺寸（与美术原图一致）。布局 / 命中区都用它换算。 */
     private static final double TITLE_W = 3072.0;
     private static final double TITLE_H = 2048.0;
 
-    /** 五个菜单按钮在标题画（图像坐标）里的命中矩形：{x0, y0, x1, y1}。 */
+    /** 四个菜单按钮在标题画（图像坐标）里的命中矩形：{x0, y0, x1, y1}。 */
     private static final int[][] MENU_BOX = {
             { 416, 1905, 836, 2048 },   // 0 开始游戏
-            { 866, 1905, 1286, 2048 },  // 1 多人联机 1-4 人
-            { 1330, 1905, 1750, 2048 }, // 2 设置
-            { 1758, 1905, 2178, 2048 }, // 3 操作说明
-            { 2183, 1905, 2603, 2048 }, // 4 退出游戏
+            { 1330, 1905, 1750, 2048 }, // 1 设置
+            { 1758, 1905, 2178, 2048 }, // 2 操作说明
+            { 2183, 1905, 2603, 2048 }, // 3 退出游戏
     };
 
     /** 按钮文字（仅美术缺失兜底绘制时用；美术在位时字是印在图画里的） */
     private static final String[] MENU_LABELS = {
-            "开始游戏", "多人联机 1–4 人", "设置", "操作说明", "退出游戏" };
+            "开始游戏", "设置", "操作说明", "退出游戏" };
 
     private static final String[] HELP_LINES = {
             "移动：WASD / 方向键 —— 本作为幸存者玩法，战斗自动开火，你只管走位。",
@@ -2671,7 +2667,7 @@ public final class Renderer {
 
     /**
      * 画主菜单。contain 布局保证整张标题画可见；hover 高亮只在无覆盖层时出现；
-     * overlay != OVER_NONE 时在最上层画对应面板（操作说明 / 设置 / 多人联机占位）。
+     * overlay != OVER_NONE 时在最上层画对应面板（操作说明 / 设置）。
      */
     public void drawTitle(double t, int hover, int overlay, boolean fullscreen) {
         double vw = canvas.getWidth();
@@ -2739,7 +2735,7 @@ public final class Renderer {
         }
     }
 
-    /** 主界面上层覆盖面板：操作说明 / 设置 / 多人联机（开发中占位） */
+    /** 主界面上层覆盖面板：操作说明 / 设置 */
     private void drawMenuOverlay(int overlay, boolean fullscreen) {
         if (overlay == OVER_SETTINGS) {   // 「设置」面板已重做，走独立绘制
             drawSettingsOverlay();
@@ -2761,7 +2757,7 @@ public final class Renderer {
         String head = switch (overlay) {
             case OVER_HELP -> "操 作 说 明";
             case OVER_SETTINGS -> "设 置";
-            default -> "多人联机 · 敬请期待";
+            default -> "";
         };
         drawTextSoft(gc, Font.font("Microsoft YaHei", FontWeight.BOLD, 23),
                 g.px() + g.pw() / 2, g.py() + 58, head,
@@ -2813,18 +2809,8 @@ public final class Renderer {
                 gc.fillText("标题画面在任意窗口比例下等比完整显示；大厅与战斗画面随窗口自适应。", lx, g.py() + 274);
             }
             default -> {
-                String[] lines = {
-                        "「多人联机 · 1–4 人在线合作」正在开发中，敬请期待！",
-                        "当前为本地单机抢先体验：从准备大厅招募一位勇者出征，",
-                        "在自动开火的幸存者战斗中击败奶蛙 Boss 即可通关（血量归零即失败）。",
-                        "在线合作将在后续版本加入，感谢你的关注！",
-                };
-                double y = g.py() + 152;
-                for (String line : lines) {
-                    drawTextSoft(gc, Font.font("Microsoft YaHei", 15.5),
-                            g.px() + g.pw() / 2, y, line, faint, null);
-                    y += 40;
-                }
+                // 仅 操作说明 / 设置 会进入本面板；其余覆盖层直接返回
+                return;
             }
         }
 

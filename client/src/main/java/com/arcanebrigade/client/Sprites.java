@@ -44,7 +44,7 @@ public final class Sprites {
     /** 王座大厅背景（启动后的准备大厅整屏底图） */
     public static Image lobbyBg;
     /**
-     * 主菜单标题画面（整幅美术，底部内嵌五个菜单按钮：开始游戏 / 多人联机 / 设置 / 操作说明 / 退出游戏）。
+     * 主菜单标题画面（整幅美术，底部内嵌四个菜单按钮：开始游戏 / 设置 / 操作说明 / 退出游戏）。
      * 这是程序启动后第一个画面，按钮命中区坐标见 Renderer 的菜单常量。
      */
     public static Image titleScreen;
