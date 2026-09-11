@@ -78,6 +78,10 @@ public final class World {
     private final int[] obstacleShape = new int[MAX];
     private final float[] obstacleHalfW = new float[MAX];
     private final float[] obstacleHalfH = new float[MAX];
+    /** 每个障碍的规则来自 ArenaMap；轮廓与阻挡策略必须同时保留，不能再由 visual 推断。 */
+    private final boolean[] obstacleBlocksMovement = new boolean[MAX];
+    private final boolean[] obstacleBlocksProjectiles = new boolean[MAX];
+    private final boolean[] obstacleDestructible = new boolean[MAX];
     public final float[] hp = new float[MAX];
     public final float[] maxHp = new float[MAX];
     public final float[] speed = new float[MAX];
@@ -753,10 +757,10 @@ public final class World {
         }
     }
 
-    /** 机关的四拍循环：预警 → 伤害窗口 → 恢复。只对玩家/宠物结算，避免环境自行清场。 */
+    /** 机关四拍循环：预警 → 蓄力 → 伤害窗口 → 恢复。只对玩家/宠物结算，避免环境自行清场。 */
     private void updateArenaTraps() {
         for (ArenaMap.Trap trap : arenaMap.traps()) {
-            if (!trap.active(time)) {
+            if (!trap.active(time) || trap.damage() <= 0f) {
                 continue;
             }
             damageTrapTargets(trap);
@@ -791,6 +795,9 @@ public final class World {
         obstacleShape[id] = obstacle.shape().ordinal();
         obstacleHalfW[id] = obstacle.halfWidth();
         obstacleHalfH[id] = obstacle.halfHeight();
+        obstacleBlocksMovement[id] = obstacle.blocksMovement();
+        obstacleBlocksProjectiles[id] = obstacle.blocksProjectiles();
+        obstacleDestructible[id] = obstacle.destructible();
         obstacleHash.insert(x[id], y[id], id);
         return id;
     }
@@ -1545,7 +1552,7 @@ public final class World {
         obstacleHash.query(x[id], y[id], r[id] + Balance.OBSTACLE_MAX_R, scratch2);
         for (int n = 0; n < scratch2.size(); n++) {
             int o = scratch2.get(n);
-            if (!alive[o] || kind[o] != KIND_OBSTACLE) {
+            if (!alive[o] || kind[o] != KIND_OBSTACLE || !obstacleBlocksMovement[o]) {
                 continue;
             }
             pushOutOfObstacle(id, o);
@@ -1914,7 +1921,7 @@ public final class World {
             boolean blocked = false;
             for (int n = 0; n < scratch2.size(); n++) {
                 int o = scratch2.get(n);
-                if (!alive[o] || kind[o] != KIND_OBSTACLE) {
+                if (!alive[o] || kind[o] != KIND_OBSTACLE || !obstacleBlocksProjectiles[o]) {
                     continue;
                 }
                 if (overlapsObstacle(o, x[i], y[i], r[i])) {
@@ -2819,6 +2826,11 @@ public final class World {
     public boolean trapTelegraphing(int index) {
         ArenaMap.Trap trap = trap(index);
         return trap != null && trap.telegraphing(time);
+    }
+
+    public boolean trapArming(int index) {
+        ArenaMap.Trap trap = trap(index);
+        return trap != null && trap.arming(time);
     }
 
     public boolean trapActive(int index) {

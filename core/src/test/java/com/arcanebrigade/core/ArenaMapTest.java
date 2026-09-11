@@ -55,6 +55,9 @@ public final class ArenaMapTest {
                     map + " terrain must change actual player movement speed");
 
             for (ArenaMap.Obstacle obstacle : map.obstacles()) {
+                check(obstacle.rule() == ArenaMap.ObstacleRule.SOLID
+                                && obstacle.blocksMovement() && obstacle.blocksProjectiles() && !obstacle.destructible(),
+                        map + " authored cover must explicitly use solid movement and projectile blocking");
                 world.x[hero] = obstacle.x() + obstacle.footprintHalfWidth() - 1f;
                 world.y[hero] = obstacle.y();
                 world.step(Balance.FIXED_STEP, new InputCommand());
@@ -72,6 +75,14 @@ public final class ArenaMapTest {
                     map + " must keep the player inside its authored map height");
 
             ArenaMap.Trap first = map.traps()[0];
+            for (ArenaMap.Trap trap : map.traps()) {
+                float damageHalfW = trap.isLane() ? trap.halfWidth() : trap.radius();
+                float damageHalfH = trap.isLane() ? trap.halfHeight() : trap.radius();
+                check(trap.visualHalfWidth() > damageHalfW + Balance.WIZARD_RADIUS
+                                && trap.visualHalfHeight() > damageHalfH + Balance.WIZARD_RADIUS,
+                        map + " warning art must extend beyond the real player damage boundary");
+                assertFourTrapStages(map, trap);
+            }
             world.x[hero] = first.x();
             world.y[hero] = first.y();
             world.px[hero] = first.x();
@@ -87,6 +98,8 @@ public final class ArenaMapTest {
         check(arrowLane.isLane() && arrowLane.contains(arrowLane.x(), arrowLane.y(), 0f)
                         && !arrowLane.contains(arrowLane.x(), arrowLane.y() - arrowLane.halfHeight() - 1f, 0f),
                 "crypt arrow mechanism must be a narrow horizontal damage lane");
+        check(arrowLane.visualHalfHeight() > arrowLane.halfHeight() + Balance.WIZARD_RADIUS,
+                "crypt arrow warning must be wider than its real player damage lane");
 
         World crypt = new World(23L, ArenaMap.STONE_CRYPT);
         int laneHero = crypt.spawnWizard(arrowLane.x(), arrowLane.y(), HeroClass.WIZARD);
@@ -110,6 +123,16 @@ public final class ArenaMapTest {
             if (obstacle.shape() == shape) return true;
         }
         return false;
+    }
+
+    private static void assertFourTrapStages(ArenaMap map, ArenaMap.Trap trap) {
+        float anchor = (trap.cycle() - trap.phase(0f)) % trap.cycle();
+        check(trap.telegraphing(anchor + 0.01f), map + " trap must start with a visible telegraph");
+        check(trap.arming(anchor + trap.telegraph() + 0.01f), map + " trap must have a distinct arming beat");
+        check(trap.active(anchor + trap.telegraph() + trap.arming() + 0.01f),
+                map + " trap must only damage after arming");
+        check(trap.recovering(anchor + trap.telegraph() + trap.arming() + trap.active() + 0.01f),
+                map + " trap must recover before its next warning");
     }
 
     private static void check(boolean value, String message) {

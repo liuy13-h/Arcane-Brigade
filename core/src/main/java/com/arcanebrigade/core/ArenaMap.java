@@ -14,9 +14,15 @@ public enum ArenaMap {
                     worldCapsule(1_250, 690, 115, 48, 20), worldCircle(1_770, 670, 58, 20),
                     worldBox(2_250, 900, 50, 140, 21), worldCapsule(3_580, 970, 170, 45, 22)
             },
-            new Trap[] { t(-210, 40, 94, 0.9f, 1.2f, 4.0f, 12f, 0), t(260, -5, 94, 0.9f, 1.2f, 4.0f, 12f, 0) },
+            new Trap[] {
+                    // 流沙负责持续减速；沙尘喷口才是短促、可预判的伤害机关。
+                    t(-210, 40, 68, 0.80f, 0.35f, 0.75f, 3.0f, 12f, 0),
+                    t(260, -5, 68, 0.80f, 0.35f, 0.75f, 3.0f, 12f, 0),
+                    worldTrap(1_500, 320, 62, 0.85f, 0.35f, 0.75f, 3.2f, 12f, 0)
+            },
             new Terrain[] {
-                    terrain("流沙", -210, 40, 94, 0.68f, 0), terrain("流沙", 260, -5, 94, 0.68f, 0)
+                    terrain("流沙", -210, 40, 94, 0.68f, 0), terrain("流沙", 260, -5, 94, 0.68f, 0),
+                    worldTerrain("流沙", 1_480, 700, 130, 0.70f, 0)
             },
             desertNodes(), desertRoutes()),
 
@@ -31,10 +37,11 @@ public enum ArenaMap {
             },
             new Trap[] {
                     // 四处喷口分别落在背景中可见的熔岩喷焰上，不能留在中央石地。
-                    t(-399, 118, 42, 0.8f, 1.0f, 3.1f, 18f, 1),
-                    t(-211, 176, 42, 0.8f, 1.0f, 3.1f, 18f, 1),
-                    t(213, 176, 42, 0.8f, 1.0f, 3.1f, 18f, 1),
-                    t(416, 49, 42, 0.8f, 1.0f, 3.1f, 18f, 1)
+                    t(-399, 118, 42, 0.80f, 0.30f, 0.70f, 3.1f, 18f, 1),
+                    t(-211, 176, 42, 0.80f, 0.30f, 0.70f, 3.1f, 18f, 1),
+                    t(213, 176, 42, 0.80f, 0.30f, 0.70f, 3.1f, 18f, 1),
+                    t(416, 49, 42, 0.80f, 0.30f, 0.70f, 3.1f, 18f, 1),
+                    worldTrap(1_420, -480, 52, 0.75f, 0.30f, 0.70f, 2.9f, 18f, 1)
             },
             new Terrain[] {
                     terrain("灼热裂隙", -399, 118, 58, 0.78f, 1), terrain("灼热裂隙", -211, 176, 58, 0.78f, 1),
@@ -55,9 +62,10 @@ public enum ArenaMap {
             },
             new Trap[] {
                     // 两块地刺板与背景完全重合；第三个机关是两侧箭槽之间的横向箭道。
-                    t(-285, -48, 45, 1.0f, 0.85f, 3.8f, 20f, 2),
-                    t(286, -15, 48, 1.0f, 0.85f, 3.8f, 20f, 2),
-                    lane(0, -55, 548, 24, 1.0f, 0.75f, 4.2f, 16f, 3)
+                    t(-285, -48, 45, 1.0f, 0.32f, 0.65f, 3.8f, 20f, 2),
+                    t(286, -15, 48, 1.0f, 0.32f, 0.65f, 3.8f, 20f, 2),
+                    lane(0, -55, 548, 24, 1.0f, 0.32f, 0.60f, 4.2f, 16f, 3),
+                    worldTrap(1_500, -520, 54, 0.95f, 0.30f, 0.60f, 3.1f, 20f, 2)
             },
             new Terrain[] {
                     // 对齐左右两块地面符文：站上去可快速穿过箭道或绕过地刺。
@@ -66,6 +74,30 @@ public enum ArenaMap {
             cryptNodes(), cryptRoutes());
 
     public enum ObstacleShape { CIRCLE, BOX, CAPSULE }
+    /**
+     * 阻挡规则与底座轮廓分离：以后加入可破坏木箱或只挡怪物的机关时，不必再复制碰撞代码。
+     * 本轮作者摆放的实物全部是 SOLID；DECORATION 仅供美术装饰数据使用，永不制造隐形墙。
+     */
+    public enum ObstacleRule {
+        SOLID(true, true, false),
+        MOVE_ONLY(true, false, false),
+        BREAKABLE(true, true, true),
+        DECORATION(false, false, false);
+
+        private final boolean blocksMovement;
+        private final boolean blocksProjectiles;
+        private final boolean destructible;
+
+        ObstacleRule(boolean blocksMovement, boolean blocksProjectiles, boolean destructible) {
+            this.blocksMovement = blocksMovement;
+            this.blocksProjectiles = blocksProjectiles;
+            this.destructible = destructible;
+        }
+
+        public boolean blocksMovement() { return blocksMovement; }
+        public boolean blocksProjectiles() { return blocksProjectiles; }
+        public boolean destructible() { return destructible; }
+    }
     /** 连续战区中的功能节点；CORE 复用原始底图，其余节点由主题地表自然延展。 */
     public enum ExpeditionRole { CORE, TRANSITION, COMBAT, ELITE, REWARD, EVENT, BOSS }
 
@@ -86,10 +118,10 @@ public enum ArenaMap {
 
     /**
      * 静态阻挡物的底部轮廓。halfWidth / halfHeight 仅供 BOX 与 CAPSULE 使用；
-     * CIRCLE 只使用 radius。三种形状会被角色移动与弹幕遮挡共用。
+     * CIRCLE 只使用 radius。规则单独决定是否阻挡移动与弹幕，装饰永不默认阻挡。
      */
     public record Obstacle(float x, float y, float radius, float halfWidth, float halfHeight,
-                           ObstacleShape shape, int visual) {
+                           ObstacleShape shape, ObstacleRule rule, int visual) {
         public float broadRadius() {
             return shape == ObstacleShape.CIRCLE ? radius
                     : (float) Math.sqrt(halfWidth * halfWidth + halfHeight * halfHeight);
@@ -97,6 +129,9 @@ public enum ArenaMap {
         public float footprintHalfWidth() {
             return shape == ObstacleShape.CIRCLE ? radius : halfWidth;
         }
+        public boolean blocksMovement() { return rule.blocksMovement(); }
+        public boolean blocksProjectiles() { return rule.blocksProjectiles(); }
+        public boolean destructible() { return rule.destructible(); }
         public boolean overlapsCircle(float px, float py, float targetRadius) {
             return switch (shape) {
                 case CIRCLE -> {
@@ -131,15 +166,25 @@ public enum ArenaMap {
         }
     }
 
-    /** phase offsets prevent every trap in a room from firing in lockstep. */
+    /**
+     * 机关严格遵循：预警 → 蓄力 → 伤害 → 恢复。visualPadding 必须覆盖角色脚下半径，
+     * 因此显示范围始终略大于真实伤害触及范围，杜绝边缘的“看不见伤害”。
+     */
     public record Trap(float x, float y, float radius, float halfWidth, float halfHeight,
-                       float telegraph, float active, float cooldown, float damage, int visual,
-                       float phaseOffset) {
-        public float cycle() { return telegraph + active + cooldown; }
+                       float visualPadding, float telegraph, float arming, float active, float recovery,
+                       float damage, int visual, float phaseOffset) {
+        public float cycle() { return telegraph + arming + active + recovery; }
         public float phase(float time) { return (time + phaseOffset) % cycle(); }
         public boolean telegraphing(float time) { return phase(time) < telegraph; }
+        public boolean arming(float time) {
+            float p = phase(time);
+            return p >= telegraph && p < telegraph + arming;
+        }
         /** 箭道使用轴对齐矩形；其余机关维持圆形判定。 */
         public boolean isLane() { return halfWidth > 0f && halfHeight > 0f; }
+        public float visualRadius() { return radius + visualPadding; }
+        public float visualHalfWidth() { return isLane() ? halfWidth + visualPadding : visualRadius(); }
+        public float visualHalfHeight() { return isLane() ? halfHeight + visualPadding : visualRadius(); }
         public boolean contains(float px, float py, float targetRadius) {
             if (isLane()) {
                 return Math.abs(px - x) <= halfWidth + targetRadius
@@ -152,7 +197,10 @@ public enum ArenaMap {
         }
         public boolean active(float time) {
             float p = phase(time);
-            return p >= telegraph && p < telegraph + active;
+            return p >= telegraph + arming && p < telegraph + arming + active;
+        }
+        public boolean recovering(float time) {
+            return phase(time) >= telegraph + arming + active;
         }
     }
 
@@ -298,46 +346,54 @@ public enum ArenaMap {
 
     /** 延展节点已经使用世界坐标，不能复用旧底图的 scale 坐标转换。visual >= 20 表示无底图掩体。 */
     private static Obstacle worldCircle(float x, float y, float radius, int visual) {
-        return new Obstacle(x, y, radius, 0f, 0f, ObstacleShape.CIRCLE, visual);
+        return new Obstacle(x, y, radius, 0f, 0f, ObstacleShape.CIRCLE, ObstacleRule.SOLID, visual);
     }
 
     private static Obstacle worldBox(float x, float y, float halfWidth, float halfHeight, int visual) {
-        return new Obstacle(x, y, 0f, halfWidth, halfHeight, ObstacleShape.BOX, visual);
+        return new Obstacle(x, y, 0f, halfWidth, halfHeight, ObstacleShape.BOX, ObstacleRule.SOLID, visual);
     }
 
     private static Obstacle worldCapsule(float x, float y, float halfWidth, float halfHeight, int visual) {
-        return new Obstacle(x, y, 0f, halfWidth, halfHeight, ObstacleShape.CAPSULE, visual);
+        return new Obstacle(x, y, 0f, halfWidth, halfHeight, ObstacleShape.CAPSULE, ObstacleRule.SOLID, visual);
     }
 
     private static Obstacle o(float x, float y, float radius, int visual) {
-        return new Obstacle(scale(x), scale(y), scale(radius), 0f, 0f, ObstacleShape.CIRCLE, visual);
+        return new Obstacle(scale(x), scale(y), scale(radius), 0f, 0f, ObstacleShape.CIRCLE, ObstacleRule.SOLID, visual);
     }
 
     private static Obstacle box(float x, float y, float halfWidth, float halfHeight, int visual) {
-        return new Obstacle(scale(x), scale(y), 0f, scale(halfWidth), scale(halfHeight), ObstacleShape.BOX, visual);
+        return new Obstacle(scale(x), scale(y), 0f, scale(halfWidth), scale(halfHeight), ObstacleShape.BOX, ObstacleRule.SOLID, visual);
     }
 
     private static Obstacle capsule(float x, float y, float halfWidth, float halfHeight, int visual) {
-        return new Obstacle(scale(x), scale(y), 0f, scale(halfWidth), scale(halfHeight), ObstacleShape.CAPSULE, visual);
+        return new Obstacle(scale(x), scale(y), 0f, scale(halfWidth), scale(halfHeight), ObstacleShape.CAPSULE, ObstacleRule.SOLID, visual);
     }
 
-    private static Trap t(float x, float y, float radius, float telegraph, float active,
-                          float cooldown, float damage, int visual) {
+    private static Trap t(float x, float y, float radius, float telegraph, float arming, float active,
+                          float recovery, float damage, int visual) {
         x = scale(x);
         y = scale(y);
         float offset = (x * 0.013f + y * 0.007f + visual * 0.37f) % 1.7f;
         if (offset < 0) offset += 1.7f;
-        return new Trap(x, y, scale(radius), 0f, 0f, telegraph, active, cooldown, damage, visual, offset);
+        return new Trap(x, y, scale(radius), 0f, 0f, scale(22f), telegraph, arming, active, recovery,
+                damage, visual, offset);
     }
 
     private static Trap lane(float x, float y, float halfWidth, float halfHeight,
-                             float telegraph, float active, float cooldown, float damage, int visual) {
+                             float telegraph, float arming, float active, float recovery, float damage, int visual) {
         x = scale(x);
         y = scale(y);
         float offset = (x * 0.013f + y * 0.007f + visual * 0.37f) % 1.7f;
         if (offset < 0) offset += 1.7f;
         return new Trap(x, y, 0f, scale(halfWidth), scale(halfHeight),
-                telegraph, active, cooldown, damage, visual, offset);
+                scale(22f), telegraph, arming, active, recovery, damage, visual, offset);
+    }
+
+    private static Trap worldTrap(float x, float y, float radius, float telegraph, float arming, float active,
+                                  float recovery, float damage, int visual) {
+        float offset = (x * 0.013f + y * 0.007f + visual * 0.37f) % 1.7f;
+        if (offset < 0) offset += 1.7f;
+        return new Trap(x, y, radius, 0f, 0f, 22f, telegraph, arming, active, recovery, damage, visual, offset);
     }
 
     private static float scale(float value) {
@@ -347,6 +403,11 @@ public enum ArenaMap {
     private static Terrain terrain(String label, float x, float y, float radius,
                                    float movementMultiplier, int visual) {
         return new Terrain(label, scale(x), scale(y), scale(radius), movementMultiplier, visual);
+    }
+
+    private static Terrain worldTerrain(String label, float x, float y, float radius,
+                                        float movementMultiplier, int visual) {
+        return new Terrain(label, x, y, radius, movementMultiplier, visual);
     }
 
     private static boolean circleOverlapsBox(float px, float py, float targetRadius,

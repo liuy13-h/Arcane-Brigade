@@ -149,8 +149,8 @@ public final class Renderer {
         }
         if (battleMap != null) drawExtensionObstacles(w, vw, vh);
         drawArenaTerrain(w, vw, vh);
-        if (DEBUG_COLLIDERS) drawColliderDebug(w, vw, vh);
         drawArenaTraps(w, vw, vh);
+        if (DEBUG_COLLIDERS) drawColliderDebug(w, vw, vh);
         drawEventWorld(w, alpha, vw, vh);   // 战斗事件：封印裂隙圈 / 蘑菇 / 雕像（部分在 entities 里）
         drawEntities(w, alpha, vw, vh);
         drawHud(w, vw, vh);
@@ -555,21 +555,23 @@ public final class Renderer {
             if (trap == null) continue;
             double sx = trap.x() - left;
             double sy = trap.y() - top;
-            double halfW = trap.isLane() ? trap.halfWidth() : trap.radius();
-            double halfH = trap.isLane() ? trap.halfHeight() : trap.radius();
+            double halfW = trap.visualHalfWidth();
+            double halfH = trap.visualHalfHeight();
             if (sx + halfW < 0 || sx - halfW > vw || sy + halfH < 0 || sy - halfH > vh) continue;
             boolean active = w.trapActive(i);
             boolean warning = w.trapTelegraphing(i);
+            boolean arming = w.trapArming(i);
             Color c = switch (trap.visual()) {
                 case 1 -> Color.rgb(255, 94, 40);      // 熔岩喷口
                 case 2 -> Color.rgb(110, 222, 255);    // 墓室机关
                 case 3 -> Color.rgb(229, 184, 104);    // 箭道
                 default -> Color.rgb(235, 186, 92);    // 流沙
             };
-            double alpha = active ? 0.44 : warning ? 0.20 : 0.08;
+            double alpha = active ? 0.44 : arming ? 0.30 : warning ? 0.17 : 0.06;
+            double outline = active ? 0.98 : arming ? 0.94 : warning ? 0.68 : 0.24;
             gc.setFill(Color.color(c.getRed(), c.getGreen(), c.getBlue(), alpha));
-            gc.setStroke(Color.color(c.getRed(), c.getGreen(), c.getBlue(), active ? 0.98 : warning ? 0.72 : 0.30));
-            gc.setLineWidth(active ? 3.0 : 1.5);
+            gc.setStroke(Color.color(c.getRed(), c.getGreen(), c.getBlue(), outline));
+            gc.setLineWidth(active ? 3.0 : arming ? 2.5 : 1.5);
             if (trap.isLane()) {
                 gc.fillRoundRect(sx - halfW, sy - halfH, halfW * 2, halfH * 2, 8, 8);
                 gc.strokeRoundRect(sx - halfW, sy - halfH, halfW * 2, halfH * 2, 8, 8);
@@ -583,8 +585,8 @@ public final class Renderer {
                     }
                 }
             } else {
-                gc.fillOval(sx - trap.radius(), sy - trap.radius(), trap.radius() * 2, trap.radius() * 2);
-                gc.strokeOval(sx - trap.radius(), sy - trap.radius(), trap.radius() * 2, trap.radius() * 2);
+                gc.fillOval(sx - halfW, sy - halfH, halfW * 2, halfH * 2);
+                gc.strokeOval(sx - halfW, sy - halfH, halfW * 2, halfH * 2);
             }
             if (trap.visual() == 2 && active) {
                 gc.setStroke(Color.rgb(225, 235, 240, 0.9));
@@ -624,10 +626,48 @@ public final class Renderer {
         }
     }
 
-    /** 碰撞校准叠层：形状直接读取 ArenaMap 数据，避免显示一套、实际计算另一套。 */
+    /**
+     * F3 碰撞校准叠层：路线、实体脚下圈、障碍底座、机关可见区和实际伤害区同屏显示。
+     * 所有轮廓直接读取 World/ArenaMap 数据，避免显示一套、实际计算另一套。
+     */
     private void drawColliderDebug(World w, double vw, double vh) {
         double left = camX - vw / 2;
         double top = camY - vh / 2;
+        gc.setFill(Color.rgb(111, 240, 156, 0.045));
+        gc.setStroke(Color.rgb(111, 240, 156, 0.50));
+        gc.setLineWidth(1.3);
+        for (ArenaMap.RouteSection section : w.arenaMap().routeSections()) {
+            double sx = section.x() - left;
+            double sy = section.y() - top;
+            gc.fillRect(sx - section.halfWidth(), sy - section.halfHeight(),
+                    section.halfWidth() * 2, section.halfHeight() * 2);
+            gc.strokeRect(sx - section.halfWidth(), sy - section.halfHeight(),
+                    section.halfWidth() * 2, section.halfHeight() * 2);
+        }
+        gc.setFill(Color.rgb(108, 175, 255, 0.045));
+        gc.setStroke(Color.rgb(108, 175, 255, 0.58));
+        for (ArenaMap.ExpeditionNode node : w.arenaMap().expeditionNodes()) {
+            double sx = node.x() - left;
+            double sy = node.y() - top;
+            gc.fillRect(sx - node.halfWidth(), sy - node.halfHeight(), node.halfWidth() * 2, node.halfHeight() * 2);
+            gc.strokeRect(sx - node.halfWidth(), sy - node.halfHeight(), node.halfWidth() * 2, node.halfHeight() * 2);
+        }
+
+        // 橙色=玩家能看见的危险外圈；红色=扣血使用的底层判定。
+        for (int i = 0; i < w.trapCount(); i++) {
+            ArenaMap.Trap trap = w.trap(i);
+            if (trap == null) continue;
+            double sx = trap.x() - left;
+            double sy = trap.y() - top;
+            gc.setStroke(Color.rgb(255, 186, 64, 0.92));
+            gc.setLineWidth(1.4);
+            strokeTrapShape(sx, sy, trap.visualHalfWidth(), trap.visualHalfHeight(), trap.isLane());
+            gc.setStroke(Color.rgb(255, 72, 72, 0.96));
+            gc.setLineWidth(2.0);
+            strokeTrapShape(sx, sy, trap.isLane() ? trap.halfWidth() : trap.radius(),
+                    trap.isLane() ? trap.halfHeight() : trap.radius(), trap.isLane());
+        }
+
         gc.setFill(Color.rgb(66, 214, 255, 0.16));
         gc.setStroke(Color.rgb(66, 214, 255, 0.96));
         gc.setLineWidth(2);
@@ -656,6 +696,30 @@ public final class Renderer {
             }
             gc.strokeLine(sx - 4, sy, sx + 4, sy);
             gc.strokeLine(sx, sy - 4, sx, sy + 4);
+        }
+
+        // 蓝=玩家，绿=敌人，紫=召唤物；全部都是脚下实际移动碰撞圈。
+        for (int id = 0; id < w.highWater(); id++) {
+            if (!w.alive[id] || (w.kind[id] != World.KIND_WIZARD && w.kind[id] != World.KIND_ENEMY
+                    && w.kind[id] != World.KIND_MINION)) {
+                continue;
+            }
+            Color color = w.kind[id] == World.KIND_WIZARD ? Color.rgb(70, 174, 255, 0.96)
+                    : w.kind[id] == World.KIND_ENEMY ? Color.rgb(112, 245, 152, 0.92)
+                    : Color.rgb(218, 128, 255, 0.92);
+            double sx = w.x[id] - left;
+            double sy = w.y[id] - top;
+            gc.setStroke(color);
+            gc.setLineWidth(1.7);
+            gc.strokeOval(sx - w.r[id], sy - w.r[id], w.r[id] * 2, w.r[id] * 2);
+        }
+    }
+
+    private void strokeTrapShape(double sx, double sy, double halfW, double halfH, boolean lane) {
+        if (lane) {
+            gc.strokeRoundRect(sx - halfW, sy - halfH, halfW * 2, halfH * 2, 8, 8);
+        } else {
+            gc.strokeOval(sx - halfW, sy - halfH, halfW * 2, halfH * 2);
         }
     }
 
