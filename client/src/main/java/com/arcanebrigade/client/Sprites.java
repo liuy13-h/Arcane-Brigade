@@ -104,6 +104,8 @@ public final class Sprites {
     public static GifDecoder.Animation milkyStompMirror;
     /** 捧腹大笑（半血以下的技能二） */
     public static GifDecoder.Animation milkyLaugh;
+    /** 被奶蛙击败时，阵亡画面中央展示的图片（透明底像素图） */
+    public static Image milkyPressure;
 
     /** 快照需要节点挂在 Scene 下才可靠，用一个离屏容器兜着 */
     private static final Group OFFSCREEN = new Group();
@@ -204,6 +206,7 @@ public final class Sprites {
         milkyStomp = knockAnim(loadAnim("milky/stomp.gif"));
         milkyStompMirror = knockAnim(loadAnim("milky/stomp_mirror.gif"));
         milkyLaugh = knockAnim(loadAnim("milky/laugh.gif"));
+        milkyPressure = loadImage("milky/pressure.png");
     }
 
     /** 把整段 GIF 的每一帧都抠掉背景 */

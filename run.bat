@@ -52,6 +52,11 @@ if not exist "%CLIENTOUT%" mkdir "%CLIENTOUT%"
 dir /s /b "client\src\main\java\*.java" > "%TEMP%\ab_client_src.txt"
 "%JAVAC%" --release 17 -encoding UTF-8 -cp "%COREOUT%;%FB%;%FG%;%FC%;%FM%" -d "%CLIENTOUT%" "@%TEMP%\ab_client_src.txt"
 if errorlevel 1 goto :failbuild
+rem javac 路径不会像 Maven 那样复制 resources，手动同步一次，
+rem 否则 sprites 下的职业/Boss/小怪素材在运行期找不到，会退回程序化兜底形象
+if exist "client\src\main\resources" (
+  xcopy /e /i /y /q "client\src\main\resources\*" "%CLIENTOUT%" >nul
+)
 del /q "%TEMP%\ab_core_src.txt" "%TEMP%\ab_client_src.txt" >nul 2>nul
 
 :run

@@ -341,21 +341,21 @@ public final class Balance {
     /** 刷新条件：玩家等级达到该值 */
     public static final int   MILKY_LEVEL         = 25;
     public static final float MILKY_HP            = 8000f;
-    public static final float MILKY_SPEED         = 300f;
+    public static final float MILKY_SPEED         = 220f;
     public static final float MILKY_RADIUS        = 48f;
     /** 接触伤害（技能伤害另算） */
     public static final float MILKY_DMG           = 18f;
     /** 靠近玩家到这个距离才起手放技能 */
     public static final float MILKY_TRIGGER_RANGE = 300f;
-    /** 技能一 · 蓄力踩地：朝玩家所在侧的半圆，范围大、伤害 50 */
-    public static final float MILKY_STOMP_RANGE   = 320f;
+    /** 技能一 · 蓄力踩地：以自身为中心的整圆，半径与技能二相同，伤害 50（施法 1.5s） */
+    public static final float MILKY_STOMP_RANGE   = 253f;
     public static final float MILKY_STOMP_DMG     = 50f;
-    public static final float MILKY_STOMP_CD      = 4.5f;
-    public static final float MILKY_STOMP_CAST    = 1.2f;
-    /** 技能二 · 捧腹大笑：半血以下才会用，圆形大范围、伤害 100、频率较低 */
-    public static final float MILKY_LAUGH_RANGE   = 380f;
+    public static final float MILKY_STOMP_CD      = 3.0f;
+    public static final float MILKY_STOMP_CAST    = 1.5f;
+    /** 技能二 · 捧腹大笑：半血以下才会用，圆形范围（比初版缩小 1/3）、伤害 100 */
+    public static final float MILKY_LAUGH_RANGE   = 253f;
     public static final float MILKY_LAUGH_DMG     = 100f;
-    public static final float MILKY_LAUGH_CD      = 10f;
+    public static final float MILKY_LAUGH_CD      = 6.0f;
     public static final float MILKY_LAUGH_CAST    = 2.0f;
     /** 触发大笑的血量比例（低于此值才会大笑） */
     public static final float MILKY_LAUGH_HP      = 0.5f;

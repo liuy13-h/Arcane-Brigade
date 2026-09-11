@@ -1161,20 +1161,35 @@ public final class Renderer {
     // 5 关 Boss 奶蛙：动画 / 技能预警 / 专属血条
     // ------------------------------------------------------------------
 
+    /**
+     * 施法动画取帧：按「施法时长」归一化，保证动作刚好完整播完一次。
+     * · GIF 比施法长（如踩地 2.32s 压进 1.5s）→ 加速压缩，播完即结束；
+     * · GIF 比施法短（如大笑 1.12s 配 2.0s）→ 自然速度播完，之后定格最后一帧。
+     */
+    private static Image castFrame(GifDecoder.Animation a, double castT, double castDur) {
+        if (a == null || a.frames.length == 0) {
+            return null;
+        }
+        if (a.total <= 0f) {
+            return a.frames[0];
+        }
+        if (castDur > 0 && castDur < a.total) {
+            double p = Math.min(1.0, castT / castDur);
+            return a.frameAt((float) Math.max(0.0, p * a.total - 0.0001));
+        }
+        return a.frameAt((float) Math.min(castT, Math.max(0f, a.total - 0.001f)));
+    }
+
     /** 奶蛙当前该画的那一帧：按施法状态 / 朝向挑动画 */
     private static Image milkyFrame(World w) {
         int cast = w.milkyCast();
-        if (cast == 1) {
-            GifDecoder.Animation a = w.milkyMirror() ? Sprites.milkyStompMirror : Sprites.milkyStomp;
-            if (a != null) {
-                // 单次播放：进度到末尾就停在最后一帧
-                float t = Math.min(w.milkyCastT(), Math.max(0f, a.total - 0.001f));
-                return a.frameAt(t);
-            }
-        } else if (cast == 2) {
-            GifDecoder.Animation a = Sprites.milkyLaugh;
-            if (a != null) {
-                return a.frameAt(w.milkyCastT());
+        if (cast != 0) {
+            GifDecoder.Animation a = (cast == 1)
+                    ? (w.milkyMirror() ? Sprites.milkyStompMirror : Sprites.milkyStomp)
+                    : Sprites.milkyLaugh;
+            Image f = castFrame(a, w.milkyCastT(), w.milkyCastDur());
+            if (f != null) {
+                return f;
             }
         }
         GifDecoder.Animation walk = w.milkyFaceRight() ? Sprites.milkyWalkRight : Sprites.milkyWalkLeft;
@@ -1208,13 +1223,13 @@ public final class Renderer {
         double ey = w.milkyY() - top;
         float p = Math.min(1f, w.milkyCastT() / Math.max(0.001f, w.milkyCastDur()));
         if (cast == 1) {
+            // 整圆范围（半径与技能二相同）：无死角，靠远离躲避
             double rad = Balance.MILKY_STOMP_RANGE;
-            double start = w.milkyFaceRight() ? -90 : 90;   // 半圆朝玩家一侧
             gc.setFill(Color.rgb(255, 90, 60, 0.16 + 0.16 * p));
-            gc.fillArc(ex - rad, ey - rad, rad * 2, rad * 2, start, 180, ArcType.ROUND);
+            gc.fillOval(ex - rad, ey - rad, rad * 2, rad * 2);
             gc.setStroke(Color.rgb(255, 130, 90, 0.85));
             gc.setLineWidth(2.5);
-            gc.strokeArc(ex - rad, ey - rad, rad * 2, rad * 2, start, 180, ArcType.ROUND);
+            gc.strokeOval(ex - rad, ey - rad, rad * 2, rad * 2);
         } else {
             double rad = Balance.MILKY_LAUGH_RANGE;
             gc.setFill(Color.rgb(255, 80, 90, 0.14 + 0.18 * p));
@@ -1646,6 +1661,27 @@ public final class Renderer {
         gc.setFont(tipF);
         gc.setFill(Color.rgb(150, 146, 166));
         gc.fillText(tip, vw / 2 - measureWidth(tipF, tip) / 2, vh - 26);
+
+        // ---- 被奶蛙击败：屏幕中央展示专属图 + 红色「压力！」 ----
+        Image press = Sprites.milkyPressure;
+        if (w.killedByMilky() && press != null) {
+            double ih = Math.min(210, vh * 0.30);
+            double iw = ih * (press.getWidth() / press.getHeight());
+            double cx = vw / 2;
+            double cy = vh * 0.52;
+            // 底衬，保证在战报之上依然清晰
+            gc.setFill(Color.rgb(8, 5, 12, 0.78));
+            gc.fillRoundRect(cx - iw / 2 - 26, cy - ih / 2 - 22, iw + 52, ih + 104, 16, 16);
+            gc.setStroke(Color.rgb(226, 96, 106, 0.55));
+            gc.setLineWidth(1.5);
+            gc.strokeRoundRect(cx - iw / 2 - 26, cy - ih / 2 - 22, iw + 52, ih + 104, 16, 16);
+            gc.setImageSmoothing(false);   // 像素图：关闭插值保持锐利
+            gc.drawImage(press, cx - iw / 2, cy - ih / 2, iw, ih);
+            gc.setImageSmoothing(true);
+            Font pf = Font.font("Microsoft YaHei", FontWeight.BOLD, 40);
+            drawTextSoft(gc, pf, cx, cy + ih / 2 + 58, "压力！",
+                    Color.rgb(232, 40, 48), Color.rgb(0, 0, 0, 0.75));
+        }
     }
 
     /** 量字符串像素宽度，同时返回宽度（复用 measurer，避免每帧新建 Text 节点） */
