@@ -223,4 +223,33 @@ public final class Upgrades {
             this.rarity = rarity;
         }
     }
+
+    /**
+     * 仅从该职业的主动技池中抽 3 张不重复的技能卡（Boss 击杀奖励用）。
+     * 与 roll() 的区别：不含被动 / 填充，保证"拿到的是一张技能卡"。
+     * 候选不足 3 个（池子已被抽空）时，用通用填充补齐。
+     */
+    public static Choice[] rollSpell(Loadout lo, Random rng) {
+        int[] pool = Spells.poolForClass(lo.classKind);
+        List<Integer> avail = new ArrayList<>();
+        for (int sid : pool) {
+            if (!lo.contains(sid)) {
+                avail.add(sid);
+            }
+        }
+        java.util.Collections.shuffle(avail, rng);
+        int n = 3;
+        Choice[] out = new Choice[n];
+        int filled = 0;
+        for (int sid : avail) {
+            if (filled >= n) {
+                break;
+            }
+            out[filled++] = makeChoice(new Cand(KIND_SPELL, sid, Spells.rarityOf(sid)), lo);
+        }
+        while (filled < n) {
+            out[filled++] = makeFiller(filled, rng);
+        }
+        return out;
+    }
 }

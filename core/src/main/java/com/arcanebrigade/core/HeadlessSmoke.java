@@ -4,7 +4,7 @@ package com.arcanebrigade.core;
  * 无界面冒烟测试 + 性能压测 + 元素反应验证 + D3 升级链路验证。
  *
  * 这个 main 能跑起来，就证明 core 层没有偷偷依赖任何 UI 框架——
- * 这是 D5 做主机端联机的前提。同时给出每帧模拟耗时，用来盯性能回退。
+ * 这是 core 层保持 UI 无关的前提。同时给出每帧模拟耗时，用来盯性能回退。
  *
  * 用法：
  *   java -cp core/target/classes com.arcanebrigade.core.HeadlessSmoke [帧数]            默认对局（三系法术）
