@@ -84,12 +84,6 @@ public final class Sprites {
     /** 敌方弹幕（统一的"敌意红"），与玩家元素弹做明显区分 */
     public static Image enemyBolt;
     public static Image gem;
-    /** 大厅地图选择卡的关卡预览；仅展示环境，不包含角色。 */
-    public static Image[] mapPreviews = new Image[3];
-    /** 战斗底图。固定镜头与 core 的单屏碰撞布局共用同一张关卡设计图。 */
-    public static Image[] battleMaps = new Image[3];
-    /** 荒漠扩展区的无实体地表纹理；所有真实掩体仍由 ArenaMap 的碰撞数据单独绘制。 */
-    public static Image desertExpeditionGround;
 
     // ---- 骨蛇（小 Boss，lobby-king 引入）----
     /** 蛇头：38×76 朝上的骨骼立绘。null 时退回 enemies[0] 替代 */
@@ -171,14 +165,7 @@ public final class Sprites {
 
         // 大厅背景与标题画面：从仓库根 image/ 读现成美术
         lobbyBg = loadArt("皇宫王座大厅背景.jpg");
-        titleScreen = loadArt("title_final_v3_covered_2x.png");
-        mapPreviews[0] = loadMap("desert-ruins.png");
-        mapPreviews[1] = loadMap("lava-dungeon.png");
-        mapPreviews[2] = loadMap("stone-crypt.png");
-        battleMaps[0] = loadBattleMap("desert-ruins.png");
-        battleMaps[1] = loadBattleMap("lava-dungeon.png");
-        battleMaps[2] = loadBattleMap("stone-crypt.png");
-        desertExpeditionGround = loadBattleMap("desert-expedition-ground-v1.png");
+        titleScreen = loadArt("title_final_v6_covered_2x.png");
         // 细节立绘（右侧角色卡大图），按下标对齐职业。
         // 美术给的多是带纯色底（黑/白）的整幅图，叠到王座厅上会出现一块黑底/白底，
         // 这里把环绕角色、与图边相连的背景色抠成透明（见 knockoutBackground）。
@@ -284,18 +271,6 @@ public final class Sprites {
         } catch (Exception e) {
             return null;
         }
-    }
-
-    private static Image loadMap(String name) {
-        String url = Sprites.class.getResource("/maps/" + name) != null
-                ? Sprites.class.getResource("/maps/" + name).toExternalForm() : null;
-        return url == null ? null : new Image(url, 360, 180, true, true);
-    }
-
-    private static Image loadBattleMap(String name) {
-        String url = Sprites.class.getResource("/maps/" + name) != null
-                ? Sprites.class.getResource("/maps/" + name).toExternalForm() : null;
-        return url == null ? null : new Image(url, false);
     }
 
     private static InputStream res(String name) {

@@ -467,7 +467,9 @@ public final class World {
             bossId = -1;   // Boss 倒下：清掉阶段技能标记，下一帧 updateBossPhase 也会兜底
         }
         if (id == milkyId) {
-            milkyId = -1;  // 奶蛙血量归零：消失（客户端据此停掉专属 BGM）
+            milkyId = -1;      // 奶蛙血量归零：消失（客户端据此停掉专属 BGM）
+            milkyCast = 0;     // 死亡立即中断施法，客户端据此停掉技能音效（大笑）
+            milkyCastT = 0f;
             // 结束规则之二：击败奶蛙 = 通关
             victory = true;
             summary = snapshot(true, false, firstWizard());
