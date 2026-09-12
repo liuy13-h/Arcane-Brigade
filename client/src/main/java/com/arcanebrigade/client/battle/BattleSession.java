@@ -1,6 +1,7 @@
 package com.arcanebrigade.client.battle;
 
 import com.arcanebrigade.core.Balance;
+import com.arcanebrigade.core.ArenaMap;
 import com.arcanebrigade.core.InputCommand;
 import com.arcanebrigade.core.Loadout;
 import com.arcanebrigade.core.Upgrades;
@@ -20,11 +21,14 @@ public final class BattleSession {
     private static final int MAX_STEPS = 5;
 
     private World world;
+    private long seed;
+    private ArenaMap arenaMap = ArenaMap.DESERT_RUINS;
     private double accumulator;
     private boolean manualPaused;
 
     public BattleSession(long seed) {
-        world = new World(seed);
+        this.seed = seed;
+        world = new World(seed, arenaMap);
     }
 
     /** 当前战斗的权威状态；仅供渲染和只读查询使用。 */
@@ -39,6 +43,20 @@ public final class BattleSession {
         }
     }
 
+    /** 大厅选择地图后、生成玩家前调用；战斗中不允许热切换关卡。 */
+    public void selectArenaMap(ArenaMap map) {
+        if (map == null || world.wizardCount() != 0) {
+            return;
+        }
+        arenaMap = map;
+        world = new World(seed, arenaMap);
+        accumulator = 0.0;
+    }
+
+    public ArenaMap arenaMap() {
+        return arenaMap;
+    }
+
     /** 仅供启动冒烟测试快速覆盖 Boss 渲染和阶段逻辑。 */
     public void spawnBossForSmoke(int tier) {
         world.spawnBoss(tier);
@@ -46,14 +64,17 @@ public final class BattleSession {
 
     /** 丢弃当前对局，准备一局新的战斗。 */
     public void reset(long seed) {
-        world = new World(seed);
+        this.seed = seed;
+        boolean autoFire = world.isAutoFire();
+        world = new World(seed, arenaMap);
+        world.setAutoFire(autoFire);
         accumulator = 0.0;
         manualPaused = false;
     }
 
     /** 由 UI 逐帧调用。返回可传给渲染器的位置插值系数。 */
     public float advance(double elapsedSeconds, InputCommand input) {
-        if (world.victory() || isPaused()) {
+        if (world.victory() || world.defeat() || isPaused()) {
             accumulator = 0.0;
             return 0f;
         }
@@ -72,7 +93,7 @@ public final class BattleSession {
     }
 
     public void toggleManualPause() {
-        if (!world.victory()) {
+        if (!world.victory() && !world.defeat()) {
             manualPaused = !manualPaused;
         }
     }

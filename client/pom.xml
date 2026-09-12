@@ -47,12 +47,10 @@
 
   <build>
     <plugins>
+      <!-- mainClass 由父工程的 pluginManagement 统一提供（见根 pom.xml） -->
       <plugin>
         <groupId>org.openjfx</groupId>
         <artifactId>javafx-maven-plugin</artifactId>
-        <configuration>
-          <mainClass>com.arcanebrigade.client.GameLauncher</mainClass>
-        </configuration>
       </plugin>
     </plugins>
   </build>

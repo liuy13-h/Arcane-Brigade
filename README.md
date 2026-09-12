@@ -8,6 +8,66 @@
 
 ---
 
+## 0. 快速开始：把项目跑起来
+
+### 环境要求
+
+- **JDK 17 或更高**（17 / 21 / 25 都行）。工程编译基线是 `--release 17`，
+  生成的 class 版本为 61，任何装了 JDK 17+ 的机器都能直接跑。
+- **不用单独安装 JavaFX**。依赖由 Maven 自动拉取（`org.openjfx:javafx-*:21.0.12`），
+  并会**按构建所在系统自动选择 `win` / `mac` / `linux` 平台包**，同一份工程跨平台无需改配置。
+- **首次导入需要联网**（Maven 要下载 JavaFX 依赖，约 30 MB）。
+
+### 方式一：IntelliJ IDEA（推荐）
+
+1. `File → Open`，选择克隆下来的**项目根目录**（即包含根 `pom.xml` 的那一层）。
+2. 出现 Maven 导入提示时选择**导入 / 信任该项目**，等右下角依赖下载与索引完成（首次约 1–3 分钟）。
+3. 确认 `File → Project Structure → Project SDK` 为 **17 或更高**。
+4. 打开 `client/src/main/java/com/arcanebrigade/client/GameLauncher.java`，
+   右键 **Run 'GameLauncher.main()'** 即可。
+
+> **⚠️ 不要直接运行 `GameApp`**（或 `MapPreview` 等 `Application` 子类）。IDEA 会允许你点运行按钮，
+> 但 Application 子类要求 JavaFX 在模块路径上，以 classpath 方式启动会被 JavaFX 拒绝并报
+> **「缺少 JavaFX 运行时组件，需要使用该组件来运行此应用程序」**——这不是依赖缺失，是启动方式不对。
+> 始终用 `GameLauncher`（或仓库内置的 `.run/启动游戏 (GameLauncher)` 运行配置）。
+
+> Maven 面板跑法：`Arcane Brigade : Client` → 插件 → `javafx` → 双击 `javafx:run`
+> （注意选 **Client** 子项目，根项目没有主类；见方式二）。
+
+> 运行配置的 **Working directory** 保持默认即可。即便被设成了模块目录（`client/`）也没关系——
+> 美术与音频资源是从工作目录**逐级向上**查找的，两种设置都找得到。
+
+> 控制台若出现 `Unsupported JavaFX configuration`（unnamed module）属于**正常警告**，不影响运行：
+> JavaFX 以 classpath 方式加载，启动类 `GameLauncher` 是独立于 `Application` 子类的，
+> 正是为了绕开 "JavaFX runtime components are missing" 而这样设计。
+
+### 方式二：命令行（Maven）
+
+```bash
+mvn install -DskipTests        # 首次：把 core 模块装进本地仓库
+mvn -pl client javafx:run      # 启动游戏
+```
+
+> `javafx:run` **必须带 `-pl client`**。本工程是 `core` + `client` 的聚合工程，
+> 父工程 `packaging=pom` 没有可运行的主类，直接在根目录执行会报 `mainClass missing`。
+
+### 方式三：Windows 一键启动
+
+双击项目根目录的 **`run.bat`**：它会用 `javac --release 17` 重新编译 core 与 client 后启动，
+保证运行的字节码与当前源码一致（需要 `javac` 在 PATH 上，且 JavaFX 依赖已被 Maven 下载到本地仓库）。
+
+### 排错
+
+| 现象 | 原因与处理 |
+|---|---|
+| 报「缺少 JavaFX 运行时组件」 | 直接运行了 `GameApp` 等 `Application` 子类。改用 `GameLauncher` 或运行配置「启动游戏 (GameLauncher)」 |
+| 提示缺少 `image/` 或 `audio/` | 这两个目录默认就在仓库里；若用了非标准工作目录，把 `Working directory` 改回项目根即可 |
+| 没有背景音乐 | 缺音频文件或无声卡时游戏会**静默降级**，只是没 BGM，不影响运行 |
+| Maven 报找不到 JavaFX 依赖 | 首次需要联网；或在 IDEA 里 Maven 面板点 **Reload All Maven Projects** |
+| 想快速验证能否正常渲染 | 加 JVM 参数 `-Dab.smoke=120` 可自动跑 120 帧后退出；`-Dab.class=1..4` 指定职业，`-Dab.boss=0..3` 直接刷 Boss |
+
+---
+
 ## 1. 核心循环
 
 ```
@@ -248,7 +308,7 @@
 
 Boss 战要点：有清晰可躲的**预警**（地面圈 / 起手动作），不是靠数值砸死玩家。
 
-## 6. 多人规则（本作的差异化）
+## 6. 小队规则（本作的差异化）
 
 ### 友军伤害
 
@@ -278,7 +338,7 @@ Boss 战要点：有清晰可躲的**预警**（地面圈 / 起手动作），�
 
 | 项 | 值 | 说明 |
 |---|---|---|
-| 逻辑帧率 | 60 Hz 固定步长 | 联机预测/回滚的前提 |
+| 逻辑帧率 | 60 Hz 固定步长 | 可重放 / 帧一致的前提 |
 | 玩家移速 | 195 | — |
 | 敌人速度 | 70–140 | 必须明显低于 195，否则甩不掉；也不能低于 70，否则追不上 |
 | 投射物碰撞 | 自身半径 + 目标半径 16 | 查询半径要含目标半径，否则擦边漏判 |
@@ -300,5 +360,4 @@ Boss 战要点：有清晰可躲的**预警**（地面圈 / 起手动作），�
 | 经验宝石、升级三选一、30 个被动（8 槽） | ⬜ D3 |
 | 技能进化（主动 + 催化剂 → 质变） | ⬜ D3 |
 | 精英、小偷、Boss | ⬜ D4 |
-| 联机同步 | ⬜ D5 |
 | 友军伤害、复活令牌、团队目标 | ⬜ D6 |

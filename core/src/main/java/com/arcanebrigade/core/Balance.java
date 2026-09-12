@@ -245,8 +245,8 @@ public final class Balance {
     public static final float OBSTACLE_SAFE_RADIUS = 200f;
     /** 障碍散布的最大半径（围绕玩家）。超出这圈在可视范围外没有意义 */
     public static final float OBSTACLE_SPREAD = 1350f;
-    /** 碰撞查询时障碍的最大半径，障碍碰撞查询范围按它放宽 */
-    public static final float OBSTACLE_MAX_R = 72f;
+    /** 最大障碍包围半径。蛇形战区的长残墙/掩体可到约 176，查询必须覆盖其完整底座。 */
+    public static final float OBSTACLE_MAX_R = 220f;
 
     // ---- 敌人变体（D4）----
     /** 精英：体型 ×6、速度 ×1.1、伤害 ×1.5，带一层护盾 */
@@ -278,7 +278,7 @@ public final class Balance {
      * 同样的时间点，一个吃满经验的玩家和一个挂机的玩家该面对的 Boss 强度不该一样。
      * 到等级但上一只还活着时不会叠加，会等它倒下再上（见 WaveDirector）。
      */
-    public static final int[]   BOSS_LEVELS   = { 4, 8, 12, 16 };
+    public static final int[]   BOSS_LEVELS   = { 5, 10, 15, 20 };
     public static final String[] BOSS_NAMES   = { "石心巨像", "熔岩领主", "霜寂君王", "终焉之影" };
     /** 每只 Boss 的血池。第一只别太肉，5 分钟时的 build 打得动 */
     public static final float[] BOSS_HP_TIERS = { 2000f, 4200f, 7200f, 13000f };
@@ -306,6 +306,59 @@ public final class Balance {
     /** 召唤：每 interval 秒在自身周围召唤 count 只小怪 */
     public static final float BOSS_SUMMON_INTERVAL = 6f;
     public static final int   BOSS_SUMMON_COUNT    = 4;
+
+    // ---- 战斗事件（小任务） ----
+    /** 三个事件的触发时间（秒）：2 分钟 / 5 分钟 / 8 分钟 */
+    public static final float[] EVENT_TIMES  = { 120f, 300f, 480f };
+    public static final String[] EVENT_NAMES = { "封印裂隙", "摧毁雕像", "采集蘑菇" };
+    /** 各事件完成后的经验奖励：按当前升级所需经验的倍率发放（越靠后越丰厚） */
+    public static final float[] EVENT_XP_MUL = { 0.8f, 1.2f, 1.8f };
+    /** 事件类型 id（World.eventType() 返回） */
+    public static final int EVENT_RIFT = 1;
+    public static final int EVENT_STATUE = 2;
+    public static final int EVENT_MUSHROOM = 3;
+    /** 封印裂隙：圈半径 + 需要在圈内累计坚持的秒数 */
+    public static final float RIFT_RADIUS     = 140f;
+    public static final float RIFT_HOLD_TIME  = 18f;
+    /** 摧毁雕像：数量 + 单只基础血量（再乘时间成长曲线） */
+    public static final int   STATUE_COUNT    = 3;
+    public static final float STATUE_HP       = 220f;
+    public static final float STATUE_RADIUS   = 26f;
+    /** 采集蘑菇：数量 + 存活时长（秒） */
+    public static final int   MUSHROOM_COUNT  = 8;
+    public static final float MUSHROOM_LIFE   = 120f;
+    /**
+     * 蘑菇直接撒在玩家周围的一圈上（内/外半径），而不是撒在事件中心外——
+     * 事件中心本身离玩家就有 260~520，再往外散布最远的一朵能到 900+ 单位，
+     * 玩家满地图乱撞也找不齐。角度按等分 + 轻微抖动，避免几朵叠在一起。
+     */
+    public static final float MUSHROOM_SPAWN_MIN = 130f;
+    public static final float MUSHROOM_SPAWN_MAX = 300f;
+    /** 蘑菇的吸附半径，比普通经验宝石大一圈——任务道具不该考验走位精度 */
+    public static final float MUSHROOM_PICKUP_RADIUS = 110f;
+
+    // ---- 5 关 Boss：奶蛙（玩家等级达到 25 级时从场地中央刷新，独立技能组）----
+    /** 刷新条件：玩家等级达到该值 */
+    public static final int   MILKY_LEVEL         = 25;
+    public static final float MILKY_HP            = 8000f;
+    public static final float MILKY_SPEED         = 220f;
+    public static final float MILKY_RADIUS        = 48f;
+    /** 接触伤害（技能伤害另算） */
+    public static final float MILKY_DMG           = 18f;
+    /** 靠近玩家到这个距离才起手放技能 */
+    public static final float MILKY_TRIGGER_RANGE = 300f;
+    /** 技能一 · 蓄力踩地：以自身为中心的整圆，半径与技能二相同，伤害 50（施法 1.5s） */
+    public static final float MILKY_STOMP_RANGE   = 253f;
+    public static final float MILKY_STOMP_DMG     = 50f;
+    public static final float MILKY_STOMP_CD      = 3.0f;
+    public static final float MILKY_STOMP_CAST    = 1.5f;
+    /** 技能二 · 捧腹大笑：半血以下才会用，圆形范围（比初版缩小 1/3）、伤害 100 */
+    public static final float MILKY_LAUGH_RANGE   = 253f;
+    public static final float MILKY_LAUGH_DMG     = 100f;
+    public static final float MILKY_LAUGH_CD      = 6.0f;
+    public static final float MILKY_LAUGH_CAST    = 2.0f;
+    /** 触发大笑的血量比例（低于此值才会大笑） */
+    public static final float MILKY_LAUGH_HP      = 0.5f;
 
     // ---- 世界 ----
     public static final float FIXED_STEP     = 1f / 60f;

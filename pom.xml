@@ -63,10 +63,35 @@
   <build>
     <pluginManagement>
       <plugins>
+        <!--
+          编译器插件必须锁定到 3.6+ 才会读取 maven.compiler.release；
+          Maven 默认的 3.1 只认 source/target（且默认 1.5），在 JDK 9+ 上会直接报
+          “不支持源选项 5 / 请使用 7 或更高版本”。这里锁 3.13.0 并显式使用
+          maven.compiler.release（当前 17，兼容 JDK 17~26+）。
+        -->
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <version>3.13.0</version>
+          <configuration>
+            <release>${maven.compiler.release}</release>
+            <encoding>${project.build.sourceEncoding}</encoding>
+          </configuration>
+        </plugin>
+        <!--
+          插件配置放在 pluginManagement 里统一管理：mainClass 在这里声明一次，
+          client 模块直接继承即可运行。
+          注意：本项目是 core + client 两个模块的聚合工程，父工程 packaging=pom，
+          直接在工作区根目录跑 `mvn javafx:run` 会让父工程也尝试启动（没有可运行的类）。
+          正确用法是指定模块：mvn -pl client javafx:run（需先 mvn install 把 core 装到本地仓库）。
+        -->
         <plugin>
           <groupId>org.openjfx</groupId>
           <artifactId>javafx-maven-plugin</artifactId>
           <version>0.0.8</version>
+          <configuration>
+            <mainClass>com.arcanebrigade.client.GameLauncher</mainClass>
+          </configuration>
         </plugin>
       </plugins>
     </pluginManagement>
