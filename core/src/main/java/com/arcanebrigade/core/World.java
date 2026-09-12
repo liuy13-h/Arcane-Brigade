@@ -1,5 +1,7 @@
 package com.arcanebrigade.core;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
 
 import com.arcanebrigade.core.enemy.BoneSerpent;
@@ -11,9 +13,9 @@ import com.arcanebrigade.core.enemy.WaveDirector;
  *
  * 存储采用 SoA（Structure of Arrays）+ 空闲链表复用，目的是：
  *   1. 上千实体时避免逐对象 GC；
- *   2. 快照序列化时可以直接按数组批量打包（D5 联机会用到）。
+ *   2. 快照序列化时可以直接按数组批量打包。
  *
- * 固定步长推进，dt 恒为 Balance.FIXED_STEP，保证可重放、可联机。
+ * 固定步长推进，dt 恒为 Balance.FIXED_STEP，保证可重放、帧间一致。
  */
 public final class World {
 
@@ -92,6 +94,14 @@ public final class World {
     public final float[] cd = new float[MAX];
     /** 受击无敌剩余时间，&lt;=0 才能再次受伤 */
     public final float[] iframe = new float[MAX];
+
+    /** 战士冲刺：冲刺剩余持续时间（>0 表示正在冲刺） */
+    public final float[] dashTimer = new float[MAX];
+    /** 战士冲刺：冷却剩余（>0 表示尚不可用） */
+    public final float[] dashCd = new float[MAX];
+    /** 战士冲刺：本段冲刺的方向（单位向量） */
+    public final float[] dashDirX = new float[MAX];
+    public final float[] dashDirY = new float[MAX];
 
     public final int[] kind = new int[MAX];
     public final int[] team = new int[MAX];
@@ -177,6 +187,12 @@ public final class World {
     /** 障碍物空间哈希。障碍是静态的，只在场景切换时整体重建，所以每帧只查询不重建 */
     private final SpatialHash obstacleHash = new SpatialHash(64f);
     private final WaveDirector director = new WaveDirector();
+    /** 是否允许波次导演刷怪（调试用 -Dab.noSpawn 关闭，只留 Boss） */
+    private boolean spawningEnabled = true;
+    /** 正在结算奶蛙技能伤害（用于判定「角色是否被奶蛙击败」） */
+    private boolean milkyHitActive;
+    /** 本局角色是否被奶蛙的技能打死（阵亡画面据此显示专属图） */
+    private boolean killedByMilky;
 
     // ---- 骨蛇（lobby-king 引入的小 Boss，多段软体）----
     /** 场上同时最多 N 条骨蛇，避免段数把实体池撑爆 */
@@ -278,6 +294,8 @@ public final class World {
     private int bossKills;
     /** 终局战报快照：胜利或阵亡时冻结一份，避免结算画面上的数字继续跳动 */
     private Summary summary;
+    /** 击败奶蛙的终局奖励技能卡名字（游戏结束无法三选一，记下来给胜利画面展示） */
+    public String victoryCardName;
     /** 主动退出（暂停菜单「退出结算」）：与阵亡同屏展示战报，但标题不同 */
     private boolean abandoned;
     /** 开火模式：true=自动索敌开火，false=手动（朝鼠标方向，按住开火） */
@@ -316,6 +334,12 @@ public final class World {
     private boolean milkyFaceRight;
     /** 踩地动画是否用镜像版（玩家在左侧时） */
     private boolean milkyMirror;
+    /**
+     * 技能施法时长直接取 Balance 配置。动画由客户端按该时长归一化播放，
+     * 所以即使 GIF 比 1.5s 长，也会被压缩到施法时间内完整播完一次。
+     */
+    private float milkyStompCastDur = Balance.MILKY_STOMP_CAST;
+    private float milkyLaughCastDur = Balance.MILKY_LAUGH_CAST;
 
     /**
      * 玩家的指挥指令：鼠标点击（或按住）时记下世界坐标。
@@ -440,6 +464,18 @@ public final class World {
             milkyId = -1;  // 奶蛙血量归零：消失（客户端据此停掉专属 BGM）
             // 结束规则之二：击败奶蛙 = 通关
             victory = true;
+            // 终局奖励：直接给一张随机技能卡（游戏结束无法三选一，记名字给胜利画面展示）
+            int wz = firstWizard();
+            if (wz >= 0) {
+                Loadout lo = loadout(wz);
+                if (lo != null) {
+                    int sid = pickNewSpell(lo);
+                    if (sid != Spells.NONE) {
+                        lo.add(sid);
+                        victoryCardName = (Spells.get(sid) != null) ? Spells.get(sid).name : null;
+                    }
+                }
+            }
             summary = snapshot(true, false, firstWizard());
         }
         int k = kind[id];
@@ -449,6 +485,13 @@ public final class World {
             // 骨蛇按 Boss 计（否则它的击杀会混进"普通击杀"里，结算数字对不上）
             if (variant[id] == V_BOSS || variant[id] == V_SERPENT) {
                 bossKills++;
+            }
+            // 击杀按等级刷的 Boss：奖励一张技能卡（升级三选一面板会因此弹出）
+            if (variant[id] == V_BOSS) {
+                int wz = firstWizard();
+                if (wz >= 0) {
+                    grantBossCard(wz);
+                }
             }
             healWarriorsOnKill();
             if (killListener != null) {
@@ -492,6 +535,9 @@ public final class World {
         if (k == KIND_WIZARD && !defeat) {
             // 主控玩家阵亡：立刻冻一份战报，客户端据此停止推进并弹结算画面。
             // 之前这里什么都不做，玩家死后游戏会一直空转（没有单位可操作）却永远不结束。
+            if (milkyHitActive) {
+                killedByMilky = true;   // 死于奶蛙技能：阵亡画面显示专属图与「压力！」
+            }
             defeat = true;
             summary = snapshot(false, false, id);
         }
@@ -899,7 +945,9 @@ public final class World {
         updateSummoners(dt);      // 召唤师：到点召唤一批宠物
         updateEvents(dt);         // 战斗事件：到点触发 + 进度推进 + 完成发经验
         specialPassiveTick(dt);
-        director.update(this, dt);
+        if (spawningEnabled) {
+            director.update(this, dt);   // 调试可关闭：只打 Boss，不刷小怪
+        }
         updateEnemies(dt);
         updateMinions(dt);        // 宠物 AI：护主 / 听指挥 / 拴绳
         if (bossId >= 0) {
@@ -1142,6 +1190,17 @@ public final class World {
         }
     }
 
+    /** 调试用：强制开启第 idx 个战斗事件（跳过触发时间）。冒烟 / 手动测试用。 */
+    public void forceEvent(int idx) {
+        if (eventType != 0) {
+            return;
+        }
+        if (idx < 0 || idx >= Balance.EVENT_TIMES.length) {
+            return;
+        }
+        startEvent(idx);
+    }
+
     /** 完成任务：清场 + 发经验 + 横幅提示。 */
     private void completeEvent() {
         if (eventType == 0) {
@@ -1253,9 +1312,48 @@ public final class World {
                 moveMul *= 1f + Balance.LAST_STAND_MOVE;
             }
 
+            // 战士冲刺：每 5 秒可触发一次短距冲刺，冲刺期间无敌
+            if (dashCd[id] > 0f) {
+                dashCd[id] -= dt;
+            }
+            if (ck == HeroClass.WARRIOR && (in.buttons & InputCommand.BUTTON_DASH) != 0
+                    && dashCd[id] <= 0f && dashTimer[id] <= 0f) {
+                float ddx = in.dx, ddy = in.dy;
+                if (ddx == 0f && ddy == 0f) {
+                    // 没按方向：朝最近敌人冲，否则默认朝上
+                    int tgt = nearestEnemy(x[id], y[id], 99999f);
+                    if (tgt >= 0) {
+                        ddx = x[tgt] - x[id];
+                        ddy = y[tgt] - y[id];
+                    } else {
+                        ddx = 0f;
+                        ddy = -1f;
+                    }
+                }
+                float dl = (float) Math.sqrt(ddx * ddx + ddy * ddy);
+                if (dl > 1e-4f) {
+                    ddx /= dl;
+                    ddy /= dl;
+                }
+                dashDirX[id] = ddx;
+                dashDirY[id] = ddy;
+                dashTimer[id] = Balance.DASH_DURATION;
+                dashCd[id] = Balance.DASH_CD;
+            }
+
             float baseSpeed = HeroClass.baseSpeed(ck);
             x[id] += in.dx * baseSpeed * moveMul * dt;
             y[id] += in.dy * baseSpeed * moveMul * dt;
+            if (dashTimer[id] > 0f) {
+                // 冲刺在普通移动之上叠加一段爆发位移
+                x[id] += dashDirX[id] * Balance.DASH_SPEED * dt;
+                y[id] += dashDirY[id] * Balance.DASH_SPEED * dt;
+                dashTimer[id] -= dt;
+                // 冲刺全程无敌：把受击无敌刷到不低于剩余冲刺时间
+                if (iframe[id] < dashTimer[id]) {
+                    iframe[id] = dashTimer[id];
+                }
+            }
             resolveObstacles(id);
             clampToWorld(id);   // 玩家也被棕色城墙（边界）挡在内侧
             if (iframe[id] > 0f) {
@@ -1540,7 +1638,7 @@ public final class World {
         hp[id] = maxHp[id];
         speed[id] = Balance.MILKY_SPEED;
         r[id] = Balance.MILKY_RADIUS;
-        dmg[id] = Balance.MILKY_DMG;
+        dmg[id] = 0f;   // 取消奶蛙与角色的碰撞伤害（只靠技能打人）
         enemyShield[id] = 0f;
         milkyId = id;
         milkySpawned = true;
@@ -1570,7 +1668,10 @@ public final class World {
         }
         float dx = x[w] - x[m];
         float dy = y[w] - y[m];
-        milkyFaceRight = dx >= 0f;
+        // 只有不施法时才更新朝向：技能起手后朝向与判定范围都要锁死，播完前不变
+        if (milkyCast == 0) {
+            milkyFaceRight = dx >= 0f;
+        }
 
         if (milkyStompCd > 0f) {
             milkyStompCd -= dt;
@@ -1580,20 +1681,22 @@ public final class World {
         }
 
         if (milkyCast != 0) {
-            speed[m] = 0f;      // 释放技能期间无法移动
-            dmg[m] = 0f;        // 施法中也不造成接触伤害
+            // 技能一旦起手就完整播完：施法期间锁移动、不响应新技能，直到动作走完
+            speed[m] = 0f;
             milkyCastT += dt;
-            float dur = (milkyCast == 2) ? Balance.MILKY_LAUGH_CAST : Balance.MILKY_STOMP_CAST;
-            if (milkyCastT >= dur) {
+            if (milkyCastT >= milkyCastDur()) {
+                // milkyHitActive：让 kill() 能识别「这次死亡是奶蛙造成的」
+                milkyHitActive = true;
                 if (milkyCast == 2) {
                     damagePlayersInRadius(x[m], y[m], Balance.MILKY_LAUGH_RANGE,
                             Balance.MILKY_LAUGH_DMG);
                     milkyLaughCd = Balance.MILKY_LAUGH_CD;
                 } else {
-                    damagePlayersInSemicircle(x[m], y[m], Balance.MILKY_STOMP_RANGE,
-                            Balance.MILKY_STOMP_DMG, milkyFaceRight ? 1 : -1);
+                    damagePlayersInRadius(x[m], y[m], Balance.MILKY_STOMP_RANGE,
+                            Balance.MILKY_STOMP_DMG);
                     milkyStompCd = Balance.MILKY_STOMP_CD;
                 }
+                milkyHitActive = false;
                 milkyCast = 0;
                 milkyCastT = 0f;
             }
@@ -1601,7 +1704,7 @@ public final class World {
         }
 
         speed[m] = Balance.MILKY_SPEED;
-        dmg[m] = Balance.MILKY_DMG;
+        // dmg[m] 恒为 0：奶蛙不造成碰撞伤害（技能伤害另算）
 
         boolean near = dx * dx + dy * dy
                 <= Balance.MILKY_TRIGGER_RANGE * Balance.MILKY_TRIGGER_RANGE;
@@ -1615,43 +1718,8 @@ public final class World {
         } else if (milkyStompCd <= 0f) {
             milkyCast = 1;
             milkyCastT = 0f;
-            milkyMirror = !milkyFaceRight;   // 玩家在左侧 → 用镜像动画
-        }
-    }
-
-    /** 半圆范围伤害：side>=0 打右半侧，side<0 打左半侧（圆心 ex,ey） */
-    private void damagePlayersInSemicircle(float ex, float ey, float radius, float dmg, int side) {
-        for (int n = 0; n < wizards.size(); n++) {
-            int wz = wizards.get(n);
-            if (!alive[wz]) {
-                continue;
-            }
-            float dx = x[wz] - ex;
-            float dy = y[wz] - ey;
-            if (side >= 0 ? dx < 0f : dx > 0f) {
-                continue;
-            }
-            float rr = radius + r[wz];
-            if (dx * dx + dy * dy <= rr * rr && iframe[wz] <= 0f) {
-                damage(wz, dmg);
-                iframe[wz] = heroIframe(wz);
-            }
-        }
-        for (int n = 0; n < minions.size(); n++) {
-            int mi = minions.get(n);
-            if (!alive[mi]) {
-                continue;
-            }
-            float dx = x[mi] - ex;
-            float dy = y[mi] - ey;
-            if (side >= 0 ? dx < 0f : dx > 0f) {
-                continue;
-            }
-            float rr = radius + r[mi];
-            if (dx * dx + dy * dy <= rr * rr && iframe[mi] <= 0f) {
-                damage(mi, dmg);
-                iframe[mi] = Balance.MINION_IFRAME;
-            }
+            // 起手瞬间定下动画用哪一套（仅视觉；整圆范围不分方向）
+            milkyMirror = !milkyFaceRight;
         }
     }
 
@@ -2755,7 +2823,7 @@ public final class World {
     }
 
     /** 找造成这次反应的攻击者所属玩家的 stats（用于反应乘算）。
-     *  当前用最近玩家简化处理，D6 联机时改成按 owner 找 */
+     *  当前用最近玩家简化处理，后续可改成按 owner 找 */
     private float statsMulForReaction(int target) {
         int w = firstWizard();
         if (w < 0 || loadout[w] == null) {
@@ -3018,6 +3086,33 @@ public final class World {
         return lo != null && lo.add(spellId);
     }
 
+    /** 击杀 Boss 奖励：让升级面板弹出一组仅主动技的三选一（技能卡） */
+    public void grantBossCard(int wizardId) {
+        Loadout lo = loadout(wizardId);
+        if (lo == null) {
+            return;
+        }
+        lo.pendingUps++;
+        if (lo.pendingChoices == null) {
+            lo.pendingChoices = Upgrades.rollSpell(lo, rng);
+        }
+    }
+
+    /** 从职业池里随机挑一个尚未拥有的主动技；都满则返回 NONE */
+    private int pickNewSpell(Loadout lo) {
+        int[] pool = Spells.poolForClass(lo.classKind);
+        List<Integer> avail = new ArrayList<>();
+        for (int sid : pool) {
+            if (!lo.contains(sid)) {
+                avail.add(sid);
+            }
+        }
+        if (avail.isEmpty()) {
+            return Spells.NONE;
+        }
+        return avail.get(rng.nextInt(avail.size()));
+    }
+
     public Loadout loadout(int id) {
         return (id >= 0 && id < MAX) ? loadout[id] : null;
     }
@@ -3053,11 +3148,21 @@ public final class World {
 
     // ---- 5 关 Boss 奶蛙（客户端渲染 / 音乐用） ----
 
+    /** 调试用：关闭/开启普通刷怪（关闭后只保留 Boss 与事件） */
+    public void setSpawningEnabled(boolean enabled) {
+        this.spawningEnabled = enabled;
+    }
+
     /** 冒烟 / 调试用：立即刷新奶蛙（忽略等级条件） */
     public void forceSpawnMilky() {
         if (!milkySpawned) {
             spawnMilky();
         }
+    }
+
+    /** 本局角色是否被奶蛙技能击败（阵亡画面据此显示专属图 + 「压力！」） */
+    public boolean killedByMilky() {
+        return killedByMilky;
     }
 
     /** 奶蛙实体 id；-1 表示不在场 */
@@ -3080,10 +3185,12 @@ public final class World {
         return milkyCastT;
     }
 
+    /** 当前技能的实际施法时长（客户端渲染动画进度也用它） */
     public float milkyCastDur() {
-        return (milkyCast == 2) ? Balance.MILKY_LAUGH_CAST : Balance.MILKY_STOMP_CAST;
+        return (milkyCast == 2) ? milkyLaughCastDur : milkyStompCastDur;
     }
 
+    /** 由客户端按施法时长归一化播放动画：这里不再受 GIF 总时长牵制 */
     /** true=奶蛙朝右（决定用哪套行走动画） */
     public boolean milkyFaceRight() {
         return milkyFaceRight;
