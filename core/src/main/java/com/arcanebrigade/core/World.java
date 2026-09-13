@@ -42,6 +42,10 @@ public final class World {
     public static final int ZONE_CHAIN   = 3;
     /** 预警圈：先在地上显示 telegraph 秒，到期对玩家与敌人爆炸 */
     public static final int ZONE_WARNING = 4;
+    /** 三阶段地刺：警示期（1 秒前摇 + 提示），到期刺出并结算伤害 */
+    public static final int ZONE_KING_SPIKE_TELE = 5;
+    /** 三阶段地刺：出刺后的刺身视觉（纯视觉载体，不参与 tick 伤害） */
+    public static final int ZONE_KING_SPIKE = 6;
 
     /** 敌人变体。普通怪不做特殊行为，其余按类型分派 */
     public static final int V_NORMAL = 0;
@@ -68,10 +72,12 @@ public final class World {
      *   FX_BLAST —— 圆形爆炸，半径在 r
      *   FX_BEAM  —— 线段，终点借存 vx/vy
      *   FX_ARC   —— 近战扇形，半径在 r，朝向借存 dmg
+     *   FX_RIFT  —— 裂隙漩涡，半径在 r
      */
     public static final int FX_BLAST = 0;
     public static final int FX_BEAM  = 1;
     public static final int FX_ARC   = 2;
+    public static final int FX_RIFT  = 3;
 
     /** 阵营。友军伤害与命中过滤都靠它：投射物只打不同阵营。 */
     public static final int TEAM_PLAYER = 0;
@@ -340,6 +346,68 @@ public final class World {
      */
     private float milkyStompCastDur = Balance.MILKY_STOMP_CAST;
     private float milkyLaughCastDur = Balance.MILKY_LAUGH_CAST;
+    /**
+     * 奶蛙被击败倒地后置位：客户端据此触发强制剧情 CG（锁操作、全程自动、不直接结算）。
+     * 与 victory 无关——通关判定已移交给后续的王宫决战。一旦置位不会复位。
+     */
+    private boolean milkyFallen;
+    /** 奶蛙倒下的位置：CG 镜头聚焦与消散特效的锚点 */
+    private float milkyDownX;
+    private float milkyDownY;
+
+    // ---- 王宫最终决战：国王（第一阶段；第二/三阶段后续接入） ----
+    /** true=已进入王宫决战场景（竞技场）：不再刷怪 / 推进沙漠阶段 / 生成事件 */
+    private boolean kingArena;
+    /** 国王实体 id；-1 表示不在场 */
+    private int kingId = -1;
+    /** 国王阶段：0=未开战，1/2/3=对应阶段 */
+    private int kingPhase;
+    /** 技能冷却（阶段一：每 8 秒一次） */
+    private float kingSkillCd;
+    /** 前摇剩余（>0 = 施法中随机走位躲弹幕；预警圈与前摇同时开始，圈到期即爆炸） */
+    private float kingTelegraphT;
+    /** 消耗计时：每 15 秒按被动获得顺序失去一个被动并损失 10 点生命 */
+    private float kingAttritionT;
+    /** 国王朝向（渲染选动画用） */
+    private boolean kingFaceRight = true;
+    /** 前摇随机走位：距下次换方向的剩余时间 */
+    private float kingDodgeT;
+    /** 前摇随机走位方向（单位向量） */
+    private float kingDodgeDx;
+    private float kingDodgeDy;
+    /**
+     * 一阶段被击破：客户端据此弹出决裂对白（国王跪地 → 一切刚刚开始）。
+     * 对白播完由客户端调用 beginKingPhase2，国王在王座上以二阶段重生。
+     */
+    private boolean kingFallen;
+    /** 一阶段国王倒下的位置（对白演出：倒地剪影锚点） */
+    private float kingDownX;
+    private float kingDownY;
+    /** 二阶段魔弹：距下一轮齐射的剩余时间（发射后 = 追踪 6s + 间隔 4s = 10s） */
+    private float kingBoltCd;
+    /** 二阶段地面攻击提示：距下一次施放的剩余时间 */
+    private float kingAoeCd;
+    /** 二阶段裂隙刷怪：距下一道裂隙的剩余时间 */
+    private float kingRiftCd;
+    /** 二阶段惩罚：玩家移速损失（0=未进入二阶段；进入后恒为 KING2_SPEED_PENALTY） */
+    private float kingSpeedPenalty;
+    /**
+     * 二阶段被击破：客户端据此弹出「王座本体」过渡剧情（国王碎裂 → 「最终决战」标题卡）。
+     * 对白播完由客户端调用 beginKingPhase3，王座觉醒进入三阶段。
+     */
+    private boolean kingFallen2;
+    /** 三阶段传送：距下一轮的剩余时间（每 3 秒一轮） */
+    private float kingTeleCd;
+    /** 三阶段传送前摇剩余（>0 = 前摇中：减伤降为 20% 的输出窗口 + 落点预警圈） */
+    private float kingTeleT;
+    /** 三阶段地刺：距下一批的剩余时间 */
+    private float kingSpikeCd;
+    /** 三阶段深渊牵引：距下一次的剩余时间 */
+    private float kingPullCd;
+    /** 本次牵引的剩余时间（>0 = 玩家正被拽向王座） */
+    private float kingPullT;
+    /** 三阶段裂隙召唤 Boss：距下一次的剩余时间 */
+    private float kingSummonCd;
 
     /**
      * 玩家的指挥指令：鼠标点击（或按住）时记下世界坐标。
@@ -462,21 +530,56 @@ public final class World {
         }
         if (id == milkyId) {
             milkyId = -1;  // 奶蛙血量归零：消失（客户端据此停掉专属 BGM）
-            // 结束规则之二：击败奶蛙 = 通关
-            victory = true;
-            // 终局奖励：直接给一张随机技能卡（游戏结束无法三选一，记名字给胜利画面展示）
-            int wz = firstWizard();
-            if (wz >= 0) {
-                Loadout lo = loadout(wz);
-                if (lo != null) {
-                    int sid = pickNewSpell(lo);
-                    if (sid != Spells.NONE) {
-                        lo.add(sid);
-                        victoryCardName = (Spells.get(sid) != null) ? Spells.get(sid).name : null;
-                    }
-                }
+            // 前置剧情触发点：击败奶蛙不再直接通关。记录倒地位置并置 milkyFallen，
+            // 客户端据此锁定操作、强制播放剧情 CG；胜利判定移交给后续的王宫决战。
+            milkyFallen = true;
+            milkyDownX = x[id];
+            milkyDownY = y[id];
+            // 手动收尾：不走下方通用击杀块——避免弹升级三选一 / 掉宝石 / 胜利结算，
+            // 让战场在剧情开始前保持安静（只保留击杀计数）。
+            enemiesAlive--;
+            kills++;
+            bossKills++;
+            kind[id] = KIND_FREE;
+            liveCount--;
+            if (freeTop < MAX) {
+                freeList[freeTop++] = id;
             }
-            summary = snapshot(true, false, firstWizard());
+            return;
+        }
+        if (id == kingId) {
+            int phaseFallen = kingPhase;
+            kingId = -1;
+            kingPhase = 0;
+            // 手动收尾：国王不走通用击杀块（不弹升级三选一、不掉宝石），计数照常。
+            enemiesAlive--;
+            kills++;
+            bossKills++;
+            kind[id] = KIND_FREE;
+            liveCount--;
+            if (freeTop < MAX) {
+                freeList[freeTop++] = id;
+            }
+            if (phaseFallen >= 3) {
+                // 三阶段击破 = 真通关：王座本体轰然崩解
+                victory = true;
+                summary = snapshot(true, false, firstWizard());
+                return;
+            }
+            if (phaseFallen >= 2) {
+                // 二阶段击破：不结算。记录倒地锚点并置 kingFallen2，客户端据此弹
+                // 「王座本体」过渡剧情；播完调用 beginKingPhase3，王座觉醒进入最终决战。
+                kingFallen2 = true;
+                kingDownX = x[id];
+                kingDownY = y[id];
+                return;
+            }
+            // 一阶段击破：不直接结算。记录倒地位置并置 kingFallen，客户端据此弹决裂对白；
+            // 对白播完调用 beginKingPhase2 —— 国王在王座上以二阶段重生（消耗计时重置）。
+            kingFallen = true;
+            kingDownX = x[id];
+            kingDownY = y[id];
+            return;
         }
         int k = kind[id];
         if (k == KIND_ENEMY) {
@@ -937,13 +1040,17 @@ public final class World {
             py[i] = y[i];
         }
 
-        updateStage(dt);          // 阶段推进 + 首次障碍生成
+        if (!kingArena) {
+            updateStage(dt);      // 阶段推进 + 首次障碍生成（决战场景不推进沙漠阶段）
+        }
         rebuildEnemyHash();
         updateOrder(dt, in);      // 鼠标指挥指令的有效期
         updateStatus(dt);
         updateWizards(dt, in);
         updateSummoners(dt);      // 召唤师：到点召唤一批宠物
-        updateEvents(dt);         // 战斗事件：到点触发 + 进度推进 + 完成发经验
+        if (!kingArena) {
+            updateEvents(dt);     // 战斗事件：到点触发 + 进度推进 + 完成发经验（决战中不再触发）
+        }
         specialPassiveTick(dt);
         if (spawningEnabled) {
             director.update(this, dt);   // 调试可关闭：只打 Boss，不刷小怪
@@ -960,12 +1067,17 @@ public final class World {
         if (milkyId >= 0) {
             updateMilky(dt);
         }
+        if (kingId >= 0) {
+            updateKing(dt);   // 王宫决战：国王技能 + 消耗机制（追击在 updateEnemies 里）
+        }
         castSpells(dt, in);
         updateProjectiles(dt);
         updatePickups(dt);
         updateZones(dt);
         updateFx(dt);
-        cullDistant();
+        if (!kingArena) {
+            cullDistant();   // 竞技场场地小、实体不会跑远，不需要回收
+        }
     }
 
     /**
@@ -1341,7 +1453,8 @@ public final class World {
                 dashCd[id] = Balance.DASH_CD;
             }
 
-            float baseSpeed = HeroClass.baseSpeed(ck);
+            // 决战二阶段：国王夺走 20 点移速（保底 40，避免角色完全无法行动）
+            float baseSpeed = Math.max(40f, HeroClass.baseSpeed(ck) - kingSpeedPenalty);
             x[id] += in.dx * baseSpeed * moveMul * dt;
             y[id] += in.dy * baseSpeed * moveMul * dt;
             if (dashTimer[id] > 0f) {
@@ -1355,7 +1468,11 @@ public final class World {
                 }
             }
             resolveObstacles(id);
-            clampToWorld(id);   // 玩家也被棕色城墙（边界）挡在内侧
+            if (kingArena) {
+                clampKingArena(id);   // 决战场景：限制在王座厅竞技场内
+            } else {
+                clampToWorld(id);     // 玩家也被棕色城墙（边界）挡在内侧
+            }
             if (iframe[id] > 0f) {
                 iframe[id] -= dt;
             }
@@ -1458,7 +1575,11 @@ public final class World {
             x[i] += (vx[i] + sepX * moveSpeed * Balance.ENEMY_SEPARATION + kx[i]) * dt;
             y[i] += (vy[i] + sepY * moveSpeed * Balance.ENEMY_SEPARATION + ky[i]) * dt;
             resolveObstacles(i);   // 障碍碰撞推出（敌人也绕不过去）
-            clampToWorld(i);       // 敌人同样被棕色城墙挡在内侧，不会被挤飞出去
+            if (kingArena) {
+                clampKingArena(i);
+            } else {
+                clampToWorld(i);   // 敌人同样被棕色城墙挡在内侧，不会被挤飞出去
+            }
 
             // 接触伤害
             float ndx = x[target] - x[i];
@@ -1469,6 +1590,10 @@ public final class World {
                 if (cd[i] <= 0f) {
                     if (iframe[target] <= 0f) {
                         damage(target, dmg[i]);
+                        // 三阶段被动：王座贴身咬中英雄也汲取生命（宠物挨打不回，否则四只宠物能白喂血）
+                        if (i == kingId && kind[target] == KIND_WIZARD) {
+                            kingDrain(1);
+                        }
                         // 无敌帧：宠物用固定短帧，玩家用职业基础 + 灵巧被动
                         iframe[target] = (kind[target] == KIND_MINION)
                                 ? Balance.MINION_IFRAME : heroIframe(target);
@@ -1720,6 +1845,666 @@ public final class World {
             milkyCastT = 0f;
             // 起手瞬间定下动画用哪一套（仅视觉；整圆范围不分方向）
             milkyMirror = !milkyFaceRight;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 王宫最终决战：国王（第一阶段）
+    // ------------------------------------------------------------------
+
+    /**
+     * 进入王宫决战：清空战场（小怪 / 投射物 / 掉落 / 障碍 / 骨蛇），
+     * 玩家归位殿中，国王在王座前刷新（阶段一：5000 血 / 常态站桩，技能前摇期间随机走位躲弹幕）。
+     * 由客户端在王宫大殿按空格时调用，之后走正常战斗循环。
+     *
+     * TODO（设计需求，单机先记录不实现）：与国王战斗时，玩家自动索敌应把队友视为敌人并造成 10% 伤害。
+     */
+    public void enterKingArena() {
+        clearBattlefield();
+        kingArena = true;
+        spawningEnabled = false;
+        milkySpawned = true;       // 防御：调试直进决战时别让奶蛙在后面复活
+        int w = firstWizard();
+        if (w >= 0) {
+            x[w] = Balance.ARENA_ENTER_X;
+            y[w] = Balance.ARENA_ENTER_Y;
+            px[w] = x[w];
+            py[w] = y[w];
+            kx[w] = 0f;
+            ky[w] = 0f;
+        }
+        kingPhase = 1;
+        spawnKing1();
+    }
+
+    /** 决战开场清场：非玩家实体一律移出战场（不计击杀、不掉落） */
+    private void clearBattlefield() {
+        for (int i = 0; i < high; i++) {
+            if (!alive[i] || kind[i] == KIND_FREE || kind[i] == KIND_WIZARD) {
+                continue;
+            }
+            despawn(i);
+        }
+        // 骨蛇是"一怪多实体"的特殊链路，头槽与段列表要单独清干净
+        for (int s = 0; s < MAX_BONE_SERPENT; s++) {
+            boneSerpentHead[s] = -1;
+            if (serpentSegsBySlot[s] != null) {
+                serpentSegsBySlot[s].clear();
+            }
+        }
+        bossId = -1;
+        milkyId = -1;
+        eventIds.clear();
+        eventType = 0;
+        eventBannerT = 0f;
+        enemyHash.beginFrame();
+        obstacleHash.beginFrame();
+    }
+
+    /** 阶段一的国王：5000 血 / 无接触伤害（唯一攻击手段是 8 秒一圈的 AOE）；站桩出生，位移全部走手动路径 */
+    private void spawnKing1() {
+        int id = spawnEnemy(Balance.ARENA_KING_X, Balance.ARENA_KING_Y, 0, V_BOSS);
+        if (id < 0) {
+            return;
+        }
+        maxHp[id] = Balance.KING1_HP;
+        hp[id] = maxHp[id];
+        // 移速由 updateKing / dodgeKing 逐帧驱动（常态站桩、前摇随机走位）。
+        // speed 锁 0——否则 updateEnemies 的通用追击会把国王拖向玩家
+        speed[id] = 0f;
+        r[id] = Balance.KING1_RADIUS;
+        dmg[id] = 0f;
+        enemyShield[id] = 0f;
+        kingId = id;
+        kingSkillCd = Balance.KING1_SKILL_CD;
+        kingTelegraphT = 0f;
+        kingAttritionT = Balance.KING_ATTRITION_INTERVAL;
+        kingFaceRight = true;
+        kingDodgeT = 0f;          // 首次前摇立即滚出随机方向
+        kingDodgeDx = 0f;
+        kingDodgeDy = 1f;
+    }
+
+    /**
+     * 国王行为（第一阶段）：
+     * 常态站桩不动，只在技能前摇的 1.4 秒里随机走位躲弹幕——
+     * 位移全部走 dodgeKing 手动路径，speed 恒锁 0（通用追击不参与）。
+     * 另管技能节拍与默认属性（每 15 秒流失一个被动 + 扣 10 血）。
+     */
+    private void updateKing(float dt) {
+        int k = kingId;
+        if (k < 0 || !alive[k]) {
+            // 一阶段击破后到二阶段重生之间 kingId=-1（等对白转场）：直接跳过
+            kingId = -1;
+            return;
+        }
+        if (kingPhase == 1) {
+            speed[k] = 0f;   // 位移只走手动路径，别让通用追击把国王拖向玩家
+            if (kingTelegraphT > 0f) {
+                // 施法前摇：一边蓄力一边随机走位躲弹幕
+                kingTelegraphT -= dt;
+                dodgeKing(dt);
+            } else {
+                if (kingSkillCd > 0f) {
+                    kingSkillCd -= dt;
+                }
+                if (kingSkillCd <= 0f) {
+                    fireKingSkill1();   // 起手：生成预警圈；下一帧起进入 1.4 秒随机走位
+                }
+            }
+        } else if (kingPhase >= 3) {
+            speed[k] = 0f;   // 三阶段不走路：位移全靠传送（updateKing3 手动路径）
+            updateKing3(dt);
+        } else if (kingPhase == 2) {
+            speed[k] = 0f;   // 二阶段同样走手动路径：距离带走位在 updateKing2 里
+            updateKing2(dt);
+        }
+        // 默认属性：每 15 秒按被动获得顺序失去一个被动并损失 10 点生命（转阶段时重置计时）
+        kingAttritionT -= dt;
+        if (kingAttritionT <= 0f) {
+            kingAttritionT = Balance.KING_ATTRITION_INTERVAL;
+            int w = firstWizard();
+            if (w >= 0) {
+                Loadout lo = loadout[w];
+                if (lo != null) {
+                    lo.loseEarliestPassive();
+                }
+                hp[w] -= Balance.KING_ATTRITION_HP;
+                if (hp[w] <= 0f) {
+                    kill(w);   // 流失扣血扣死照样算阵亡（不给回血缓冲）
+                }
+            }
+        }
+    }
+
+    /**
+     * 技能前摇期间的随机走位（躲弹幕）：每 0.25~0.6 秒换一个方向，撞到竞技场边界就反弹。
+     * 速度用 KING1_SPEED；朝向跟着走位方向（幅度太小不翻转，免得原地左右抖）。
+     */
+    private void dodgeKing(float dt) {
+        int k = kingId;
+        if (k < 0) {
+            return;
+        }
+        kingDodgeT -= dt;
+        if (kingDodgeT <= 0f) {
+            float ang = rng.nextFloat() * (float) (Math.PI * 2);
+            kingDodgeDx = (float) Math.cos(ang);
+            kingDodgeDy = (float) Math.sin(ang);
+            kingDodgeT = 0.25f + rng.nextFloat() * 0.35f;
+        }
+        float nx = x[k] + kingDodgeDx * Balance.KING1_SPEED * dt;
+        float ny = y[k] + kingDodgeDy * Balance.KING1_SPEED * dt;
+        if (nx < -Balance.ARENA_HALF_X || nx > Balance.ARENA_HALF_X) {
+            kingDodgeDx = -kingDodgeDx;   // 撞墙：水平分量反弹，避免贴着边界抖动
+            nx = x[k] + kingDodgeDx * Balance.KING1_SPEED * dt;
+        }
+        if (ny < Balance.ARENA_TOP || ny > Balance.ARENA_BOTTOM) {
+            kingDodgeDy = -kingDodgeDy;
+            ny = y[k] + kingDodgeDy * Balance.KING1_SPEED * dt;
+        }
+        x[k] = nx;
+        y[k] = ny;
+        clampKingArena(k);
+        // 方向接近竖直时（水平分量太小）不翻转朝向，免得原地左右抖
+        if (Math.abs(kingDodgeDx) > 0.25f) {
+            kingFaceRight = kingDodgeDx >= 0f;
+        }
+    }
+
+    /** 阶段一技能：以玩家当前位置为中心，生成半径 180 的预警圈（1.4 秒前摇后爆炸） */
+    private void fireKingSkill1() {
+        int w = firstWizard();
+        if (w < 0) {
+            return;
+        }
+        kingSkillCd = Balance.KING1_SKILL_CD;
+        kingTelegraphT = Balance.KING1_SKILL_TELEGRAPH;
+        spawnZone(ZONE_WARNING, x[w], y[w], Balance.KING1_SKILL_RADIUS,
+                Balance.KING1_SKILL_TELEGRAPH, Balance.KING1_SKILL_DAMAGE, Element.NONE, -1);
+    }
+
+    /** 竞技场边界：玩家与国王都钳制在 [±ARENA_HALF_X] × [ARENA_TOP, ARENA_BOTTOM] 内 */
+    private void clampKingArena(int id) {
+        if (x[id] < -Balance.ARENA_HALF_X) {
+            x[id] = -Balance.ARENA_HALF_X;
+        } else if (x[id] > Balance.ARENA_HALF_X) {
+            x[id] = Balance.ARENA_HALF_X;
+        }
+        if (y[id] < Balance.ARENA_TOP) {
+            y[id] = Balance.ARENA_TOP;
+        } else if (y[id] > Balance.ARENA_BOTTOM) {
+            y[id] = Balance.ARENA_BOTTOM;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 王宫最终决战：国王第二阶段
+    // ------------------------------------------------------------------
+
+    /**
+     * 一阶段被击破 → 对白播完后的转场：
+     * 国王在王座上以二阶段重生（血池换新、消耗计时重置），角色损失 20 点移速，
+     * 并立刻展开第一道裂隙——王宫里的魔物从此不断涌出。
+     */
+    public void beginKingPhase2() {
+        kingFallen = false;             // 一次性信号：转场后清掉，防对白重复触发
+        kingPhase = 2;
+        if (kingId >= 0) {
+            // 调试直进（-Dab.kingPhase=2）时一阶段的国王实体还在场：先清掉防两尊国王同屏。
+            // 正常流程走击破分支——kill() 已把 kingId 置 -1，此处必然是无操作。
+            despawn(kingId);
+            kingId = -1;
+        }
+        kingSpeedPenalty = Balance.KING2_SPEED_PENALTY;
+        int w = firstWizard();
+        if (w >= 0) {
+            // 把玩家拉回殿中入场位：对白结束时玩家可能贴在倒地位置附近，拉开距离给二阶段开场
+            x[w] = Balance.ARENA_ENTER_X;
+            y[w] = Balance.ARENA_ENTER_Y;
+            px[w] = x[w];
+            py[w] = y[w];
+            kx[w] = 0f;
+            ky[w] = 0f;
+        }
+        kingAttritionT = Balance.KING_ATTRITION_INTERVAL;   // 转阶段：消耗计时重置
+        spawnKing2();
+        openKingRift();                 // 开场先来一道裂隙，魔物开始源源不断
+    }
+
+    /** 二阶段的国王：6000 血，位移全走 updateKing2 手动路径；贴身接触伤害 25 */
+    private void spawnKing2() {
+        int id = spawnEnemy(Balance.ARENA_KING_X, Balance.ARENA_KING_Y, 0, V_BOSS);
+        if (id < 0) {
+            return;
+        }
+        maxHp[id] = Balance.KING2_HP;
+        hp[id] = maxHp[id];
+        speed[id] = 0f;                 // 位移由 updateKing2 逐帧驱动
+        r[id] = Balance.KING2_RADIUS;
+        // 贴身接触伤害：走 updateEnemies 的通用接触通道（0.7s 一次，受受击方无敌帧门控）
+        dmg[id] = Balance.KING2_CONTACT_DAMAGE;
+        enemyShield[id] = 0f;
+        kingId = id;
+        kingBoltCd = Balance.KING2_BOLT_TRACK + Balance.KING2_BOLT_REST;   // 首轮魔弹：入场 10 秒后
+        kingAoeCd = Balance.KING2_AOE_CD;
+        kingRiftCd = Balance.KING2_RIFT_CD;
+        kingTelegraphT = 0f;
+        kingFaceRight = true;
+    }
+
+    // ------------------------------------------------------------------
+    // 王宫最终决战：国王第三阶段（王座本体）
+    // ------------------------------------------------------------------
+
+    /**
+     * 二阶段被击破 → 对白播完后的转场：
+     * 王座本体觉醒，以三阶段登场（12000 血 / 常驻 80% 减伤 / 传送位移）。
+     * 保留二阶段全部机制（魔弹 / 地面预警圈 / 裂隙刷怪），叠加深渊新招：
+     * 传送落点爆发、地刺、深渊牵引（「王座视为深渊」）、裂隙召唤 Boss、造成伤害回血。
+     */
+    public void beginKingPhase3() {
+        kingFallen2 = false;            // 一次性信号：转场后清掉，防对白重复触发
+        kingPhase = 3;
+        if (kingId >= 0) {
+            // 调试直进（-Dab.kingPhase=3）时旧阶段的国王实体还在场：先清掉防同屏。
+            // 正常流程杀入三阶段时 kill() 已把 kingId 置 -1，此处必然是无操作。
+            despawn(kingId);
+            kingId = -1;
+        }
+        int w = firstWizard();
+        if (w >= 0) {
+            // 把玩家拉回殿中入场位：对白结束时玩家可能贴在王座附近，拉开距离给三阶段开场
+            x[w] = Balance.ARENA_ENTER_X;
+            y[w] = Balance.ARENA_ENTER_Y;
+            px[w] = x[w];
+            py[w] = y[w];
+            kx[w] = 0f;
+            ky[w] = 0f;
+        }
+        kingAttritionT = Balance.KING_ATTRITION_INTERVAL;   // 转阶段：消耗计时重置
+        spawnKing3();
+        openKingRift();                 // 开场先来一道裂隙，魔物继续源源不断
+    }
+
+    /**
+     * 三阶段的王座本体：12000 血 / 常驻 80% 减伤，位移全靠传送（updateKing3 驱动）；
+     * 贴身接触伤害 15（用户给定，比二阶段的 25 更轻）。二阶段的魔弹 / 预警圈 / 裂隙节拍全部保留
+     * （三阶段魔弹 5 颗、裂隙每次 4 只）。
+     */
+    private void spawnKing3() {
+        int id = spawnEnemy(Balance.ARENA_KING_X, Balance.ARENA_KING_Y, 0, V_BOSS);
+        if (id < 0) {
+            return;
+        }
+        maxHp[id] = Balance.KING3_HP;
+        hp[id] = maxHp[id];
+        speed[id] = 0f;                 // 位移由 updateKing3 的传送驱动，不走路
+        r[id] = Balance.KING3_RADIUS;
+        dmg[id] = Balance.KING3_CONTACT_DAMAGE;
+        enemyShield[id] = 0f;
+        kingId = id;
+        kingBoltCd = Balance.KING2_BOLT_TRACK + Balance.KING2_BOLT_REST;   // 首轮魔弹：入场 10 秒后
+        kingAoeCd = Balance.KING2_AOE_CD;
+        kingRiftCd = Balance.KING2_RIFT_CD;
+        kingTeleCd = Balance.KING3_TELE_CD;     // 首轮传送：3 秒后
+        kingTeleT = 0f;
+        kingSpikeCd = Balance.KING3_SPIKE_CD;   // 首批地刺：5 秒后
+        kingPullCd = Balance.KING3_PULL_CD;     // 首次牵引：5 秒后
+        kingPullT = 0f;
+        kingSummonCd = Balance.KING3_SUMMON_CD; // 首只召唤 Boss：25 秒后
+        kingTelegraphT = 0f;
+        kingFaceRight = true;
+    }
+
+    /**
+     * 三阶段行为（王座本体）：
+     *   移动：不走路——每 3 秒随机传送到玩家 50 以内，落位后 1 秒前摇
+     *         （减伤 80% → 20% 的输出窗口），前摇到期以落点为中心 100 范围爆发 30 伤害；
+     *   保留：魔弹（二阶段 3 连发 / 三阶段 5 连发）/ 地面预警圈 / 裂隙刷怪（三阶段每次 4 只）；
+     *   新增：地刺（5 秒一批）、深渊牵引（5 秒一次，玩家被按 30 速拽向王座）、
+     *         裂隙召唤 Boss（25 秒一只）；
+     *   被动：每次对玩家造成伤害都从深渊汲取 200 生命（见 kingDrain 的各调用点）。
+     */
+    private void updateKing3(float dt) {
+        // 传送节拍：CD 常驻推进（1 秒前摇含在 3 秒周期内），前摇到期爆发后立刻抽下一个落点
+        if (kingTeleT > 0f) {
+            kingTeleT -= dt;
+            if (kingTeleT <= 0f) {
+                explodeKingTele();
+            }
+        }
+        kingTeleCd -= dt;
+        if (kingTeleCd <= 0f && kingTeleT <= 0f) {
+            startKingTele();
+            kingTeleCd = Balance.KING3_TELE_CD;
+        }
+        // 保留：魔弹每轮（追踪 6s + 间隔 4s）对玩家扇形齐射（三阶段 5 颗 / 二阶段 3 颗）
+        kingBoltCd -= dt;
+        if (kingBoltCd <= 0f) {
+            fireKingBolts2();
+            kingBoltCd = Balance.KING2_BOLT_TRACK + Balance.KING2_BOLT_REST;
+        }
+        // 保留：地面攻击提示每 10 秒（玩家脚下 150 圈、1.5 秒前摇）
+        kingAoeCd -= dt;
+        if (kingAoeCd <= 0f) {
+            fireKingAoe2();
+            kingAoeCd = Balance.KING2_AOE_CD;
+        }
+        // 保留：裂隙刷怪每 5 秒（三阶段每次 4 只 / 二阶段每道 2 只）
+        kingRiftCd -= dt;
+        if (kingRiftCd <= 0f) {
+            openKingRift();
+            kingRiftCd = Balance.KING2_RIFT_CD;
+        }
+        // 地刺：每 5 秒在玩家附近随机位置亮起警示圈（1 秒后刺出）
+        kingSpikeCd -= dt;
+        if (kingSpikeCd <= 0f) {
+            spawnKingSpike();
+            kingSpikeCd = Balance.KING3_SPIKE_CD;
+        }
+        // 深渊牵引：每 5 秒把玩家往王座（深渊）拽 1.5 秒
+        kingPullCd -= dt;
+        if (kingPullCd <= 0f) {
+            kingPullT = Balance.KING3_PULL_DUR;
+            kingPullCd = Balance.KING3_PULL_CD;
+        }
+        if (kingPullT > 0f) {
+            applyKingPull(dt);
+            kingPullT -= dt;
+        }
+        // 裂隙召唤 Boss：每 25 秒一只（除奶蛙外的随机档位）
+        kingSummonCd -= dt;
+        if (kingSummonCd <= 0f) {
+            summonKingBoss();
+            kingSummonCd = Balance.KING3_SUMMON_CD;
+        }
+    }
+
+    /** 传送落位：在玩家 KING3_TELE_RANGE 内随机抽一点，瞬移过去并起 1 秒前摇 */
+    private void startKingTele() {
+        int k = kingId;
+        int w = firstWizard();
+        if (k < 0 || w < 0) {
+            return;
+        }
+        float ang = rng.nextFloat() * (float) (Math.PI * 2);
+        float dist = Balance.KING3_TELE_MIN
+                + rng.nextFloat() * (Balance.KING3_TELE_RANGE - Balance.KING3_TELE_MIN);
+        x[k] = x[w] + (float) Math.cos(ang) * dist;
+        y[k] = y[w] + (float) Math.sin(ang) * dist;
+        clampKingArena(k);      // 落点钳回竞技场（钳制只会让落点更靠近玩家，不破坏 50 的承诺）
+        kingFaceRight = x[w] >= x[k];
+        kingTeleT = Balance.KING3_TELE_TELEGRAPH;
+    }
+
+    /**
+     * 传送前摇到期：以王座落点为中心 100 范围爆发 30 伤害。
+     * 每次命中玩家都从深渊汲取 200 生命（kingDrain）。
+     */
+    private void explodeKingTele() {
+        int k = kingId;
+        if (k < 0 || !alive[k]) {
+            return;
+        }
+        spawnFx(FX_BLAST, x[k], y[k], 0f, 0f, Balance.KING3_TELE_RADIUS, 0.34f, Element.NONE);
+        int hits = 0;
+        for (int n = 0; n < wizards.size(); n++) {
+            int wz = wizards.get(n);
+            if (!alive[wz]) {
+                continue;
+            }
+            float dx = x[wz] - x[k];
+            float dy = y[wz] - y[k];
+            float rr = Balance.KING3_TELE_RADIUS + r[wz];
+            if (dx * dx + dy * dy <= rr * rr && iframe[wz] <= 0f) {
+                damage(wz, Balance.KING3_TELE_DAMAGE);
+                iframe[wz] = heroIframe(wz);
+                hits++;
+            }
+        }
+        if (hits > 0) {
+            kingDrain(hits);
+        }
+    }
+
+    /** 三阶段地刺：在玩家周围随机位置生成警示圈（1 秒前摇，到期刺出 30 伤害） */
+    private void spawnKingSpike() {
+        int w = firstWizard();
+        if (w < 0) {
+            return;
+        }
+        float ang = rng.nextFloat() * (float) (Math.PI * 2);
+        float dist = rng.nextFloat() * Balance.KING3_SPIKE_RANGE;
+        spawnZone(ZONE_KING_SPIKE_TELE,
+                clampCoord(x[w] + (float) Math.cos(ang) * dist),
+                clampCoord(y[w] + (float) Math.sin(ang) * dist),
+                Balance.KING3_SPIKE_RADIUS, Balance.KING3_SPIKE_TELEGRAPH,
+                Balance.KING3_SPIKE_DAMAGE, Element.NONE, -1);
+    }
+
+    /** 深渊牵引：1.5 秒内每帧把玩家朝王座方向推 KING3_PULL_SPEED（用户：「视为玩家向深渊走」） */
+    private void applyKingPull(float dt) {
+        int k = kingId;
+        if (k < 0 || !alive[k]) {
+            return;
+        }
+        for (int n = 0; n < wizards.size(); n++) {
+            int wz = wizards.get(n);
+            if (!alive[wz]) {
+                continue;
+            }
+            float dx = x[k] - x[wz];
+            float dy = y[k] - y[wz];
+            float d = (float) Math.sqrt(dx * dx + dy * dy);
+            if (d > 1e-3f) {
+                x[wz] += dx / d * Balance.KING3_PULL_SPEED * dt;
+                y[wz] += dy / d * Balance.KING3_PULL_SPEED * dt;
+                clampKingArena(wz);
+            }
+        }
+    }
+
+    /**
+     * 三阶段召唤：从裂隙里爬出一只 Boss（除奶蛙外的随机档位）。
+     * 不走 spawnBoss 的全局 bossId 通道（那会接管 HUD 血条与阶段技能），
+     * 用 V_BOSS 变体 + 档位数值直接落位；档位存进 carry 供渲染取形象。
+     */
+    private void summonKingBoss() {
+        if (enemiesAlive >= Balance.KING2_MAX_ENEMIES) {
+            return;     // 同屏魔物已封顶：这次召唤跳过
+        }
+        float rx = (rng.nextFloat() * 2f - 1f) * (Balance.ARENA_HALF_X - 90f);
+        float ry = Balance.ARENA_TOP + 70f
+                + rng.nextFloat() * (Balance.ARENA_BOTTOM - Balance.ARENA_TOP - 110f);
+        spawnFx(FX_RIFT, rx, ry, 0f, 0f, Balance.KING2_RIFT_FX_R, Balance.KING3_SUMMON_FX_TTL, Element.NONE);
+        int tier = rng.nextInt(Balance.BOSS_HP_TIERS.length);   // 除奶蛙外的 4 档随机（池里本来就没有奶蛙）
+        int id = spawnEnemy(rx, ry, rng.nextInt(3), V_BOSS);
+        if (id < 0) {
+            return;
+        }
+        maxHp[id] = Balance.BOSS_HP_TIERS[tier];
+        hp[id] = maxHp[id];
+        speed[id] = Balance.BOSS_SPEED;
+        r[id] = Balance.BOSS_RADIUS;
+        dmg[id] = Balance.BOSS_DMG_TIERS[tier];
+        enemyShield[id] = Balance.ELITE_SHIELD * (1f + tier * 0.6f);
+        carry[id] = tier;       // 借用 carry 存档位：渲染按它取 Boss 形象
+    }
+
+    /**
+     * 三阶段被动：王座每次造成伤害都从深渊汲取生命（每次命中 +200，可叠加）。
+     * 调用点：传送爆发 / 地刺 / 接触咬中 / 魔弹命中。
+     */
+    private void kingDrain(int times) {
+        if (kingPhase < 3 || kingId < 0 || !alive[kingId] || times <= 0) {
+            return;
+        }
+        int k = kingId;
+        hp[k] = Math.min(maxHp[k], hp[k] + Balance.KING3_HEAL_HIT * times);
+    }
+
+    /**
+     * 二阶段行为：追击走位 + 三类技能节拍（魔弹 / 地面提示 / 裂隙刷怪）。
+     * AOE 前摇期间国王站定蓄力（用户要求）——给玩家留出躲预警圈的反应窗口，
+     * 前摇结束才恢复追击。
+     */
+    private void updateKing2(float dt) {
+        int k = kingId;
+        // 施法显示：AOE 前摇期间脚下泛红光（与一阶段共用 kingCasting 渲染通道）
+        if (kingTelegraphT > 0f) {
+            kingTelegraphT -= dt;
+        } else {
+            moveKing2(dt);
+        }
+
+        // 魔弹：每轮（追踪 6s + 间隔 4s）对每个玩家扇形齐射 3 颗
+        kingBoltCd -= dt;
+        if (kingBoltCd <= 0f) {
+            fireKingBolts2();
+            kingBoltCd = Balance.KING2_BOLT_TRACK + Balance.KING2_BOLT_REST;
+        }
+        // 地面攻击提示：每 10 秒，半径 150，1.5 秒前摇
+        kingAoeCd -= dt;
+        if (kingAoeCd <= 0f) {
+            fireKingAoe2();
+            kingAoeCd = Balance.KING2_AOE_CD;
+        }
+        // 裂隙刷怪：王宫中不断出现魔物
+        kingRiftCd -= dt;
+        if (kingRiftCd <= 0f) {
+            openKingRift();
+            kingRiftCd = Balance.KING2_RIFT_CD;
+        }
+    }
+
+    /**
+     * 二阶段走位：用户给定「会追玩家」——全程朝最近玩家直线追击，只按距离换档：
+     * > 400 → 175；250~400 → 155；< 250 → 140。
+     */
+    private void moveKing2(float dt) {
+        int k = kingId;
+        int w = nearestWizard(x[k], y[k]);
+        if (w < 0) {
+            return;
+        }
+        float dx = x[w] - x[k];
+        float dy = y[w] - y[k];
+        float len = (float) Math.sqrt(dx * dx + dy * dy);
+        if (len < 1e-3f) {
+            return;
+        }
+        float speed = (len > Balance.KING2_BAND_FAR) ? Balance.KING2_SPEED_FAR
+                : (len > Balance.KING2_BAND_MID) ? Balance.KING2_SPEED_MID
+                : Balance.KING2_SPEED_NEAR;
+        float mvx = dx / len * speed;
+        float mvy = dy / len * speed;
+        x[k] += mvx * dt;
+        y[k] += mvy * dt;
+        clampKingArena(k);
+        // 朝向：水平移动分量足够大才翻转（接近垂直追击时避免原地抖）
+        if (Math.abs(mvx) > 20f) {
+            kingFaceRight = mvx >= 0f;
+        }
+    }
+
+    /**
+     * 二阶段魔弹：对每个存活玩家扇形齐射 3 颗追踪弹
+     * （相邻两发 ±15°，移速 130，追踪 6 秒后消失）。
+     * 「消失后 4 秒再释放」由 kingBoltCd = 6 + 4 保证。
+     */
+    private void fireKingBolts2() {
+        int k = kingId;
+        if (k < 0) {
+            return;
+        }
+        // 三阶段（王座本体）齐射数量加码（用户给定 5 颗）；二阶段维持 3 颗
+        int boltCount = kingPhase >= 3 ? Balance.KING3_BOLT_COUNT : Balance.KING2_BOLT_COUNT;
+        for (int n = 0; n < wizards.size(); n++) {
+            int w = wizards.get(n);
+            if (!alive[w]) {
+                continue;
+            }
+            for (int b = 0; b < boltCount; b++) {
+                // 以「国王→目标」方向为中轴，左右对称铺开
+                float off = (b - (boltCount - 1) * 0.5f) * Balance.KING2_BOLT_SPREAD;
+                spawnKingBolt(k, w, off);
+            }
+        }
+    }
+
+    /**
+     * 发一颗国王魔弹：从国王体表（半径处）沿偏转 off 弧度后的方向射出，
+     * projTarget 记目标 id，交由 updateProjectiles 限速转向追踪。
+     * 枪口偏移保证贴身时弹体不会生成在玩家体内当帧命中、齐射可见。
+     */
+    private void spawnKingBolt(int casterId, int targetId, float off) {
+        float dx = x[targetId] - x[casterId];
+        float dy = y[targetId] - y[casterId];
+        float len = (float) Math.sqrt(dx * dx + dy * dy);
+        if (len < 1e-3f) {
+            dx = 0f;
+            dy = 1f;
+            len = 1f;
+        }
+        float ax = dx / len, ay = dy / len;                     // 目标方向
+        float ca = (float) Math.cos(off), sa = (float) Math.sin(off);
+        float bx = ax * ca - ay * sa, by = ax * sa + ay * ca;   // 扇形偏转后的发射方向
+        int id = alloc(KIND_PROJECTILE,
+                x[casterId] + bx * Balance.KING2_RADIUS,
+                y[casterId] + by * Balance.KING2_RADIUS,
+                7f, TEAM_ENEMY);
+        if (id < 0) {
+            return;
+        }
+        vx[id] = bx * Balance.KING2_BOLT_SPEED;
+        vy[id] = by * Balance.KING2_BOLT_SPEED;
+        dmg[id] = Balance.KING2_BOLT_DAMAGE;
+        life[id] = Balance.KING2_BOLT_TRACK;    // 追踪 6 秒后自然消失
+        owner[id] = casterId;
+        meta[id] = 0;
+        pierce[id] = 0;
+        lastHit[id] = -1;
+        projAoe[id] = 0f;
+        projChain[id] = 0;
+        projBounce[id] = 0;
+        projTarget[id] = targetId;              // 追踪目标
+    }
+
+    /** 二阶段地面攻击：以玩家当前位置为中心，半径 150、1.5 秒前摇的预警圈 */
+    private void fireKingAoe2() {
+        int w = firstWizard();
+        if (w < 0) {
+            return;
+        }
+        kingTelegraphT = Balance.KING2_AOE_TELEGRAPH;   // 渲染：国王脚下泛红光
+        spawnZone(ZONE_WARNING, x[w], y[w], Balance.KING2_AOE_RADIUS,
+                Balance.KING2_AOE_TELEGRAPH, Balance.KING2_AOE_DAMAGE, Element.NONE, -1);
+    }
+
+    /**
+     * 在王宫中展开一道裂隙并爬出魔物（三阶段每次 4 只 / 二阶段每道 2 只）。
+     * 裂隙视觉走 FX_RIFT（紫色漩涡，1.1 秒张开→收合），
+     * 魔物直接落在裂隙上；同屏数量被 KING2_MAX_ENEMIES 封顶，避免把实体池挤爆。
+     */
+    private void openKingRift() {
+        if (enemiesAlive >= Balance.KING2_MAX_ENEMIES) {
+            return;
+        }
+        float rx = (rng.nextFloat() * 2f - 1f) * (Balance.ARENA_HALF_X - 90f);
+        float ry = Balance.ARENA_TOP + 70f
+                + rng.nextFloat() * (Balance.ARENA_BOTTOM - Balance.ARENA_TOP - 110f);
+        spawnFx(FX_RIFT, rx, ry, 0f, 0f, Balance.KING2_RIFT_FX_R, Balance.KING2_RIFT_FX_TTL, Element.NONE);
+        int mobCount = kingPhase >= 3 ? Balance.KING3_RIFT_COUNT : Balance.KING2_RIFT_COUNT;
+        for (int s = 0; s < mobCount; s++) {
+            float a = rng.nextFloat() * (float) (Math.PI * 2);
+            int id = spawnEnemy(
+                    clampCoord(rx + (float) Math.cos(a) * 30f),
+                    clampCoord(ry + (float) Math.sin(a) * 30f),
+                    rng.nextInt(3), V_NORMAL);
+            if (id < 0) {
+                break;
+            }
         }
     }
 
@@ -2207,6 +2992,25 @@ public final class World {
                         vy[i] = (float) Math.sin(na) * sp;
                     }
                 }
+            } else if (projTarget[i] >= 0) {
+                // 国王魔弹：限速转向锁定目标（projTarget）。速度恒定、转向不快，
+                // 玩家靠走位能把它蹚在身后，等它 6 秒寿命耗尽自消。
+                int tg = projTarget[i];
+                if (tg < 0 || tg >= high || !alive[tg] || kind[tg] != KIND_WIZARD) {
+                    projTarget[i] = -1;            // 目标阵亡/失效：转为直线飞行
+                } else {
+                    float desired = (float) Math.atan2(y[tg] - y[i], x[tg] - x[i]);
+                    float cur = (float) Math.atan2(vy[i], vx[i]);
+                    float diff = desired - cur;
+                    while (diff > Math.PI) diff -= (float) (Math.PI * 2);
+                    while (diff < -Math.PI) diff += (float) (Math.PI * 2);
+                    float turn = Math.max(-Balance.KING2_BOLT_TURN * dt,
+                            Math.min(Balance.KING2_BOLT_TURN * dt, diff));
+                    float na = cur + turn;
+                    float sp = (float) Math.sqrt(vx[i] * vx[i] + vy[i] * vy[i]);
+                    vx[i] = (float) Math.cos(na) * sp;
+                    vy[i] = (float) Math.sin(na) * sp;
+                }
             }
             x[i] += vx[i] * dt;
             y[i] += vy[i] * dt;
@@ -2286,6 +3090,9 @@ public final class World {
             if (dx * dx + dy * dy <= rr * rr) {
                 if (iframe[wz] <= 0f) {
                     damage(wz, dmg[p]);
+                    if (owner[p] == kingId) {
+                        kingDrain(1);   // 王座魔弹命中玩家：汲取生命
+                    }
                     iframe[wz] = heroIframe(wz);
                 }
                 return true;
@@ -2553,12 +3360,30 @@ public final class World {
             life[i] -= dt;
             if (life[i] <= 0f) {
                 if (sub == ZONE_WARNING) {
-                    // 预警圈到期：对玩家与敌人同时爆炸并击退（Boss 阶段技能）
-                    explode(x[i], y[i], r[i], Balance.WARNING_DAMAGE, Element.NONE,
-                            Balance.WARNING_KNOCKBACK);
-                    damagePlayersInRadius(x[i], y[i], r[i], Balance.WARNING_DAMAGE);
+                    // 预警圈到期：对玩家与敌人同时爆炸并击退。
+                    // 伤害取创建时写入的 dmg——Boss 的 spawnWarning 与国王技能共用此通道，
+                    // 两者半径与伤害不同，写死 WARNING_DAMAGE 会把国王技能打回 38。
+                    // skipKing：这是国王自己的技能，王座不吃自伤、也不被震走。
+                    float wd = (dmg[i] > 0f) ? dmg[i] : Balance.WARNING_DAMAGE;
+                    explode(x[i], y[i], r[i], wd, Element.NONE, Balance.WARNING_KNOCKBACK, true);
+                    int whits = damagePlayersInRadius(x[i], y[i], r[i], wd);
+                    if (whits > 0) {
+                        kingDrain(whits);   // 三阶段被动：技能命中玩家 → 汲取生命（其他模式内部自行忽略）
+                    }
+                } else if (sub == ZONE_KING_SPIKE_TELE) {
+                    // 三阶段地刺前摇到期：刺出结算 30 伤害，原地留一丛刺身视觉
+                    int shits = damagePlayersInRadius(x[i], y[i], r[i], dmg[i]);
+                    if (shits > 0) {
+                        kingDrain(shits);
+                    }
+                    spawnZone(ZONE_KING_SPIKE, x[i], y[i], r[i], Balance.KING3_SPIKE_FX_TTL,
+                            0f, Element.NONE, -1);
                 }
                 despawn(i);
+                continue;
+            }
+            if (sub == ZONE_KING_SPIKE_TELE || sub == ZONE_KING_SPIKE) {
+                // 地刺的两种形态都不走敌人周期 tick：警示只等倒计时，刺身纯视觉
                 continue;
             }
             if (sub == ZONE_TRAP) {
@@ -2601,6 +3426,11 @@ public final class World {
             for (int n = 0; n < scratch2.size(); n++) {
                 int e = scratch2.get(n);
                 if (!alive[e] || kind[e] != KIND_ENEMY) {
+                    continue;
+                }
+                // 预警圈只是前摇视觉，不该当持续伤害场：0.5 秒一跳会误伤王座本体
+                //（与到期 explode 的 skipKing 同语义——「王座不吃自己放的圈」）
+                if (sub == ZONE_WARNING && e == kingId) {
                     continue;
                 }
                 float dx = x[e] - x[i];
@@ -2841,11 +3671,20 @@ public final class World {
     }
 
     /** 范围伤害 + 可选击退。用 scratch2，调用点都在 scratch 的遍历里 */
-    private void explode(float ex, float ey, float radius, float damage, int element, float knockback) {        spawnFx(FX_BLAST, ex, ey, 0f, 0f, radius, 0.25f, element);
+    private void explode(float ex, float ey, float radius, float damage, int element, float knockback) {
+        explode(ex, ey, radius, damage, element, knockback, false);
+    }
+
+    /**
+     * 同上；skipKing=true 时王座本体不吃这次爆炸——国王自己的预警圈专用：
+     * 王座不该被自己放的圈震伤（也不该在传送前摇里被推走）。
+     */
+    private void explode(float ex, float ey, float radius, float damage, int element, float knockback, boolean skipKing) {
+        spawnFx(FX_BLAST, ex, ey, 0f, 0f, radius, 0.25f, element);
         enemyHash.query(ex, ey, radius + Balance.MAX_TARGET_RADIUS, scratch2);
         for (int n = 0; n < scratch2.size(); n++) {
             int e = scratch2.get(n);
-            if (!alive[e] || kind[e] != KIND_ENEMY) {
+            if (!alive[e] || kind[e] != KIND_ENEMY || (skipKing && e == kingId)) {
                 continue;
             }
             float dx = x[e] - ex;
@@ -2856,7 +3695,9 @@ public final class World {
                 continue;
             }
             damage(e, damage);
-            if (knockback > 0f && alive[e]) {
+            // 国王施法前摇中脚下生根：不结算击退，保证"站定蓄力"不被爆炸余波推着走
+            //（三阶段的传送前摇同理由 kingTeleT 一并覆盖，用户要求）
+            if (knockback > 0f && alive[e] && !(e == kingId && (kingTelegraphT > 0f || kingTeleT > 0f))) {
                 float d = (float) Math.sqrt(d2);
                 if (d > 1e-3f) {
                     kx[e] += dx / d * knockback;
@@ -2868,8 +3709,12 @@ public final class World {
         }
     }
 
-    /** 对范围内所有玩家造成伤害（预警圈爆炸用，友军伤害 D6 再做） */
-    private void damagePlayersInRadius(float ex, float ey, float radius, float dmg) {
+    /**
+     * 对范围内所有玩家（含宠物）造成伤害（预警圈 / 地刺爆炸用，友军伤害 D6 再做）。
+     * 返回实际命中玩家的数量：三阶段王座按"造成伤害次数"汲取生命，调用方靠它计数。
+     */
+    private int damagePlayersInRadius(float ex, float ey, float radius, float dmg) {
+        int hits = 0;
         for (int n = 0; n < wizards.size(); n++) {
             int wz = wizards.get(n);
             if (!alive[wz]) {
@@ -2882,6 +3727,7 @@ public final class World {
                 if (iframe[wz] <= 0f) {
                     damage(wz, dmg);
                     iframe[wz] = heroIframe(wz);
+                    hits++;
                 }
             }
         }
@@ -2901,6 +3747,7 @@ public final class World {
                 }
             }
         }
+        return hits;
     }
 
     private void cullDistant() {
@@ -3047,6 +3894,11 @@ public final class World {
         // 附着雷电的目标更脆
         float amt = (elem[id] == Element.SHOCK)
                 ? amount * (1f + Balance.ELEM_SHOCK_DMG_AMP) : amount;
+
+        // 三阶段王座本体：常驻 80% 减伤；传送前摇期间降到 20%（玩家的输出窗口）
+        if (id == kingId && kingPhase >= 3) {
+            amt *= 1f - (kingTeleT > 0f ? Balance.KING3_DR_CAST : Balance.KING3_DR);
+        }
 
         if (kind[id] == KIND_WIZARD) {
             Loadout lo = loadout[id];
@@ -3207,6 +4059,76 @@ public final class World {
 
     public float milkyY() {
         return milkyId >= 0 ? y[milkyId] : 0f;
+    }
+
+    /** 奶蛙是否已被击败倒地（触发剧情 CG 用；与 victory 无关，不再直接通关） */
+    public boolean milkyFallen() {
+        return milkyFallen;
+    }
+
+    /** 奶蛙倒下的位置（CG 镜头与消散特效锚点），未倒地时为 0 */
+    public float milkyDownX() {
+        return milkyDownX;
+    }
+
+    public float milkyDownY() {
+        return milkyDownY;
+    }
+
+    // ---- 王宫最终决战（客户端渲染 / 音效 / 冒烟用） ----
+
+    /** 是否已进入王宫决战场景（竞技场） */
+    public boolean kingArena() {
+        return kingArena;
+    }
+
+    /** 国王实体 id；-1 表示不在场 */
+    public int kingId() {
+        return kingId;
+    }
+
+    /** 国王阶段：0=未开战，1/2/3=对应阶段 */
+    public int kingPhase() {
+        return kingPhase;
+    }
+
+    /** 国王是否朝向右侧（渲染选向左/向右动画） */
+    public boolean kingFaceRight() {
+        return kingFaceRight;
+    }
+
+    /** 国王当前是否处于技能前摇（渲染蓄力提示用；三阶段含传送前摇） */
+    public boolean kingCasting() {
+        return kingTelegraphT > 0f || kingTeleT > 0f;
+    }
+
+    /** 一阶段国王是否已被击破（客户端据此弹决裂对白；beginKingPhase2 后复位） */
+    public boolean kingFallen() {
+        return kingFallen;
+    }
+
+    /** 一阶段国王倒下的位置（对白演出：倒地剪影锚点） */
+    public float kingDownX() {
+        return kingDownX;
+    }
+
+    public float kingDownY() {
+        return kingDownY;
+    }
+
+    /** 二阶段国王是否已被击破（客户端据此弹「王座本体」过渡剧情；beginKingPhase3 后复位） */
+    public boolean kingFallen2() {
+        return kingFallen2;
+    }
+
+    /** 三阶段传送前摇剩余秒数（>0：渲染落点预警圈 + 20% 减伤输出窗口） */
+    public float kingTeleT() {
+        return kingTeleT;
+    }
+
+    /** 深渊牵引剩余秒数（>0：渲染王座→玩家的牵引流束） */
+    public float kingPullT() {
+        return kingPullT;
     }
 
     public int enemyCount() {

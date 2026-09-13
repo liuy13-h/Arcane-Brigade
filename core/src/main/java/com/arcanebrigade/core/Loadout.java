@@ -174,6 +174,33 @@ public final class Loadout {
         return passives.size();
     }
 
+    /**
+     * 按「获得顺序」失去一个被动（王宫决战的默认属性：每 15 秒流失一个）。
+     * 多层被动只掉一层，掉光才从列表里移除；删首项后手写左移——
+     * IntList.removeAt 是 swap-remove，会把末项换到首位，正好破坏获得顺序。
+     *
+     * 返回是否真的失去了一层（没有任何被动时返回 false）。
+     */
+    public boolean loseEarliestPassive() {
+        int n = passives.size();
+        if (n == 0) {
+            return false;
+        }
+        int stacks = pstacks.get(0);
+        if (stacks > 1) {
+            pstacks.set(0, stacks - 1);
+        } else {
+            for (int i = 1; i < n; i++) {
+                passives.set(i - 1, passives.get(i));
+                pstacks.set(i - 1, pstacks.get(i));
+            }
+            passives.removeAt(n - 1);
+            pstacks.removeAt(n - 1);
+        }
+        refresh();
+        return true;
+    }
+
     // ------------------------------------------------------------------
     // 重算
     // ------------------------------------------------------------------
