@@ -52,25 +52,30 @@ if not exist "%CLIENTOUT%" mkdir "%CLIENTOUT%"
 dir /s /b "client\src\main\java\*.java" > "%TEMP%\ab_client_src.txt"
 "%JAVAC%" --release 17 -encoding UTF-8 -cp "%COREOUT%;%FB%;%FG%;%FC%;%FM%" -d "%CLIENTOUT%" "@%TEMP%\ab_client_src.txt"
 if errorlevel 1 goto :failbuild
-rem javac 路径不会像 Maven 那样复制 resources，手动同步一次，
-rem 否则 sprites 下的职业/Boss/小怪素材在运行期找不到，会退回程序化兜底形象
+rem javac does not copy resources like Maven does - sync them manually, or the
+rem sprites (classes/bosses/mobs) are missing at runtime and fall back to procedural art.
 if exist "client\src\main\resources" (
   xcopy /e /i /y /q "client\src\main\resources\*" "%CLIENTOUT%" >nul
 )
 del /q "%TEMP%\ab_core_src.txt" "%TEMP%\ab_client_src.txt" >nul 2>nul
 
 :run
-rem JavaFX 21 必须作为命名模块加载：把 4 个 javafx 平台 jar 所在目录挂到模块路径，
-rem 并用 --add-modules 让全部 javafx 模块对未命名模块（classpath 上的游戏代码）可见。
-rem 否则 Application.launch 会报 "JavaFX runtime components are missing"。
-rem 注意：--sun-misc-unsafe-memory-access=allow 是 JDK 23+ 的选项，本机是 JDK 21，
-rem 写了会令 JVM 直接启动失败（黑窗口一闪而过）。--enable-native-access 在 JDK 21 上合法。
+rem JavaFX 21 must be loaded as named modules: pass the platform jars themselves on
+rem --module-path (never a folder - it may also contain -sources/-javadoc jars and
+rem abort with "Two versions of module javafx.base found"), and use --add-modules so
+rem the javafx modules are visible to the unnamed module (game code on the classpath).
+rem Without this, Application.launch fails with "JavaFX runtime components are missing".
 set "CP=%COREOUT%;%CLIENTOUT%"
-set "FXMP=%FX%\javafx-base\21.0.12;%FX%\javafx-graphics\21.0.12;%FX%\javafx-controls\21.0.12;%FX%\javafx-media\21.0.12"
+set "FXMP=%FB%;%FG%;%FC%;%FM%"
 echo Launching Arcane Brigade ...
 set "SMK="
 if defined AB_SMOKE set "SMK=-Dab.smoke=%AB_SMOKE%"
-"%JAVAEXE%" --module-path "%FXMP%" --add-modules ALL-MODULE-PATH --enable-native-access=ALL-UNNAMED -Dfile.encoding=UTF-8 -Dsun.java2d.dpiaware=true %SMK% -cp "%CP%" com.arcanebrigade.client.GameLauncher
+rem Silence JDK 24+ native/Unsafe warnings: javafx modules and the unnamed module
+rem both need native access; --sun-misc-unsafe-memory-access=allow only exists on
+rem JDK 23+, so probe the option list before using it (older JDKs abort otherwise).
+set "SMKJVM="
+"%JAVAEXE%" --help-extra 2>nul | findstr /c:"--sun-misc-unsafe-memory-access" >nul 2>nul && set "SMKJVM=--sun-misc-unsafe-memory-access=allow"
+"%JAVAEXE%" --module-path "%FXMP%" --add-modules ALL-MODULE-PATH --enable-native-access=ALL-UNNAMED,javafx.graphics,javafx.media %SMKJVM% -Dfile.encoding=UTF-8 -Dsun.java2d.dpiaware=true %SMK% -cp "%CP%" com.arcanebrigade.client.GameLauncher
 set "RC=%ERRORLEVEL%"
 endlocal & exit /b %RC%
 
