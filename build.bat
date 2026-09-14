@@ -59,10 +59,17 @@ set "CORE_RC=%ERRORLEVEL%"
 popd
 if not "%CORE_RC%"=="0" goto :fail
 
-rem javac 26 can lose a directory classpath below a non-ASCII parent folder.
-rem A local JAR keeps the client dependency path ASCII-relative and portable.
-powershell -NoProfile -Command "Remove-Item -LiteralPath 'core\target\arcane-core.jar' -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath 'core\target\arcane-core.zip' -Force -ErrorAction SilentlyContinue; Compress-Archive -Path 'core\target\classes\*' -DestinationPath 'core\target\arcane-core.zip' -Force; Move-Item -LiteralPath 'core\target\arcane-core.zip' -Destination 'core\target\arcane-core.jar' -Force"
-if errorlevel 1 goto :fail
+rem This used to zip core\target\classes into arcane-core.jar, to dodge
+rem "javac loses a directory classpath under a non-ASCII parent folder".
+rem That jar is unusable here: javac 26 cannot read archives produced by
+rem PowerShell's Compress-Archive (same content zipped by Python's zipfile or
+rem by the JDK's own jar.exe reads fine), so the client fails wholesale with
+rem "package com.arcanebrigade.core does not exist". This project's path is
+rem pure ASCII, so the workaround is not needed -- use the classes dir.
+rem If the project ever moves under a non-ASCII path and this breaks again,
+rem build the jar with the JDK's jar.exe instead of Compress-Archive.
+rem (Keep this comment ASCII: non-ASCII text in a .bat under chcp 65001
+rem  gets mis-parsed by cmd and leaks a stray command into the run.)
 
 set "M2=D:\.m2\repository"
 if not exist "%M2%\org\openjfx\javafx-base\21.0.12" set "M2=%USERPROFILE%\.m2\repository"
@@ -71,7 +78,7 @@ rem The client also requires javafx-media for GameAudio.
 set "FXCP=%M2%\org\openjfx\javafx-controls\21.0.12\javafx-controls-21.0.12-win.jar;%M2%\org\openjfx\javafx-graphics\21.0.12\javafx-graphics-21.0.12-win.jar;%M2%\org\openjfx\javafx-base\21.0.12\javafx-base-21.0.12-win.jar;%M2%\org\openjfx\javafx-media\21.0.12\javafx-media-21.0.12-win.jar"
 pushd client\src\main\java
 dir /s /b *.java > "%TEMP%\ab_client_src.txt"
-"%JAVAC_EXE%" --release 17 -encoding UTF-8 -cp "..\..\..\..\core\target\arcane-core.jar;%FXCP%" -d "..\..\..\target\classes" @"%TEMP%\ab_client_src.txt"
+"%JAVAC_EXE%" --release 17 -encoding UTF-8 -cp "..\..\..\..\core\target\classes;%FXCP%" -d "..\..\..\target\classes" @"%TEMP%\ab_client_src.txt"
 set "CLIENT_RC=%ERRORLEVEL%"
 popd
 if not "%CLIENT_RC%"=="0" goto :fail

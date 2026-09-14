@@ -16,6 +16,50 @@ public final class Balance {
     public static final float WIZARD_IFRAME  = 0.35f;
     /** 弓箭手无敌帧：比巫师略短（脆但快，靠走位躲） */
     public static final float ARCHER_IFRAME  = 0.30f;
+
+    // ---- 主动位移（冲刺）：弓箭手 & 战士通用，空格朝鼠标方向突进一小段 ----
+    // 战士本就是该技能的原始设计目标（空格=冲刺，单次 5 秒 CD），弓箭手复用同一机制
+    // 并**额外支持储存次数**——一次最多攒 3 发，每发独立 5 秒 CD，耗光后会一颗颗补回来。
+    // 这种"弹药"模型让弓箭手可以做连击位移，战士仍是单次 CD，两套手感不同。
+    /** 弓箭手位移冷却（秒）——同时是单发的 CD 与一颗新充能的恢复时长 */
+    public static final float ARCHER_DASH_CD     = 6.5f;
+    /** 弓箭手位移总距离（像素）。一小段，约 0.16 秒走完 */
+    public static final float ARCHER_DASH_DIST   = 160f;
+    /** 弓箭手位移持续时长（秒）。speed = DIST / TIME ≈ 1000 px/s，像一个快速突进 */
+    public static final float ARCHER_DASH_TIME   = 0.16f;
+    /** 弓箭手位移期间的无敌帧（秒），让位移能真正用来躲弹幕/接触伤害 */
+    public static final float ARCHER_DASH_IFRAME = 0.16f;
+    /** 弓箭手可同时储存的冲刺发数。出生即满；空格一发一发地扣，每 CD 5s 补一发 */
+    public static final int   ARCHER_DASH_MAX    = 3;
+
+    /** 战士位移冷却（秒）。与弓箭手同步，可独立调 */
+    public static final float WARRIOR_DASH_CD     = 5f;
+    /** 战士位移总距离（像素） */
+    public static final float WARRIOR_DASH_DIST   = 160f;
+    /** 战士位移持续时长（秒） */
+    public static final float WARRIOR_DASH_TIME   = 0.16f;
+    /** 战士位移期间的无敌帧（秒） */
+    public static final float WARRIOR_DASH_IFRAME = 0.16f;
+
+    // ---- 战士 · 蓄力重击（长按鼠标左键蓄力，松开释放）----
+    /**
+     * 蓄力判定：按住左键累计到该时长（秒）才视为"蓄力"，此时近战扇形不再自动触发，
+     * 改为抬起时释放一次重击。短于此值即普通挥砍（保持原有手感）。
+     */
+    public static final float WARRIOR_CHARGE_MIN      = 0.25f;
+    /** 蓄满所需时长（秒）。超过按满算，不会无限增强 */
+    public static final float WARRIOR_CHARGE_MAX      = 1.00f;
+    /** 满蓄力时扇形半径倍率（斩击范围放大） */
+    public static final float WARRIOR_CHARGE_RADIUS   = 2.00f;
+    /** 满蓄力时扇形张角倍率（斩击更宽） */
+    public static final float WARRIOR_CHARGE_ANGLE    = 1.50f;
+    /** 满蓄力时伤害倍率 */
+    public static final float WARRIOR_CHARGE_DAMAGE   = 2.60f;
+    /**
+     * 满蓄力重击的击退倍率。战士重击是全游戏击退最强的一击——
+     * 普通命中只有 HIT_KNOCKBACK 的小幅推挤，重击则能把怪掀出去。
+     */
+    public static final float WARRIOR_CHARGE_KNOCKBACK_MUL = 3.20f;
     /** 战士无敌帧：明显削弱。战士有 15% 减伤 + 击杀回血，无需长时间无敌保护 */
     public static final float WARRIOR_IFRAME = 0.12f;
 
@@ -97,6 +141,16 @@ public final class Balance {
 
     /** 击退速度的每秒衰减系数。太小会看到怪被推着滑行很远 */
     public static final float KNOCKBACK_DECAY = 6.0f;
+
+    // ---- 命中击退（所有攻击对敌怪的小幅推挤）----
+    /**
+     * 每次命中敌人时附带的基准击退速度（像素/秒）。
+     * 刻意做小：只是让打击"有手感"，不该把怪打出攻击范围。
+     * 法术自带的 knockback（盾击/裂地）叠在这个基准之上；战士蓄力重击再乘倍率。
+     */
+    public static final float HIT_KNOCKBACK = 70f;
+    /** 弹幕命中的击退衰减（远程推挤比近战更轻，避免弓箭手/巫师把怪推出弹道） */
+    public static final float HIT_KNOCKBACK_RANGED_MUL = 0.55f;
 
     // ---- 敌人 ----
     public static final float ENEMY_RADIUS   = 12f;
@@ -279,7 +333,7 @@ public final class Balance {
      * 到等级但上一只还活着时不会叠加，会等它倒下再上（见 WaveDirector）。
      */
     public static final int[]   BOSS_LEVELS   = { 5, 10, 15, 20 };
-    public static final String[] BOSS_NAMES   = { "石心巨像", "熔岩领主", "霜寂君王", "终焉之影" };
+    public static final String[] BOSS_NAMES   = { "石心巨像", "熔岩飞龙", "霜寂飞龙", "终焉之影" };
     /** 每只 Boss 的血池。第一只别太肉，5 分钟时的 build 打得动 */
     public static final float[] BOSS_HP_TIERS = { 2000f, 4200f, 7200f, 13000f };
     /** 每只 Boss 的接触伤害 */
@@ -306,6 +360,61 @@ public final class Balance {
     /** 召唤：每 interval 秒在自身周围召唤 count 只小怪 */
     public static final float BOSS_SUMMON_INTERVAL = 6f;
     public static final int   BOSS_SUMMON_COUNT    = 4;
+
+    // ---- 飞碟 Boss（tier 0）专属：追踪炮弹（低频率、慢速、有限追踪、命中或过期爆炸）----
+    /**
+     * 两轮齐射之间的间隔（秒）。刻意做慢：飞碟的主循环仍是预警圈 + 召唤，
+     * 追踪弹只是穿插的"小威胁"，不至于把战斗节奏拖进弹幕地狱。
+     */
+    public static final float BOSS_HOMING_CD          = 4.5f;
+    /** 单轮齐射数量（四向散布，绕 Boss 一圈） */
+    public static final int   BOSS_HOMING_COUNT       = 4;
+    /** 炮弹飞行速度（像素/秒）。比全部职业的基础移速都慢——刻意留下"可绕开"的窗口 */
+    public static final float BOSS_HOMING_SPD         = 130f;
+    /** 每帧最大转向弧度。值很小 ≈ 2.3°/帧：直瞄困难，纯靠甩尾糊玩家脸 */
+    public static final float BOSS_HOMING_TURN        = 0.04f;
+    /** 炮弹索敌半径（用来决定"锁谁"） */
+    public static final float BOSS_HOMING_SEEK        = 760f;
+    /** 炮弹寿命（秒）：玩家甩掉并超过这个时长则原地自爆（避免遗留在场上一辈子） */
+    public static final float BOSS_HOMING_LIFE        = 4.5f;
+    /** 命中或自爆时的直接伤害 */
+    public static final float BOSS_HOMING_DMG         = 22f;
+    /** 命中或自爆时的爆炸半径（AOE） */
+    public static final float BOSS_HOMING_BLAST_R     = 70f;
+    /** 命中或自爆时的击退 */
+    public static final float BOSS_HOMING_BLAST_KB    = 130f;
+    /** 炮弹的碰撞半径（命中判定用，比基础弹幕稍大以保证能擦到走位） */
+    public static final float BOSS_HOMING_RADIUS      = 9f;
+
+    // ---- 飞龙 Boss（tier 1 / tier 2）专属：定向直线飞行弹幕 + 灼烧带 ----
+    /**
+     * 飞龙的招牌动作：朝玩家所在方向吐出一颗/两颗慢速火球，沿弹道留下一条持续 5 秒的
+     * 灼烧地面。玩家走过灼烧区即持续扣血。
+     * 设计上比飞碟追踪弹更"好躲"——慢速直线，可以横向走出弹道；但灼烧带的"惩罚窗口"
+     * 长达 5 秒，逼玩家要么绕路，要么吃灼烧伤害。
+     */
+    /** 飞龙火球飞行速度（像素/秒）。比飞碟追踪弹还慢，玩家有充足反应时间横向脱离 */
+    public static final float DRAGON_BOLT_SPD         = 145f;
+    /** 飞龙火球的命中半径（稍大，保证擦边能命中） */
+    public static final float DRAGON_BOLT_RADIUS      = 11f;
+    /** 飞龙火球直接命中玩家的伤害 */
+    public static final float DRAGON_BOLT_DMG         = 26f;
+    /** 飞龙火球的飞行寿命（秒）。到期没碰到玩家就原地消散，不再留灼烧 */
+    public static final float DRAGON_BOLT_LIFE        = 3.0f;
+    /** 灼烧区半径（比火球本身大一圈，"中弹带"自然铺开） */
+    public static final float DRAGON_BURN_RADIUS      = 46f;
+    /** 灼烧区持续时长（秒）。5 秒是用户明确要求的"长时间惩罚窗口" */
+    public static final float DRAGON_BURN_DURATION    = 5.0f;
+    /** 灼烧区每秒伤害（持续 5 秒 → 累计 5 × DPS） */
+    public static final float DRAGON_BURN_DPS         = 18f;
+    /** 飞行过程中每隔多远播种一团灼烧。太小则连成线会卡视野，太大则稀疏给玩家空档 */
+    public static final float DRAGON_BURN_STEP        = 38f;
+    /** tier 1 飞龙（熔岩飞龙）：单发火球的齐射 CD（秒） */
+    public static final float DRAGON_BOLT_CD_TIER1    = 4.5f;
+    /** tier 2 飞龙（霜寂飞龙）：双发齐射的 CD（秒）——刻意比 tier 1 长一档，避免双发+短 CD 变成弹幕墙 */
+    public static final float DRAGON_BOLT_CD_TIER2    = 6.0f;
+    /** tier 2 双发的扇形展开角（弧度）。两发朝向玩家方向 ± 半角，给玩家"在两发之间溜过去"的窗口 */
+    public static final float DRAGON_BOLT_TIER2_HALF  = (float) Math.toRadians(15);
 
     // ---- 战斗事件（小任务） ----
     /** 三个事件的触发时间（秒）：2 分钟 / 5 分钟 / 8 分钟 */

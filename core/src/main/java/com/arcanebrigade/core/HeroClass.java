@@ -74,8 +74,8 @@ public final class HeroClass {
     /** 职业特性文本，选职业界面用 */
     public static String trait(int classKind) {
         return switch (classKind) {
-            case WARRIOR  -> "受伤减免 15% · 每次击杀回 2 HP";
-            case ARCHER   -> "暴击率 +10% · 移速最快";
+            case WARRIOR  -> "受伤减免 15% · 击杀回 2 HP · 长按左键蓄力重击";
+            case ARCHER   -> "暴击率 +10% · 移速最快 · 冲刺可储存 3 次";
             case SUMMONER -> String.format("每 %.0f 秒召唤 %d 只宠物 · 宠物护主",
                     Balance.SUMMON_INTERVAL, Balance.SUMMON_COUNT);
             default       -> "法术伤害 +10% · 每 30 秒免费重抽";
