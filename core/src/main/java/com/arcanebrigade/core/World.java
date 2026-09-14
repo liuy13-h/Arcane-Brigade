@@ -1,5 +1,7 @@
 package com.arcanebrigade.core;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
 
 import com.arcanebrigade.core.enemy.BoneSerpent;
@@ -100,6 +102,14 @@ public final class World {
     public final float[] cd = new float[MAX];
     /** 受击无敌剩余时间，&lt;=0 才能再次受伤 */
     public final float[] iframe = new float[MAX];
+
+    /** 战士冲刺：冲刺剩余持续时间（>0 表示正在冲刺） */
+    public final float[] dashTimer = new float[MAX];
+    /** 战士冲刺：冷却剩余（>0 表示尚不可用） */
+    public final float[] dashCd = new float[MAX];
+    /** 战士冲刺：本段冲刺的方向（单位向量） */
+    public final float[] dashDirX = new float[MAX];
+    public final float[] dashDirY = new float[MAX];
 
     public final int[] kind = new int[MAX];
     public final int[] team = new int[MAX];
@@ -297,6 +307,8 @@ public final class World {
     private int bossKills;
     /** 终局战报快照：胜利或阵亡时冻结一份，避免结算画面上的数字继续跳动 */
     private Summary summary;
+    /** 击败奶蛙的终局奖励技能卡名字（游戏结束无法三选一，记下来给胜利画面展示） */
+    public String victoryCardName;
     /** 主动退出（暂停菜单「退出结算」）：与阵亡同屏展示战报，但标题不同 */
     private boolean abandoned;
     /** 开火模式：true=自动索敌开火，false=手动（朝鼠标方向，按住开火） */
@@ -467,11 +479,21 @@ public final class World {
             bossId = -1;   // Boss 倒下：清掉阶段技能标记，下一帧 updateBossPhase 也会兜底
         }
         if (id == milkyId) {
-            milkyId = -1;      // 奶蛙血量归零：消失（客户端据此停掉专属 BGM）
-            milkyCast = 0;     // 死亡立即中断施法，客户端据此停掉技能音效（大笑）
-            milkyCastT = 0f;
+            milkyId = -1;  // 奶蛙血量归零：消失（客户端据此停掉专属 BGM）
             // 结束规则之二：击败奶蛙 = 通关
             victory = true;
+            // 终局奖励：直接给一张随机技能卡（游戏结束无法三选一，记名字给胜利画面展示）
+            int wz = firstWizard();
+            if (wz >= 0) {
+                Loadout lo = loadout(wz);
+                if (lo != null) {
+                    int sid = pickNewSpell(lo);
+                    if (sid != Spells.NONE) {
+                        lo.add(sid);
+                        victoryCardName = (Spells.get(sid) != null) ? Spells.get(sid).name : null;
+                    }
+                }
+            }
             summary = snapshot(true, false, firstWizard());
         }
         int k = kind[id];
@@ -481,6 +503,13 @@ public final class World {
             // 骨蛇按 Boss 计（否则它的击杀会混进"普通击杀"里，结算数字对不上）
             if (variant[id] == V_BOSS || variant[id] == V_SERPENT) {
                 bossKills++;
+            }
+            // 击杀按等级刷的 Boss：奖励一张技能卡（升级三选一面板会因此弹出）
+            if (variant[id] == V_BOSS) {
+                int wz = firstWizard();
+                if (wz >= 0) {
+                    grantBossCard(wz);
+                }
             }
             healWarriorsOnKill();
             if (killListener != null) {
@@ -1221,6 +1250,17 @@ public final class World {
         }
     }
 
+    /** 调试用：强制开启第 idx 个战斗事件（跳过触发时间）。冒烟 / 手动测试用。 */
+    public void forceEvent(int idx) {
+        if (eventType != 0) {
+            return;
+        }
+        if (idx < 0 || idx >= Balance.EVENT_TIMES.length) {
+            return;
+        }
+        startEvent(idx);
+    }
+
     /** 完成任务：清场 + 发经验 + 横幅提示。 */
     private void completeEvent() {
         if (eventType == 0) {
@@ -1332,9 +1372,48 @@ public final class World {
                 moveMul *= 1f + Balance.LAST_STAND_MOVE;
             }
 
+            // 战士冲刺：每 5 秒可触发一次短距冲刺，冲刺期间无敌
+            if (dashCd[id] > 0f) {
+                dashCd[id] -= dt;
+            }
+            if (ck == HeroClass.WARRIOR && (in.buttons & InputCommand.BUTTON_DASH) != 0
+                    && dashCd[id] <= 0f && dashTimer[id] <= 0f) {
+                float ddx = in.dx, ddy = in.dy;
+                if (ddx == 0f && ddy == 0f) {
+                    // 没按方向：朝最近敌人冲，否则默认朝上
+                    int tgt = nearestEnemy(x[id], y[id], 99999f);
+                    if (tgt >= 0) {
+                        ddx = x[tgt] - x[id];
+                        ddy = y[tgt] - y[id];
+                    } else {
+                        ddx = 0f;
+                        ddy = -1f;
+                    }
+                }
+                float dl = (float) Math.sqrt(ddx * ddx + ddy * ddy);
+                if (dl > 1e-4f) {
+                    ddx /= dl;
+                    ddy /= dl;
+                }
+                dashDirX[id] = ddx;
+                dashDirY[id] = ddy;
+                dashTimer[id] = Balance.DASH_DURATION;
+                dashCd[id] = Balance.DASH_CD;
+            }
+
             float baseSpeed = HeroClass.baseSpeed(ck) * arenaMap.movementMultiplierAt(x[id], y[id]);
             x[id] += in.dx * baseSpeed * moveMul * dt;
             y[id] += in.dy * baseSpeed * moveMul * dt;
+            if (dashTimer[id] > 0f) {
+                // 冲刺在普通移动之上叠加一段爆发位移
+                x[id] += dashDirX[id] * Balance.DASH_SPEED * dt;
+                y[id] += dashDirY[id] * Balance.DASH_SPEED * dt;
+                dashTimer[id] -= dt;
+                // 冲刺全程无敌：把受击无敌刷到不低于剩余冲刺时间
+                if (iframe[id] < dashTimer[id]) {
+                    iframe[id] = dashTimer[id];
+                }
+            }
             resolveObstacles(id);
             clampToWorld(id);   // 玩家也被棕色城墙（边界）挡在内侧
             if (iframe[id] > 0f) {
@@ -3184,6 +3263,33 @@ public final class World {
     public boolean giveSpell(int wizardId, int spellId) {
         Loadout lo = loadout(wizardId);
         return lo != null && lo.add(spellId);
+    }
+
+    /** 击杀 Boss 奖励：让升级面板弹出一组仅主动技的三选一（技能卡） */
+    public void grantBossCard(int wizardId) {
+        Loadout lo = loadout(wizardId);
+        if (lo == null) {
+            return;
+        }
+        lo.pendingUps++;
+        if (lo.pendingChoices == null) {
+            lo.pendingChoices = Upgrades.rollSpell(lo, rng);
+        }
+    }
+
+    /** 从职业池里随机挑一个尚未拥有的主动技；都满则返回 NONE */
+    private int pickNewSpell(Loadout lo) {
+        int[] pool = Spells.poolForClass(lo.classKind);
+        List<Integer> avail = new ArrayList<>();
+        for (int sid : pool) {
+            if (!lo.contains(sid)) {
+                avail.add(sid);
+            }
+        }
+        if (avail.isEmpty()) {
+            return Spells.NONE;
+        }
+        return avail.get(rng.nextInt(avail.size()));
     }
 
     public Loadout loadout(int id) {

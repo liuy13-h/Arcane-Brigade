@@ -1,7 +1,6 @@
 package com.arcanebrigade.client;
 
 import com.arcanebrigade.core.HeroClass;
-import com.arcanebrigade.core.ArenaMap;
 import com.arcanebrigade.core.InputCommand;
 import com.arcanebrigade.core.Loadout;
 import com.arcanebrigade.core.Upgrades;
@@ -75,9 +74,6 @@ public final class GameApp extends Application {
     /** 左侧任务栏：任务分类与展开状态。 */
     private boolean lobbyTasksOpen;
     private TaskSystem.Category lobbyTaskCategory = TaskSystem.Category.DAILY;
-    /** 大厅地图选择：选择后传给 BattleSession，在出征前重建对应关卡。 */
-    private ArenaMap lobbyArenaMap = ArenaMap.DESERT_RUINS;
-    private boolean lobbyMapOpen;
     /** 入局时冻结模拟并展示任务简报五秒。 */
     private double taskBriefSeconds;
     private int observedKills;
@@ -96,9 +92,21 @@ public final class GameApp extends Application {
     /** 冒烟调试：截图输出路径（-Dab.snapshot=path，画完当帧存一次） */
     private String snapshotPath;
     private boolean snapshotSaved;
+    /** 冒烟调试：主菜单截图（-Dab.titleSnapshot=path），画完一次即退出 */
+    private String titleSnapshotPath;
+    /** 冒烟调试：强制主菜单悬停项（-Dab.titleHover=0..3，-1 表示不强制） */
+    private int titleHoverOverride = -1;
 
     /** ESC 手动暂停（战斗阶段） */
     private boolean manualPause;
+    /** 胜利流程状态机：是否已处理本局胜利（字幕只播一次） */
+    private boolean victoryHandled;
+    /** 通关剧情字幕是否已播完（之后才显示胜利结算） */
+    private boolean victoryStoryDone;
+    /** 字幕已播放秒数（真实时间累计） */
+    private double victoryStoryT;
+    /** 字幕最长时间（秒），到时自动进入胜利结算 */
+    private static final double VICTORY_STORY_DURATION = 9.0;
     /** 奶蛙 BGM 是否正在播放（用于检测奶蛙出场/消失的瞬间起停音乐） */
     private boolean bossMusicOn;
     /** 上一帧的奶蛙施法状态，用于捕捉「大笑起手」瞬间播音效 */
@@ -129,6 +137,16 @@ public final class GameApp extends Application {
         }
         GameConfig.load();   // 音量 / 显示玩家 ID / 显示模式 / 分辨率 / 帧率（含首次生成玩家 ID）
         Sprites.load();
+
+        // 冒烟用：ab.titleSnapshot=路径 存一张主菜单 PNG；ab.titleHover=N 强制某个按钮高亮
+        String titleShot = System.getProperty("ab.titleSnapshot");
+        if (titleShot != null && !titleShot.isBlank()) {
+            titleSnapshotPath = titleShot;
+        }
+        String titleHover = System.getProperty("ab.titleHover");
+        if (titleHover != null && !titleHover.isBlank()) {
+            titleHoverOverride = Integer.parseInt(titleHover.trim());
+        }
 
         battle = new BattleSession(20260907L);
         tasks = new TaskSystem();
@@ -246,25 +264,9 @@ public final class GameApp extends Application {
                 double vw = renderer.getCanvasWidth();
                 double vh = renderer.getCanvasHeight();
                 TaskSystem.TaskView[] views = tasks.tasks(lobbyTaskCategory);
-                Renderer.MapSelectGeom mg = Renderer.lobbyMapSelectGeom(vw, vh);
-                if (mg.toggle().hit(e.getX(), e.getY())) {
-                    lobbyMapOpen = !lobbyMapOpen;
-                    if (lobbyMapOpen) lobbyTasksOpen = false;
-                    return;
-                }
-                if (lobbyMapOpen) {
-                    for (int i = 0; i < mg.cards().length; i++) {
-                        if (mg.cards()[i].hit(e.getX(), e.getY())) {
-                            lobbyArenaMap = ArenaMap.values()[i];
-                            battle.selectArenaMap(lobbyArenaMap);
-                            return;
-                        }
-                    }
-                }
                 Renderer.TaskGeom tg = Renderer.lobbyTaskGeom(vw, vh, views.length);
                 if (tg.toggle().hit(e.getX(), e.getY())) {
                     lobbyTasksOpen = !lobbyTasksOpen;
-                    if (lobbyTasksOpen) lobbyMapOpen = false;
                     return;
                 }
                 if (lobbyTasksOpen) {
@@ -449,8 +451,18 @@ public final class GameApp extends Application {
                         double vh = canvas.getHeight();
                         int hover = overlay == Renderer.OVER_NONE
                                 ? Renderer.menuHit(mouseX, mouseY, vw, vh) : -1;
+                        if (titleHoverOverride >= 0) {
+                            hover = titleHoverOverride;   // 冒烟：强制高亮某项，便于校对高亮框位置
+                        }
                         renderer.drawTitle(lobbyAnimT, hover, overlay,
                                 GameConfig.displayMode == GameConfig.MODE_FULLSCREEN);
+                        if (titleSnapshotPath != null && !snapshotSaved) {
+                            snapshotSaved = true;
+                            renderer.saveSnapshot(titleSnapshotPath);
+                            System.out.printf("[title] 主菜单快照已保存: %s（hover=%d）%n",
+                                    titleSnapshotPath, hover);
+                            Platform.exit();
+                        }
                     }
                     return;
                 }
@@ -470,7 +482,7 @@ public final class GameApp extends Application {
                     if (drawNow) {
                         renderer.setFps(fps[0]);
                         renderer.drawLobby(g, lx, ly, lobbyChoice, lobbyFacingLeft, lobbyAnimT, cardClass, cardReveal,
-                                lobbyGuide, tasks, lobbyTaskCategory, lobbyTasksOpen, lobbyArenaMap, lobbyMapOpen);
+                                lobbyGuide, tasks, lobbyTaskCategory, lobbyTasksOpen);
                         // 冒烟调试：截图（ab.snapshot）在画完当帧立即保存
                         if (snapshotPath != null && !snapshotSaved) {
                             snapshotSaved = true;
@@ -510,8 +522,8 @@ public final class GameApp extends Application {
                         GameAudio.stopBossBgm();
                     }
                 }
-                // 奶蛙技能二「捧腹大笑」：起手瞬间从头播放；施法结束或奶蛙死亡都立即停止
-                int milkyCastNow = world.milkyAlive() ? world.milkyCast() : 0;
+                // 奶蛙技能二「捧腹大笑」：起手瞬间从头播放，施法结束立即停止
+                int milkyCastNow = world.milkyCast();
                 if (milkyCastNow == 2 && lastMilkyCast != 2) {
                     GameAudio.playLaugh();
                 } else if (milkyCastNow != 2 && lastMilkyCast == 2) {
@@ -524,13 +536,31 @@ public final class GameApp extends Application {
                 // 奶蛙曲在播时它只记录不抢占（奶蛙优先）。
                 GameAudio.setBattleMusic(world.bossTier());
 
-                // 胜利：冻结模拟，罩层结算。模拟一旦停了就不再推进，直到按 R 重开
+                // 胜利：先播通关剧情字幕（从下往上滚动），再弹结算画面。
+                // 模拟已冻结，不再推进；直到字幕放完或玩家跳过，才显示胜利结算。
                 if (world.victory()) {
+                    if (!victoryHandled) {
+                        victoryHandled = true;
+                        victoryStoryDone = false;
+                        victoryStoryT = 0.0;
+                        GameAudio.stopBattleBgm();   // 通关：不再循环战斗曲
+                        GameAudio.stopBossBgm();     // 奶蛙专属 BGM 暂停
+                    }
                     finishRun(world);
-                    GameAudio.stopBattleBgm();   // 通关：让位给结算画面，不再循环战斗曲
                     renderer.setFps(fps[0]);
                     renderer.draw(world, 0f);
-                    renderer.drawVictory(world, canvas.getWidth(), canvas.getHeight());
+                    if (!victoryStoryDone) {
+                        victoryStoryT += dt;
+                        renderer.drawVictoryStory(victoryStoryT);
+                        // 字幕滚过 0.5s 后，点击或按任意键可跳过
+                        boolean canSkip = victoryStoryT > 0.5
+                                && (mouseDown || !pressed.isEmpty());
+                        if (victoryStoryT >= VICTORY_STORY_DURATION || canSkip) {
+                            victoryStoryDone = true;
+                        }
+                    } else {
+                        renderer.drawVictory(world, canvas.getWidth(), canvas.getHeight());
+                    }
                     if (smokeFrames > 0 && ++renderedFrames >= smokeFrames) {
                         System.out.printf("[smoke] 胜利画面，渲染 %d 帧完成，退出%n", renderedFrames);
                         Platform.exit();
@@ -853,6 +883,16 @@ public final class GameApp extends Application {
             return;                       // 已在战斗中，忽略重复触发
         }
         battle.start(classKind);
+        // 调试钩子：强制立即触发某个战斗事件（-Dab.eventForce=0/1/2），便于检验雕像等任务
+        String ef = System.getProperty("ab.eventForce");
+        if (ef != null) {
+            try {
+                int idx = Integer.parseInt(ef.trim());
+                battle.world().forceEvent(idx);
+            } catch (NumberFormatException ignored) {
+                // 非法值忽略
+            }
+        }
         taskBriefSeconds = 5.0;
         observedKills = 0;
         runCompletionRecorded = false;
@@ -860,6 +900,9 @@ public final class GameApp extends Application {
         inLobby = false;
         overlay = Renderer.OVER_NONE;
         manualPause = false;
+        victoryHandled = false;   // 新一局：胜利字幕状态复位，通关时重新播放
+        victoryStoryDone = false;
+        victoryStoryT = 0.0;
         closeDetail();           // 进战斗前也清一次（防御性）
         GameAudio.stopMenuBgm();  // 出征 / 战斗冒烟都离开主界面
         GameAudio.stopLobbyBgm(); // 出大厅，交棒给战斗 BGM
@@ -987,6 +1030,10 @@ public final class GameApp extends Application {
         // 指挥：按住鼠标左键就是给宠物下令（与开火模式无关，自动开火时也能指挥）
         if (mouseDown) {
             input.buttons |= InputCommand.BUTTON_ORDER;
+        }
+        // 战士冲刺：空格按下即请求冲刺（世界层按冷却与职业判定是否真正触发）
+        if (pressed.contains(KeyCode.SPACE)) {
+            input.buttons |= InputCommand.BUTTON_DASH;
         }
         double camX = renderer.getCamX();
         double camY = renderer.getCamY();

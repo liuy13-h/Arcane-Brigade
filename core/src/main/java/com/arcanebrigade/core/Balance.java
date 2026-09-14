@@ -307,6 +307,14 @@ public final class Balance {
     public static final float BOSS_SUMMON_INTERVAL = 6f;
     public static final int   BOSS_SUMMON_COUNT    = 4;
 
+    // ---- 战士冲刺（每 5 秒一次短距无敌冲刺） ----
+    /** 冷却：两次冲刺之间至少隔这么久 */
+    public static final float DASH_CD = 5f;
+    /** 单次冲刺持续时间（秒），也是无敌帧时长 */
+    public static final float DASH_DURATION = 0.22f;
+    /** 冲刺速度（单位/秒），乘持续时间 ≈ 123 单位，属"短程" */
+    public static final float DASH_SPEED = 560f;
+
     // ---- 战斗事件（小任务） ----
     /** 三个事件的触发时间（秒）：2 分钟 / 5 分钟 / 8 分钟 */
     public static final float[] EVENT_TIMES  = { 120f, 300f, 480f };

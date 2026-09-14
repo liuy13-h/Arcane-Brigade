@@ -40,28 +40,6 @@ public final class ArenaMapTest {
                 assertExteriorTravel(map, 1f, 550f,
                         "player must be able to walk from the core into the south exterior battle zone");
             }
-            if (map == ArenaMap.LAVA_DUNGEON) {
-                check(map.isWalkable(0f, 360f, Balance.WIZARD_RADIUS)
-                                && map.isWalkable(-80f, 560f, Balance.WIZARD_RADIUS)
-                                && map.isWalkable(420f, 650f, Balance.WIZARD_RADIUS),
-                        "lava core must open naturally into its ember exterior ring and side platform");
-                check(map.nodeAt(-80f, 560f) != null && map.nodeAt(420f, 650f) != null,
-                        "lava exterior must be authored combat terrain, not a decorative lava backdrop");
-                assertExteriorTravel(map, 1f, 520f,
-                        "player must be able to walk from the lava hall into the exterior ring");
-            }
-            if (map == ArenaMap.STONE_CRYPT) {
-                check(map.isWalkable(0f, -350f, Balance.WIZARD_RADIUS)
-                                && map.isWalkable(-60f, -560f, Balance.WIZARD_RADIUS)
-                                && map.isWalkable(340f, 600f, Balance.WIZARD_RADIUS),
-                        "crypt core must open naturally into its collapsed courtyard and south gallery");
-                check(map.nodeAt(-60f, -560f) != null && map.nodeAt(340f, 600f) != null,
-                        "crypt exterior must be authored exploration terrain, not a decorative backdrop");
-                assertExteriorTravel(map, -1f, -500f,
-                        "player must be able to walk from the crypt room into the collapsed exterior courtyard");
-                assertExteriorTravel(map, 1f, 540f,
-                        "player must be able to walk from the crypt room into the south gallery");
-            }
 
             World spawnCheck = new World(73L, map);
             spawnCheck.spawnWizard(0f, 0f, HeroClass.WIZARD);
@@ -129,27 +107,9 @@ public final class ArenaMapTest {
             check(world.hp[hero] < before, map + " trap must actually damage a player in its active window");
         }
 
-        ArenaMap.Trap arrowLane = ArenaMap.STONE_CRYPT.traps()[2];
-        check(arrowLane.isLane() && arrowLane.contains(arrowLane.x(), arrowLane.y(), 0f)
-                        && !arrowLane.contains(arrowLane.x(), arrowLane.y() - arrowLane.halfHeight() - 1f, 0f),
-                "crypt arrow mechanism must be a narrow horizontal damage lane");
-        check(arrowLane.visualHalfHeight() > arrowLane.halfHeight() + Balance.WIZARD_RADIUS,
-                "crypt arrow warning must be wider than its real player damage lane");
-
-        World crypt = new World(23L, ArenaMap.STONE_CRYPT);
-        int laneHero = crypt.spawnWizard(arrowLane.x(), arrowLane.y(), HeroClass.WIZARD);
-        float laneBefore = crypt.hp[laneHero];
-        for (int frame = 0; frame < 120 && crypt.hp[laneHero] >= laneBefore; frame++) {
-            crypt.step(Balance.FIXED_STEP, new InputCommand());
-        }
-        check(crypt.hp[laneHero] < laneBefore, "crypt arrow lane must damage a player during its active window");
         check(hasShape(ArenaMap.DESERT_RUINS, ArenaMap.ObstacleShape.CAPSULE)
                         && hasShape(ArenaMap.DESERT_RUINS, ArenaMap.ObstacleShape.BOX),
                 "desert must use a narrow grounded footprint instead of oversized circles");
-        check(hasShape(ArenaMap.STONE_CRYPT, ArenaMap.ObstacleShape.CIRCLE)
-                        && hasShape(ArenaMap.STONE_CRYPT, ArenaMap.ObstacleShape.CAPSULE)
-                        && hasShape(ArenaMap.STONE_CRYPT, ArenaMap.ObstacleShape.BOX),
-                "crypt must use circle, capsule and box colliders by object type");
         System.out.println("OK: ArenaMapTest");
     }
 

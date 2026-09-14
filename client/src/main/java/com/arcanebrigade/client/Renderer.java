@@ -253,17 +253,8 @@ public final class Renderer {
                 rgb(rock), rgb(rockL), rgb(rockD) };
     }
 
-    private static final Color[] LAVA_PAL = desertPal(0x171317, 0x3A302E, 0x4C3B35, 0x6E3024,
-            0x4A3B3A, 0x78564A, 0x21181A, 0xA44D26, 0x675A57, 0x9A7A63, 0x312625);
-    private static final Color[] CRYPT_PAL = desertPal(0x121720, 0x4E5861, 0x59646B, 0x313A43,
-            0x414B55, 0x74818B, 0x252C34, 0x7B7153, 0x5C6670, 0x95A0A9, 0x323940);
-
     private static Color[] arenaPalette(ArenaMap map, int stage) {
-        return switch (map) {
-            case LAVA_DUNGEON -> LAVA_PAL;
-            case STONE_CRYPT -> CRYPT_PAL;
-            default -> STAGE_PAL[Math.max(0, Math.min(stage, STAGE_PAL.length - 1))];
-        };
+        return STAGE_PAL[Math.max(0, Math.min(stage, STAGE_PAL.length - 1))];
     }
 
     private static Color rgb(int v) {
@@ -363,17 +354,11 @@ public final class Renderer {
         ArenaMap map = w.arenaMap();
         double left = camX - vw / 2;
         double top = camY - vh / 2;
-        // 荒漠的路线外是深沙而非黑墙；熔岩与墓室则保留压迫感更强的外缘。
-        gc.setFill(map == ArenaMap.DESERT_RUINS ? pal[2].deriveColor(0, 0.84, 0.86, 1) : pal[0]);
+        // 荒漠的路线外是深沙而非黑墙。
+        gc.setFill(pal[2].deriveColor(0, 0.84, 0.86, 1));
         gc.fillRect(0, 0, vw, vh);
-        if (map == ArenaMap.DESERT_RUINS) {
-            drawDesertGroundMaterial(left, top, vw, vh, pal);
-            drawDesertOuterDunes(left, top, vw, vh, pal);
-        } else if (map == ArenaMap.LAVA_DUNGEON) {
-            drawLavaOuterHazard(left, top, vw, vh, pal);
-        } else {
-            drawCryptOuterBoundary(left, top, vw, vh, pal);
-        }
+        drawDesertGroundMaterial(left, top, vw, vh, pal);
+        drawDesertOuterDunes(left, top, vw, vh, pal);
 
         gc.setFill(pal[2].deriveColor(0, 1, 1, 0.90));
         for (int i = 0; i < map.routeSectionCount(); i++) {
@@ -382,13 +367,7 @@ public final class Renderer {
             double y = route.y() - route.halfHeight() - top;
             double width = route.halfWidth() * 2;
             double height = route.halfHeight() * 2;
-            if (map == ArenaMap.DESERT_RUINS) {
-                drawDesertRouteWear(route, left, top, pal);
-            } else if (map == ArenaMap.LAVA_DUNGEON) {
-                drawLavaFloor(x, y, width, height, Math.min(120, height), pal, false);
-            } else {
-                drawCryptFloor(x, y, width, height, Math.min(120, height), pal, false);
-            }
+            drawDesertRouteWear(route, left, top, pal);
         }
 
         for (int i = 0; i < map.expeditionNodeCount(); i++) {
@@ -398,14 +377,8 @@ public final class Renderer {
             double width = node.halfWidth() * 2;
             double height = node.halfHeight() * 2;
             double arc = Math.min(180, height);
-            if (map == ArenaMap.DESERT_RUINS) {
-                if (node.role() != ArenaMap.ExpeditionRole.CORE) {
-                    drawDesertNodeFloor(node, left, top, pal);
-                }
-            } else if (map == ArenaMap.LAVA_DUNGEON) {
-                drawLavaFloor(x, y, width, height, arc, pal, true);
-            } else {
-                drawCryptFloor(x, y, width, height, arc, pal, true);
+            if (node.role() != ArenaMap.ExpeditionRole.CORE) {
+                drawDesertNodeFloor(node, left, top, pal);
             }
         }
 
@@ -420,9 +393,6 @@ public final class Renderer {
                 if (!map.isWalkable((float) wx, (float) wy, 0f)) continue;
                 drawExpeditionDecor(map, c, r, left, top, pal);
             }
-        }
-        if (map != ArenaMap.DESERT_RUINS) {
-            drawThemedRoutePerimeter(map, left, top, vw, vh, pal);
         }
     }
 
@@ -537,168 +507,9 @@ public final class Renderer {
         }
     }
 
-    /** 熔岩区的不可行走外缘：深熔岩、裂谷阴影与火光共同说明“这里是地图尽头”。 */
-    private void drawLavaOuterHazard(double left, double top, double vw, double vh, Color[] pal) {
-        // 先铺连续熔岩河：随后只有 route mask 覆盖为安全玄武岩，边界不需要依赖无形阻挡或规整方框。
-        gc.setFill(Color.rgb(73, 25, 18, 1.0));
-        gc.fillRect(0, 0, vw, vh);
-        final int flowBand = 260;
-        int bandStart = (int) Math.floor((top - flowBand) / flowBand);
-        int bandEnd = (int) Math.floor((top + vh + flowBand) / flowBand);
-        for (int band = bandStart; band <= bandEnd; band++) {
-            long h = hash2(101, band);
-            double y = band * flowBand + ((h >>> 9) % 84) - 42 - top;
-            double height = 34 + ((h >>> 18) % 34);
-            gc.setFill(Color.rgb(178, 48, 22, 0.42));
-            gc.fillRoundRect(-120, y, vw + 240, height, height, height);
-            gc.setStroke(Color.rgb(255, 126, 43, 0.68));
-            gc.setLineWidth(2.5);
-            gc.strokeArc(-80, y - height * 0.45, vw + 160, height * 1.6,
-                    194, 150, javafx.scene.shape.ArcType.OPEN);
-        }
-        final int cell = 190;
-        int c0 = (int) Math.floor(left / cell) - 1;
-        int c1 = (int) Math.floor((left + vw) / cell) + 1;
-        int r0 = (int) Math.floor(top / cell) - 1;
-        int r1 = (int) Math.floor((top + vh) / cell) + 1;
-        for (int c = c0; c <= c1; c++) {
-            for (int r = r0; r <= r1; r++) {
-                long h = hash2(c * 31 + 5, r * 37 + 17);
-                double x = c * cell + 10 + ((h >>> 8) % 70) - left;
-                double y = r * cell + 18 + ((h >>> 18) % 66) - top;
-                if ((h & 3L) == 0L) {
-                    double width = 110 + ((h >>> 27) % 94);
-                    gc.setFill(pal[7].deriveColor(0, 1.18, 1.10, 0.32));
-                    gc.fillOval(x, y, width, 28 + ((h >>> 35) % 34));
-                    gc.setStroke(Color.rgb(255, 117, 42, 0.76));
-                    gc.setLineWidth(2.4);
-                    gc.strokeArc(x + 8, y + 5, width - 18, 26, 190, 160, javafx.scene.shape.ArcType.OPEN);
-                } else if ((h & 7L) == 1L) {
-                    gc.setStroke(pal[7].deriveColor(0, 1.22, 1.06, 0.58));
-                    gc.setLineWidth(2.2);
-                    gc.strokeLine(x, y, x + 36, y + 18);
-                    gc.strokeLine(x + 23, y + 11, x + 48, y - 8);
-                }
-            }
-        }
-    }
-
-    /** 地牢外缘保持为深坑与塌陷层；安全石砖会在其上叠出，避免“外面像另一张背景”。 */
-    private void drawCryptOuterBoundary(double left, double top, double vw, double vh, Color[] pal) {
-        final int cell = 220;
-        int c0 = (int) Math.floor(left / cell) - 1;
-        int c1 = (int) Math.floor((left + vw) / cell) + 1;
-        int r0 = (int) Math.floor(top / cell) - 1;
-        int r1 = (int) Math.floor((top + vh) / cell) + 1;
-        for (int c = c0; c <= c1; c++) {
-            for (int r = r0; r <= r1; r++) {
-                long h = hash2(c * 29 + 13, r * 43 + 7);
-                if ((h & 3L) != 0L) continue;
-                double x = c * cell + 22 + ((h >>> 9) % 60) - left;
-                double y = r * cell + 16 + ((h >>> 17) % 76) - top;
-                double width = 118 + ((h >>> 25) % 86);
-                double height = 54 + ((h >>> 34) % 54);
-                gc.setFill(Color.color(0.01, 0.015, 0.025, 0.50));
-                gc.fillOval(x + 9, y + 13, width, height);
-                gc.setStroke(pal[6].deriveColor(0, 0.88, 0.82, 0.62));
-                gc.setLineWidth(2.4);
-                gc.strokeArc(x, y, width, height, 190, 160, javafx.scene.shape.ArcType.OPEN);
-            }
-        }
-    }
-
-    /** 同一套暗色玄武岩铺在门厅与外环；只有火光和机关改变其危险度。 */
-    private void drawLavaFloor(double x, double y, double width, double height, double arc,
-                               Color[] pal, boolean node) {
-        gc.setFill(node ? pal[1].deriveColor(0, 1.04, 1.04, 0.98) : pal[2].deriveColor(0, 0.94, 0.92, 0.96));
-        gc.fillRoundRect(x, y, width, height, arc, arc);
-        gc.setStroke(pal[7].deriveColor(0, 1.12, 1.08, node ? 0.38 : 0.25));
-        gc.setLineWidth(1.6);
-        gc.strokeLine(x + 22, y + 18, x + width - 28, y + 18);
-    }
-
-    /** 石质遗迹从核心到外庭使用同一套冷灰石砖，只让外缘掉入深坑。 */
-    private void drawCryptFloor(double x, double y, double width, double height, double arc,
-                                Color[] pal, boolean node) {
-        gc.setFill(node ? pal[1].deriveColor(0, 1.02, 1.04, 0.98) : pal[2].deriveColor(0, 0.92, 0.94, 0.96));
-        gc.fillRoundRect(x, y, width, height, arc, arc);
-        gc.setStroke(pal[5].deriveColor(0, 1.05, 1.05, 0.38));
-        gc.setLineWidth(1.5);
-        gc.strokeLine(x + 18, y + 18, x + width - 24, y + 18);
-    }
-
-    /**
-     * 只沿“可走地面 / 危险外缘”的交界画主题边界。它读取同一份 route mask，
-     * 因而裂谷、深坑与真实不可通行范围一致，而不是另铺一圈空气墙。
-     */
-    private void drawThemedRoutePerimeter(ArenaMap map, double left, double top, double vw, double vh, Color[] pal) {
-        final int cell = 72;
-        int c0 = (int) Math.floor(left / cell) - 1;
-        int c1 = (int) Math.floor((left + vw) / cell) + 1;
-        int r0 = (int) Math.floor(top / cell) - 1;
-        int r1 = (int) Math.floor((top + vh) / cell) + 1;
-        Color deep = map == ArenaMap.LAVA_DUNGEON ? Color.rgb(23, 12, 12, 0.96) : Color.rgb(8, 11, 16, 0.96);
-        Color edge = map == ArenaMap.LAVA_DUNGEON ? Color.rgb(245, 100, 37, 0.80) : pal[5].deriveColor(0, 1, 1, 0.80);
-        for (int c = c0; c <= c1; c++) {
-            for (int r = r0; r <= r1; r++) {
-                float wx = (c + 0.5f) * cell;
-                float wy = (r + 0.5f) * cell;
-                if (!map.isWalkable(wx, wy, 0f)) continue;
-                double x = c * cell - left;
-                double y = r * cell - top;
-                gc.setStroke(deep);
-                gc.setLineWidth(map == ArenaMap.LAVA_DUNGEON ? 7 : 18);
-                if (!map.isWalkable(wx - cell, wy, 0f)) gc.strokeLine(x, y, x, y + cell);
-                if (!map.isWalkable(wx + cell, wy, 0f)) gc.strokeLine(x + cell, y, x + cell, y + cell);
-                if (!map.isWalkable(wx, wy - cell, 0f)) gc.strokeLine(x, y, x + cell, y);
-                if (!map.isWalkable(wx, wy + cell, 0f)) gc.strokeLine(x, y + cell, x + cell, y + cell);
-                gc.setStroke(edge);
-                gc.setLineWidth(map == ArenaMap.LAVA_DUNGEON ? 1.6 : 3.0);
-                // 熔岩边缘只露出断续的烧灼亮边，避免把岩台勾成一张规则方框。
-                long edgeHash = hash2(c * 53 + 3, r * 59 + 7);
-                boolean markLeft = (edgeHash & 1L) == 0L;
-                boolean markRight = (edgeHash & 2L) == 0L;
-                boolean markTop = (edgeHash & 4L) == 0L;
-                boolean markBottom = (edgeHash & 8L) == 0L;
-                if (!map.isWalkable(wx - cell, wy, 0f) && (map != ArenaMap.LAVA_DUNGEON || markLeft)) gc.strokeLine(x, y, x, y + cell);
-                if (!map.isWalkable(wx + cell, wy, 0f) && (map != ArenaMap.LAVA_DUNGEON || markRight)) gc.strokeLine(x + cell, y, x + cell, y + cell);
-                if (!map.isWalkable(wx, wy - cell, 0f) && (map != ArenaMap.LAVA_DUNGEON || markTop)) gc.strokeLine(x, y, x + cell, y);
-                if (!map.isWalkable(wx, wy + cell, 0f) && (map != ArenaMap.LAVA_DUNGEON || markBottom)) gc.strokeLine(x, y + cell, x + cell, y + cell);
-            }
-        }
-    }
-
     /** 地图主题决定延展区的细节语言：沙丘、熔岩裂痕、墓室石砖不会互相换皮。 */
     private void drawExpeditionDecor(ArenaMap map, int c, int r, double left, double top, Color[] pal) {
-        long h = hash2(c, r);
-        double bx = c * TILE - left;
-        double by = r * TILE - top;
-        int roll = (int) ((h >>> 3) % 100);
-        switch (map) {
-            case DESERT_RUINS -> drawTileDecor(c, r, left, top, pal);
-            case LAVA_DUNGEON -> {
-                if (roll < 36) {
-                    double px = bx + 10 + ((h >>> 9) % 42);
-                    double py = by + 12 + ((h >>> 15) % 38);
-                    gc.setStroke(pal[7].deriveColor(0, 1, 1.25, 0.72));
-                    gc.setLineWidth(2.2);
-                    gc.strokeLine(px, py, px + 24, py + 8);
-                    gc.strokeLine(px + 13, py + 4, px + 18, py - 14);
-                } else if (roll < 56) {
-                    gc.setFill(pal[6].deriveColor(0, 1, 1, 0.65));
-                    gc.fillOval(bx + 12 + ((h >>> 8) % 30), by + 16 + ((h >>> 14) % 24), 14, 8);
-                }
-            }
-            case STONE_CRYPT -> {
-                gc.setStroke(pal[3].deriveColor(0, 1, 1, 0.52));
-                gc.setLineWidth(1.2);
-                gc.strokeRect(bx + 2, by + 2, TILE - 4, TILE - 4);
-                if (roll < 18) {
-                    gc.setFill(pal[6].deriveColor(0, 1, 1, 0.52));
-                    gc.fillOval(bx + 12 + ((h >>> 9) % 34), by + 15 + ((h >>> 15) % 30), 10, 7);
-                }
-            }
-        }
+        drawTileDecor(c, r, left, top, pal);
     }
 
     /** 每格至多一样装饰：沙丘暗斑 / 龟裂 / 碎石 / 枯灌，全部由哈希决定 */
@@ -2229,9 +2040,67 @@ public final class Renderer {
         double tw = measurerLayout(stats, Font.font("Consolas", 15));
         gc.fillText(stats, vw / 2 - tw / 2, vh * 0.32 + 96);
 
+        // 终局奖励：击败奶蛙获得的技能卡
+        if (w.victoryCardName != null) {
+            gc.setFont(Font.font("Microsoft YaHei", 15));
+            gc.setFill(Color.rgb(255, 220, 130));
+            String card = "获得技能卡：" + w.victoryCardName;
+            double cw = measurerLayout(card, Font.font("Microsoft YaHei", 15));
+            gc.fillText(card, vw / 2 - cw / 2, vh * 0.32 + 122);
+        }
+
         gc.setFont(Font.font("Microsoft YaHei", 13));
         gc.setFill(Color.rgb(160, 160, 180));
         gc.fillText("按 R 重新开始", vw / 2 - 48, vh * 0.32 + 140);
+    }
+
+    /** 通关剧情字幕（胜利结算之前播放）：从屏幕下方缓缓上滚，约 7 秒滚完 */
+    private static final String[] VICTORY_STORY = {
+            "阴云笼罩王国已久——",
+            "奶蛙魔王自深渊苏醒，吞噬田野与城池。",
+            "奥术旅团的勇者自四方启程，跨越裂隙与废墟。",
+            "终于，在崩塌的王座之前，最后一击落下。",
+            "奶蛙魔王轰然崩解，久违的阳光重新洒满大地。",
+            "王国得救了。他们的传说，将世代传颂。",
+    };
+    private static final double VICTORY_STORY_SCROLL = 7.0;
+
+    /**
+     * 通关剧情上滚字幕。t 为已播放秒数；文字整体从屏幕下方滚到上方，滚完后停在居中附近。
+     * 由 GameApp 在 world.victory() 且字幕阶段调用，玩家可跳过（见 GameApp）。
+     */
+    public void drawVictoryStory(double t) {
+        double vw = canvas.getWidth();
+        double vh = canvas.getHeight();
+        // 半透明暗底，让背后的战场隐约可见
+        gc.setFill(Color.rgb(6, 4, 12, 0.86));
+        gc.fillRect(0, 0, vw, vh);
+
+        Font lf = Font.font("Microsoft YaHei", 20);
+        double lh = 40;
+        double blockH = VICTORY_STORY.length * lh;
+        // 进度 0..1：首行从屏幕下方外滚入，到末行滚到屏幕上方外
+        double p = Math.min(1.0, t / VICTORY_STORY_SCROLL);
+        double topY = (vh + lh) - p * (vh + lh + blockH);
+
+        gc.setFill(Color.rgb(242, 234, 212));
+        gc.setFont(lf);
+        for (int i = 0; i < VICTORY_STORY.length; i++) {
+            String line = VICTORY_STORY[i];
+            double y = topY + i * lh;
+            if (y < -lh || y > vh + lh) {
+                continue;   // 屏幕外的行不画，省开销
+            }
+            double lw = measureWidth(lf, line);
+            gc.fillText(line, vw / 2 - lw / 2, y);
+        }
+
+        // 跳过提示
+        gc.setFont(Font.font("Microsoft YaHei", 13));
+        gc.setFill(Color.rgb(170, 170, 190));
+        String tip = "（点击或按任意键跳过）";
+        double tw = measureWidth(Font.font("Microsoft YaHei", 13), tip);
+        gc.fillText(tip, vw / 2 - tw / 2, vh * 0.93);
     }
 
     /**
@@ -2420,7 +2289,7 @@ public final class Renderer {
      */
     public void drawLobby(LobbyGeom g, double px, double py, int chosen, boolean facingLeft, double t,
             int cardClass, double reveal, boolean showGuide, TaskSystem tasks,
-            TaskSystem.Category taskCategory, boolean taskOpen, ArenaMap arenaMap, boolean mapOpen) {
+            TaskSystem.Category taskCategory, boolean taskOpen) {
         double vw = canvas.getWidth();
         double vh = canvas.getHeight();
         double pulse = 0.5 + 0.5 * Math.sin(t * 2.4);
@@ -2449,7 +2318,6 @@ public final class Renderer {
         // ---- 左上角操作指引（可隐藏） ----
         drawLobbyGuide(showGuide);
         drawLobbyTasks(tasks, taskCategory, taskOpen);
-        drawLobbyMapSelect(arenaMap, mapOpen);
 
         // ---- 四个角色：均匀一字排开，站在同一脚底线上 ----
         // 立绘已由 Sprites 按整数倍预放大(×2, 最近邻)，这里按自然尺寸 1:1 绘制、
@@ -3658,68 +3526,6 @@ public final class Renderer {
             }
         }
         return 1;
-    }
-
-    // ------------------------------------------------------------------
-    // 大厅地图选择：左侧透明按钮与三张纯场景预览卡（不叠角色立绘）
-    // ------------------------------------------------------------------
-
-    public record MapSelectGeom(Rect toggle, Rect panel, Rect[] cards) {}
-
-    public static MapSelectGeom lobbyMapSelectGeom(double vw, double vh) {
-        double x = 16;
-        Rect toggle = new Rect(x, 198, 174, 34);
-        double w = Math.min(330, Math.max(286, vw * 0.265));
-        double y = 242;
-        Rect panel = new Rect(x, y, w, 3 * 86 + 56);
-        Rect[] cards = new Rect[ArenaMap.values().length];
-        for (int i = 0; i < cards.length; i++) cards[i] = new Rect(x + 10, y + 45 + i * 86, w - 20, 76);
-        return new MapSelectGeom(toggle, panel, cards);
-    }
-
-    private void drawLobbyMapSelect(ArenaMap selected, boolean open) {
-        MapSelectGeom g = lobbyMapSelectGeom(canvas.getWidth(), canvas.getHeight());
-        Rect toggle = g.toggle();
-        gc.setFill(Color.rgb(8, 7, 15, 0.52));
-        gc.fillRoundRect(toggle.x(), toggle.y(), toggle.w(), toggle.h(), 10, 10);
-        gc.setStroke(Color.rgb(132, 210, 235, 0.55));
-        gc.setLineWidth(1.1);
-        gc.strokeRoundRect(toggle.x(), toggle.y(), toggle.w(), toggle.h(), 10, 10);
-        drawTextSoft(gc, Font.font("Microsoft YaHei", FontWeight.BOLD, 13), toggle.x() + 58, toggle.y() + 22,
-                "◇ 地图", Color.rgb(181, 235, 250), null);
-        if (!open) return;
-        Rect panel = g.panel();
-        gc.setFill(Color.rgb(8, 7, 15, 0.72));
-        gc.fillRoundRect(panel.x(), panel.y(), panel.w(), panel.h(), 14, 14);
-        gc.setStroke(Color.rgb(132, 210, 235, 0.55));
-        gc.strokeRoundRect(panel.x(), panel.y(), panel.w(), panel.h(), 14, 14);
-        drawTextSoft(gc, Font.font("Microsoft YaHei", FontWeight.BOLD, 15), panel.x() + 17, panel.y() + 27,
-                "选择战场", Color.rgb(222, 245, 255), null);
-        ArenaMap[] maps = ArenaMap.values();
-        for (int i = 0; i < maps.length; i++) {
-            ArenaMap map = maps[i];
-            Rect card = g.cards()[i];
-            boolean isSelected = map == selected;
-            Color accent = map == ArenaMap.LAVA_DUNGEON ? Color.rgb(255, 119, 62)
-                    : map == ArenaMap.STONE_CRYPT ? Color.rgb(135, 214, 238) : Color.rgb(232, 187, 101);
-            gc.setFill(Color.color(accent.getRed(), accent.getGreen(), accent.getBlue(), isSelected ? 0.23 : 0.09));
-            gc.fillRoundRect(card.x(), card.y(), card.w(), card.h(), 10, 10);
-            gc.setStroke(Color.color(accent.getRed(), accent.getGreen(), accent.getBlue(), isSelected ? 0.94 : 0.42));
-            gc.setLineWidth(isSelected ? 2.2 : 1.0);
-            gc.strokeRoundRect(card.x(), card.y(), card.w(), card.h(), 10, 10);
-            // 预览只绘制关卡本身，绝不把大厅角色压到地图图面上。
-            Image preview = i < Sprites.mapPreviews.length ? Sprites.mapPreviews[i] : null;
-            if (preview != null) {
-                gc.drawImage(preview, card.x() + 10, card.y() + 12, 72, 52);
-            } else {
-                gc.setFill(Color.color(accent.getRed(), accent.getGreen(), accent.getBlue(), 0.32));
-                gc.fillRoundRect(card.x() + 10, card.y() + 12, 72, 52, 7, 7);
-            }
-            drawTextSoft(gc, Font.font("Microsoft YaHei", FontWeight.BOLD, 13), card.x() + 96, card.y() + 29,
-                    map.displayName(), Color.WHITE, null);
-            drawTextSoft(gc, Font.font("Microsoft YaHei", 11), card.x() + 96, card.y() + 49,
-                    map.playStyle() + " · " + map.hazardHint(), Color.rgb(210, 215, 226), null);
-        }
     }
 
     // ------------------------------------------------------------------
