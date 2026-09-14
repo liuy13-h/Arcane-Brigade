@@ -109,6 +109,25 @@ public final class Sprites {
     /** 被奶蛙击败时，阵亡画面中央展示的图片（透明底像素图） */
     public static Image milkyPressure;
 
+    // ---- 王宫最终决战：国王（image1/ 下的三阶段动画，一/二/三阶段均已接入）----
+    /**
+     * 阶段一待机动画。原图近千像素，加载时预缩放到决战场显示高度
+     * （竞技场 1 世界单位 = 1 屏幕像素，所以这里的像素高就是世界高）。
+     * 100px 与勇者角色（约 64px）同一像素比例，只高一档，不遮战场。
+     */
+    public static GifDecoder.Animation kingPhase1;
+    /** 国王静态形象（缺动画时兜底；也是王座/大殿场景里站桩用） */
+    public static Image kingStill;
+    /** 阶段二待机动画（image1/king-phase2-idle.gif，同一预缩放口径） */
+    public static GifDecoder.Animation kingPhase2;
+    /** 二阶段王座厅背景（image/王宫二阶段.gif：10 帧动画）与静态兜底 */
+    public static GifDecoder.Animation kingArena2Anim;
+    public static Image kingArena2;
+    /** 阶段三待机动画（image1/king-phase3-idle.gif）：王座本体形态 */
+    public static GifDecoder.Animation kingPhase3;
+    /** 深渊裂隙（phase3-abyss-rift-transparent.png）：三阶段标题卡铺底 */
+    public static Image abyssRift;
+
     /** 快照需要节点挂在 Scene 下才可靠，用一个离屏容器兜着 */
     private static final Group OFFSCREEN = new Group();
     private static final Scene OFFSCREEN_SCENE = new Scene(OFFSCREEN, 1, 1);
@@ -210,6 +229,40 @@ public final class Sprites {
         milkyStompMirror = knockAnim(loadAnim("milky/stomp_mirror.gif"));
         milkyLaugh = knockAnim(loadAnim("milky/laugh.gif"));
         milkyPressure = loadImage("milky/pressure.png");
+
+        // 王宫决战：国王的待机动画（image1/），预缩放到决战场显示高度
+        // （100 ≈ 勇者比例的 1.5 倍；原图内容几乎顶满画布，无需额外裁边）
+        kingPhase1 = resizeAnimToHeight(loadArtAnim("king-phase1-idle.gif"), 100);
+        kingStill = (kingPhase1 != null) ? kingPhase1.frames[0] : null;
+        // 二阶段国王（image1/king-phase2-idle.gif）：同一预缩放口径
+        kingPhase2 = resizeAnimToHeight(loadArtAnim("king-phase2-idle.gif"), 100);
+        // 二阶段王座厅背景（image/王宫二阶段.gif，1024×683×10 帧）：
+        // 动画解码失败时用首帧静态兜底（loadArt 同样能读 GIF 首帧）
+        kingArena2Anim = loadArtAnim("王宫二阶段.gif");
+        kingArena2 = (kingArena2Anim != null) ? kingArena2Anim.frames[0] : loadArt("王宫二阶段.gif");
+        // 三阶段国王（王座本体，image1/king-phase3-idle.gif）：同一预缩放口径；
+        // 深渊裂隙（phase3-abyss-rift-transparent.png）作为标题卡铺底
+        kingPhase3 = resizeAnimToHeight(loadArtAnim("king-phase3-idle.gif"), 100);
+        abyssRift = loadArt("phase3-abyss-rift-transparent.png");
+    }
+
+    /** 把 GIF 每一帧等比缩放到目标高度（预烘焙，运行时不再做缩放） */
+    private static GifDecoder.Animation resizeAnimToHeight(GifDecoder.Animation a, int targetH) {
+        if (a == null || a.frames.length == 0 || targetH <= 0) {
+            return null;
+        }
+        Image f0 = a.frames[0];
+        int th = targetH;
+        int tw = Math.max(1, (int) Math.round(th * (f0.getWidth() / f0.getHeight())));
+        Image[] fs = new Image[a.frames.length];
+        for (int i = 0; i < fs.length; i++) {
+            final Image src = a.frames[i];
+            fs[i] = bake(tw, th, g -> {
+                g.setImageSmoothing(false);   // 像素素材缩小：关平滑更干净
+                g.drawImage(src, 0, 0, tw, th);
+            });
+        }
+        return new GifDecoder.Animation(fs, a.delays);
     }
 
     private static Image loadBattleMap(String name) {
@@ -430,17 +483,26 @@ public final class Sprites {
         return new Image(f.toURI().toString(), false);
     }
 
-    /** 定位 image/ 下的文件。从工作目录往上逐级找 image 目录，找不到或文件不存在返回 null */
+    /**
+     * 定位美术文件。素材分布在仓库根的两个目录：image/（首发素材）与 image1/
+     * （国王决战等新素材）。从工作目录逐级向上找这两个目录，按 image → image1
+     * 的顺序取第一个命中的文件；找不到返回 null，调用方需容忍缺图。
+     */
     private static File artFile(String fileName) {
-        File dir = null;
+        String[] dirNames = { "image", "image1" };
         for (File d = new File(System.getProperty("user.dir")); d != null; d = d.getParentFile()) {
-            File cand = new File(d, "image");
-            if (cand.isDirectory()) {
-                dir = cand;
-                break;
+            for (String dirName : dirNames) {
+                File dir = new File(d, dirName);
+                if (!dir.isDirectory()) {
+                    continue;
+                }
+                File f = new File(dir, fileName);
+                if (f.isFile()) {
+                    return f;
+                }
             }
         }
-        File f = (dir != null) ? new File(dir, fileName) : new File(fileName);
+        File f = new File(fileName);
         return f.isFile() ? f : null;
     }
 
