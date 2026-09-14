@@ -3,7 +3,7 @@ rem ============================================================
 rem  Arcane Brigade one-click launcher
 rem  Needs: a JDK 17 or newer (java and javac reachable from PATH,
 rem         or JAVA_HOME pointing at the JDK), plus the JavaFX
-rem         21.0.12 platform jars in the local Maven repo. If the
+rem         21.0.6 platform jars in the local Maven repo. If the
 rem         jars are missing, open the project in IntelliJ once and
 rem         click "Reload Maven" (needs internet).
 rem
@@ -28,12 +28,12 @@ if not defined JAVAC (
 if "%JAVAC%"=="javac" (set "JAVAEXE=java") else (set "JAVAEXE=%JAVAC:javac.exe=java.exe%")
 
 set "M2=D:\.m2\repository"
-if not exist "%M2%\org\openjfx\javafx-base\21.0.12" set "M2=%USERPROFILE%\.m2\repository"
+if not exist "%M2%\org\openjfx\javafx-base\21.0.6" set "M2=%USERPROFILE%\.m2\repository"
 set "FX=%M2%\org\openjfx"
-set "FB=%FX%\javafx-base\21.0.12\javafx-base-21.0.12-win.jar"
-set "FG=%FX%\javafx-graphics\21.0.12\javafx-graphics-21.0.12-win.jar"
-set "FC=%FX%\javafx-controls\21.0.12\javafx-controls-21.0.12-win.jar"
-set "FM=%FX%\javafx-media\21.0.12\javafx-media-21.0.12-win.jar"
+set "FB=%FX%\javafx-base\21.0.6\javafx-base-21.0.6-win.jar"
+set "FG=%FX%\javafx-graphics\21.0.6\javafx-graphics-21.0.6-win.jar"
+set "FC=%FX%\javafx-controls\21.0.6\javafx-controls-21.0.6-win.jar"
+set "FM=%FX%\javafx-media\21.0.6\javafx-media-21.0.6-win.jar"
 if not exist "%FB%" goto :needmaven
 if not exist "%FG%" goto :needmaven
 if not exist "%FC%" goto :needmaven
@@ -80,7 +80,9 @@ rem 否则 Application.launch 会报 "JavaFX runtime components are missing"。
 rem 注意：--sun-misc-unsafe-memory-access=allow 是 JDK 23+ 的选项，本机是 JDK 21，
 rem 写了会令 JVM 直接启动失败（黑窗口一闪而过）。--enable-native-access 在 JDK 21 上合法。
 set "CP=%COREOUT%;%CLIENTOUT%"
-set "FXMP=%FX%\javafx-base\21.0.12;%FX%\javafx-graphics\21.0.12;%FX%\javafx-controls\21.0.12;%FX%\javafx-media\21.0.12"
+rem 模块路径直接列出 win 平台 jar：目录形式会把 sources jar / 空壳主 jar
+rem 一起挂进模块层，JVM 报 "Two versions of module javafx.xxx found"。
+set "FXMP=%FB%;%FG%;%FC%;%FM%"
 rem Keep JavaFX shader/cache files and local settings inside the project output.
 set "RUNTIME_HOME=%CD%\client\target\runtime-home"
 if not exist "%RUNTIME_HOME%" mkdir "%RUNTIME_HOME%"
@@ -92,7 +94,7 @@ set "RC=%ERRORLEVEL%"
 endlocal & exit /b %RC%
 
 :needmaven
-echo [ERROR] Missing JavaFX 21.0.12 platform jar: %FB%
+echo [ERROR] Missing JavaFX 21.0.6 platform jar: %FB%
 echo         Open in IntelliJ and Reload Maven first (internet needed).
 goto :fail
 

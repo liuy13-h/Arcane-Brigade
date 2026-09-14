@@ -17,11 +17,11 @@
   </modules>
 
   <properties>
-    <!-- 编译基线定为 17：生成的 class 版本是 61，与 JavaFX 21.0.12 的 -win 平台 jar
+    <!-- 编译基线定为 17：生成的 class 版本是 61，与 JavaFX 21.0.6 的 -win 平台 jar
          (class 61) 一致，凡是装有 JDK 17 及以上(含 21/26)的机器都能直接跑。 -->
     <maven.compiler.release>17</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <javafx.version>21.0.12</javafx.version>
+    <javafx.version>21.0.6</javafx.version>
     <!--
       平台分类器：javafx 的无后缀主 jar 在中央仓库里是空壳，
       真正的类在 -win / -mac / -linux 分类器 jar 里。
