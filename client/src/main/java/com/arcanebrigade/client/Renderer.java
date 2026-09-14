@@ -1058,6 +1058,7 @@ public final class Renderer {
                     // 弓箭手冲刺充能 HUD：角色头顶三个小格，每格一颗。
                     //   - 就绪：实心绿色
                     //   - 缺弹药：空心，按"下一发的充能进度"从底部填蓝
+                    //   - 充能中：格子上方显示剩余冷却秒数（用户要求把具体冷却时间展现出来）
                     if (ck == HeroClass.ARCHER) {
                         int charges = w.dashChargesOf(i);
                         int max = Balance.ARCHER_DASH_MAX;
@@ -1091,6 +1092,25 @@ public final class Renderer {
                                 gc.fillRect(ox, oy + (box - fill), box, fill);
                             }
                         }
+                        drawDashCdText(w, i, sx, sy - rr - 24);
+                    }
+                    // 战士冲刺冷却 HUD：头顶一条横向冷却条 + 剩余秒数。
+                    // 战士此前完全没有冲刺 HUD（充能格只给弓箭手画），冷却中像技能凭空消失。
+                    if (ck == HeroClass.WARRIOR && w.dashCdRemain(i) > 0f) {
+                        double bw = 36, bh = 5;
+                        double bx0 = sx - bw / 2;
+                        double by0 = sy - rr - 18;
+                        float total = w.dashCdTotal(i);
+                        float remain = w.dashCdRemain(i);
+                        double ready = total > 0f ? (1.0 - remain / total) : 1.0;   // 0=刚冲，1=就绪
+                        gc.setFill(Color.rgb(28, 28, 36, 0.85));
+                        gc.fillRect(bx0, by0, bw, bh);
+                        gc.setFill(Color.rgb(110, 200, 255, 0.9));
+                        gc.fillRect(bx0, by0, bw * Math.max(0.0, Math.min(1.0, ready)), bh);
+                        gc.setStroke(Color.rgb(70, 90, 110, 0.9));
+                        gc.setLineWidth(1.2);
+                        gc.strokeRect(bx0, by0, bw, bh);
+                        drawDashCdText(w, i, sx, sy - rr - 24);
                     }
                 }
                 case World.KIND_ENEMY -> {
@@ -1936,7 +1956,23 @@ public final class Renderer {
         gc.fillText(hpText, bx + bw - measureWidth(hudFont, hpText), by - 6);
     }
 
-    /** 主动技能条：名字 + 冷却遮罩。3 个槽，见 Loadout.SLOTS */
+    /** 冲刺冷却剩余秒数文字（弓箭手充能格 / 战士冷却条上方共用）。剩余 0 秒时不画 */
+    private void drawDashCdText(World w, int i, double cx, double cy) {
+        float remain = w.dashCdRemain(i);
+        if (remain <= 0f) {
+            return;
+        }
+        String txt = String.format("%.1fs", remain);
+        gc.setFont(Font.font("Consolas", 11));
+        gc.setFill(Color.rgb(200, 235, 255, 0.95));
+        gc.setStroke(Color.rgb(10, 12, 20, 0.8));
+        gc.setLineWidth(2.0);
+        double tw = txt.length() * 6.5;
+        gc.strokeText(txt, cx - tw / 2, cy);
+        gc.fillText(txt, cx - tw / 2, cy);
+    }
+
+    /** 主动技能条：名字 + 冷却遮罩。3 个槽，见 Loadout.SLOTS；战士/弓箭手会在末尾追加常驻"冲刺"槽 */
     private void drawSpellBar(World w, double vw, double vh) {
         Loadout lo = w.loadout(w.wizard(0));
         if (lo == null) {
@@ -1945,7 +1981,13 @@ public final class Renderer {
         double sw = 104;
         double sh = 34;
         double gap = 8;
+        // 冲刺职业（战士/弓箭手）在技能条末尾追加一个等高冲刺槽：常驻显示冷却状态
+        boolean hasDash = lo.classKind == HeroClass.WARRIOR || lo.classKind == HeroClass.ARCHER;
+        double dashW = 104;
         double total = Loadout.SLOTS * sw + (Loadout.SLOTS - 1) * gap;
+        if (hasDash) {
+            total += gap + dashW;
+        }
         double x0 = (vw - total) / 2;
         double y0 = vh - 84;
 
@@ -1974,6 +2016,39 @@ public final class Renderer {
 
             gc.setFill(def != null ? Color.rgb(232, 232, 244) : Color.rgb(110, 110, 130));
             gc.fillText(def != null ? def.name : "空槽", bx + 10, y0 + 22);
+        }
+
+        // 常驻冲刺槽：就绪时亮青色边框，冷却时底部蓝色遮罩 + 剩余秒数
+        if (hasDash) {
+            int wid = w.wizard(0);
+            float remain = w.dashCdRemain(wid);
+            float cdTotal = w.dashCdTotal(wid);
+            double bx = x0 + Loadout.SLOTS * (sw + gap);
+
+            gc.setFill(Color.rgb(12, 10, 18, 0.82));
+            gc.fillRect(bx, y0, dashW, sh);
+
+            boolean cooling = remain > 0f && cdTotal > 0f;
+            if (cooling) {
+                float f = Math.min(1f, remain / cdTotal);
+                gc.setFill(Color.rgb(90, 140, 220, 0.55));
+                gc.fillRect(bx, y0 + sh * (1 - f), dashW, sh * f);
+            }
+
+            gc.setStroke(cooling ? Color.rgb(70, 90, 130) : Color.rgb(110, 220, 235));
+            gc.setLineWidth(cooling ? 1.5 : 2.2);
+            gc.strokeRect(bx, y0, dashW, sh);
+
+            gc.setFill(Color.rgb(232, 232, 244));
+            gc.fillText("冲刺", bx + 10, y0 + 22);
+
+            // 右侧：冷却中显示剩余秒数（琥珀色），就绪显示按键提示（暗青色）
+            String right = cooling ? String.format("%.1fs", remain) : "空格";
+            gc.setFont(Font.font("Consolas", 13));
+            gc.setFill(cooling ? Color.rgb(255, 200, 120, 0.95) : Color.rgb(110, 180, 195, 0.9));
+            double rw = measureWidth(gc.getFont(), right);
+            gc.fillText(right, bx + dashW - rw - 10, y0 + 22);
+            gc.setFont(spellFont);
         }
     }
 

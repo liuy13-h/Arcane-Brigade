@@ -616,6 +616,10 @@ public final class World {
             milkyFallen = true;
             milkyDownX = x[id];
             milkyDownY = y[id];
+            // 施法途中被击杀：必须把施法状态一并清掉——否则 milkyCast 永远停在 1/2，
+            // 客户端「施法结束立即停止笑声」的条件永远不成立，奶蛙音效会一直漏到王宫决战。
+            milkyCast = 0;
+            milkyCastT = 0f;
             // 手动收尾：不走下方通用击杀块——避免弹升级三选一 / 掉宝石 / 胜利结算，
             // 让战场在剧情开始前保持安静（只保留击杀计数）。
             enemiesAlive--;
@@ -5307,13 +5311,23 @@ public final class World {
         if (wizardId < 0 || wizardId >= MAX || !alive[wizardId] || kind[wizardId] != KIND_WIZARD) {
             return 1f;
         }
+        Loadout lo = loadout[wizardId];
+        if (lo == null) {
+            return 1f;
+        }
+        // 战士：单发 CD 归一化进度（0=刚冲、1=就绪）。必须放在弓箭手分支之前，
+        // 否则会被下面的「非弓箭手提前返回」挡住成为死代码
+        if (lo.classKind == HeroClass.WARRIOR) {
+            return Balance.WARRIOR_DASH_CD > 0f
+                    ? Math.max(0f, Math.min(1f, 1f - dashCd[wizardId] / Balance.WARRIOR_DASH_CD))
+                    : 1f;
+        }
+        if (lo.classKind != HeroClass.ARCHER) {
+            return 1f;
+        }
         int ch = dashCharges[wizardId];
         if (ch <= 0) {
             return 0f;   // 弹药耗尽：HUD 显示"全暗"
-        }
-        Loadout lo = loadout[wizardId];
-        if (lo == null || lo.classKind != HeroClass.ARCHER) {
-            return 1f;
         }
         // 弓箭手：满发返回 1（就绪），否则是下一发的充能进度（0=刚发、1=就绪）
         if (ch >= Balance.ARCHER_DASH_MAX) {
@@ -5321,6 +5335,43 @@ public final class World {
         }
         float cdTotal = Balance.ARCHER_DASH_CD;
         return cdTotal > 0f ? Math.max(0f, Math.min(1f, 1f - dashCd[wizardId] / cdTotal)) : 1f;
+    }
+
+    /**
+     * 冲刺冷却剩余秒数（HUD 显示具体冷却时间用）。
+     * 战士 = 单发 CD 剩余；弓箭手 = 下一发充能剩余（满发时 0）；非冲刺职业 / 就绪时返回 0。
+     */
+    public float dashCdRemain(int wizardId) {
+        if (wizardId < 0 || wizardId >= MAX || !alive[wizardId] || kind[wizardId] != KIND_WIZARD) {
+            return 0f;
+        }
+        Loadout lo = loadout[wizardId];
+        if (lo == null) {
+            return 0f;
+        }
+        if (lo.classKind == HeroClass.WARRIOR) {
+            return Math.max(0f, dashCd[wizardId]);
+        }
+        if (lo.classKind == HeroClass.ARCHER && dashCharges[wizardId] < Balance.ARCHER_DASH_MAX) {
+            return Math.max(0f, dashCd[wizardId]);
+        }
+        return 0f;
+    }
+
+    /** 冲刺冷却总时长（秒）。战士 / 弓箭手各取 Balance 常量；非冲刺职业返回 0 */
+    public float dashCdTotal(int wizardId) {
+        if (wizardId < 0 || wizardId >= MAX || !alive[wizardId] || kind[wizardId] != KIND_WIZARD) {
+            return 0f;
+        }
+        Loadout lo = loadout[wizardId];
+        if (lo == null) {
+            return 0f;
+        }
+        return switch (lo.classKind) {
+            case HeroClass.WARRIOR -> Balance.WARRIOR_DASH_CD;
+            case HeroClass.ARCHER -> Balance.ARCHER_DASH_CD;
+            default -> 0f;
+        };
     }
 
     /** 当前 Boss 档位（BOSS_NAMES 下标），没有 Boss 时返回 -1 */

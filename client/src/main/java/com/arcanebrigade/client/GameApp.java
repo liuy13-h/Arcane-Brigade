@@ -38,6 +38,11 @@ public final class GameApp extends Application {
     /** 位移键（空格）的边沿触发标记：按下当帧置位，readInput 消费后清除，避免按住连续冲 */
     private boolean dashQueued = false;
 
+    /** ab.fireball 调试探针状态：逐秒统计魔弹/火球在场弹数，验证平A是否停摆 */
+    private boolean fireballProbe;
+    private double probeT;
+    private int probeMissile, probeFireball;
+
     /** 战斗生命周期与固定步长只由这个边界对象管理。 */
     private BattleSession battle;
     private TaskSystem tasks;
@@ -470,6 +475,15 @@ public final class GameApp extends Application {
                     battle.spawnBossForSmoke(tier);
                 }
             }
+            // -Dab.fireball=1 调试钩子：直接给法师装上火球（灼烧），并逐窗口统计两类弹的开火情况。
+            // 用于回归“装了火球后魔弹（平A）停止”的 bug：stdout 每秒打印一行 [fireball-probe]。
+            if (System.getProperty("ab.fireball") != null) {
+                com.arcanebrigade.core.Loadout flo = fightWorld.loadout(fightWorld.firstWizard());
+                if (flo != null) {
+                    flo.add(com.arcanebrigade.core.Spells.FIREBALL);
+                }
+                fireballProbe = true;
+            }
             // -Dab.level=N 直接把主控玩家等级拉到 N，用于覆盖骨蛇登场后的渲染路径
             String lvl = System.getProperty("ab.level");
             if (lvl != null && !lvl.isBlank()) {
@@ -598,6 +612,10 @@ public final class GameApp extends Application {
                     hallT0 = 0.0;
                     GameAudio.stopBattleBgm();
                     GameAudio.stopBossBgm();
+                    // 奶蛙可能在大笑施法途中被击杀：剧情期间战斗循环被冻结，
+                    // 这里必须显式停掉笑声，否则音效会漏进后面的王宫决战。
+                    GameAudio.stopLaugh();
+                    lastMilkyCast = 0;
                     pressed.clear();
                     mouseDown = false;
                 }
@@ -753,6 +771,10 @@ public final class GameApp extends Application {
                         GameAudio.startBossBgm();
                     } else {
                         GameAudio.stopBossBgm();
+                        // 奶蛙消失（被击杀/清场）的同一帧停掉笑声并复位施法记忆，
+                        // 防止「死亡瞬间笑声在播、之后 milkyCast 状态再也无法触发 stopLaugh」的漏音。
+                        GameAudio.stopLaugh();
+                        lastMilkyCast = 0;
                     }
                 }
                 // 奶蛙技能二「捧腹大笑」：起手瞬间从头播放，施法结束立即停止
@@ -780,6 +802,8 @@ public final class GameApp extends Application {
                         victoryStoryT = 0.0;
                         GameAudio.stopBattleBgm();   // 通关：不再循环战斗曲
                         GameAudio.stopBossBgm();     // 奶蛙专属 BGM 暂停
+                        GameAudio.stopLaugh();       // 兜底：任何残留的奶蛙音效一并停掉
+                        lastMilkyCast = 0;
                     }
                     finishRun(world);
                     renderer.setFps(fps[0]);
@@ -825,9 +849,14 @@ public final class GameApp extends Application {
                 }
 
                 boolean upgradePaused = battle.hasPendingUpgrade();
+                // -Dab.dashSpam=1 冒烟钩子：每 90 帧触发一次冲刺，覆盖冷却 HUD 渲染路径
+                if (System.getProperty("ab.dashSpam") != null && renderedFrames % 90 == 40) {
+                    dashQueued = true;
+                }
                 readInput();
                 float alpha = battle.advance(dt, input);
                 syncTaskKills(world);
+                probeFireball(world, dt);
 
                 if (!drawNow) {
                     return;
@@ -1159,6 +1188,7 @@ public final class GameApp extends Application {
         victoryHandled = false;   // 新一局：胜利字幕状态复位，通关时重新播放
         victoryStoryDone = false;
         victoryStoryT = 0.0;
+        lastMilkyCast = 0;        // 新一局：奶蛙施法记忆复位，别把上一局的笑声状态带进来
         closeDetail();           // 进战斗前也清一次（防御性）
         GameAudio.stopMenuBgm();  // 出征 / 战斗冒烟都离开主界面
         GameAudio.stopLobbyBgm(); // 出大厅，交棒给战斗 BGM
@@ -1303,6 +1333,38 @@ public final class GameApp extends Application {
                 battle.chooseUpgrade(i);
                 return;
             }
+        }
+    }
+
+    /** ab.fireball=1 时的逐秒探针：统计场上玩家投射物里魔弹/火球的出现数，验证平A是否停摆 */
+    private void probeFireball(World world, double dt) {
+        if (!fireballProbe) {
+            return;
+        }
+        probeT += dt;
+        for (int i = 0; i < world.highWater(); i++) {
+            if (!world.alive[i] || world.kind[i] != World.KIND_PROJECTILE
+                    || world.team[i] != World.TEAM_PLAYER) {
+                continue;
+            }
+            if (world.meta[i] == com.arcanebrigade.core.Spells.MAGIC_MISSILE) {
+                probeMissile++;
+            } else if (world.meta[i] == com.arcanebrigade.core.Spells.FIREBALL) {
+                probeFireball++;
+            }
+        }
+        if (probeT >= 1.0) {
+            Loadout plo = battle.playerLoadout();
+            System.out.printf("[fireball-probe] 本秒: 魔弹=%d 火球=%d 敌人=%d cd=[%.2f %.2f %.2f]"
+                            + " 自动开火=%s 暂停=%s HP=%.0f/%.0f%n",
+                    probeMissile, probeFireball, world.enemyCount(),
+                    plo != null ? plo.cd[0] : -1f, plo != null ? plo.cd[1] : -1f,
+                    plo != null ? plo.cd[2] : -1f,
+                    world.isAutoFire(), battle.isPaused(),
+                    world.hp[world.wizard(0)], world.maxHp[world.wizard(0)]);
+            probeT = 0;
+            probeMissile = 0;
+            probeFireball = 0;
         }
     }
 
