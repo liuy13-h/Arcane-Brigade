@@ -32,6 +32,7 @@ public final class Sprites {
     /**
      * 按索引的形象。
      * 0 = 国王（大厅初始操控对象）；1..4 = 法师 / 战士 / 弓箭手 / 召唤师（HeroClass）。
+     * 0 = 国王（大厅初始操控对象）；1..4 = 巫师 / 战士 / 弓箭手 / 召唤师（HeroClass）。
      * 职业形象统一走「裁透明边 + ×2 最近邻放大」，渲染时 1:1 绘制即是清晰像素风。
      */
     public static Image[] heroes = new Image[5];
@@ -51,6 +52,7 @@ public final class Sprites {
     /**
      * 各职业的细节立绘（选人大厅右侧滑出的大图）。
      * 下标 = 职业 id（1..4 = 法师 / 战士 / 弓箭手 / 召唤师）。
+     * 下标 = 职业 id（1..4 = 巫师 / 战士 / 弓箭手 / 召唤师）。
      * 这是美术给的大尺寸全身立绘，与上方 32px 行走小立绘 heroes[] 相互独立。
      */
     public static Image[] heroPortraits = new Image[5];
@@ -187,12 +189,13 @@ public final class Sprites {
         // 大厅背景与标题画面：从仓库根 image/ 读现成美术
         lobbyBg = loadArt("皇宫王座大厅背景.jpg");
         titleScreen = loadArt("title_final_v6_covered_2x.png");
-        battleMaps[0] = loadBattleMap("desert-ruins.png");
+        battleMaps[0] = loadBattleMap("desert-ruins.png");   // main 仅保留荒漠遗迹一张战场
         // 细节立绘（右侧角色卡大图），按下标对齐职业。
         // 美术给的多是带纯色底（黑/白）的整幅图，叠到王座厅上会出现一块黑底/白底，
         // 这里把环绕角色、与图边相连的背景色抠成透明（见 knockoutBackground）。
         heroPortraits[HeroClass.WARRIOR] = knockoutBackground(loadArt("Edit_this_pixel_art_character__2026-09-09T01-59-50.png")); // 战士
         heroPortraits[HeroClass.WIZARD]  = knockoutBackground(loadArt("Edit_this_pixel_art_character__2026-09-09T02-00-45.png")); // 法师
+        heroPortraits[HeroClass.WIZARD]  = knockoutBackground(loadArt("Edit_this_pixel_art_character__2026-09-09T02-00-45.png")); // 巫师
         heroPortraits[HeroClass.ARCHER]  = knockoutBackground(loadArt("弓箭手角色-尖角额甲版.jpg"));                                // 弓箭手
         heroPortraits[HeroClass.SUMMONER] = knockoutBackground(loadArt("summoner_transparent.png"));                               // 召唤师
 
@@ -490,20 +493,21 @@ public final class Sprites {
      */
     private static File artFile(String fileName) {
         String[] dirNames = { "image", "image1" };
+        File dir = null;
         for (File d = new File(System.getProperty("user.dir")); d != null; d = d.getParentFile()) {
             for (String dirName : dirNames) {
-                File dir = new File(d, dirName);
-                if (!dir.isDirectory()) {
+                File candDir = new File(d, dirName);
+                if (!candDir.isDirectory()) {
                     continue;
                 }
-                File f = new File(dir, fileName);
+                File f = new File(candDir, fileName);
                 if (f.isFile()) {
                     return f;
                 }
             }
         }
-        File f = new File(fileName);
-        return f.isFile() ? f : null;
+        File fallback = new File(fileName);
+        return fallback.isFile() ? fallback : null;
     }
 
     /**

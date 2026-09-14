@@ -1038,6 +1038,60 @@ public final class Renderer {
                         double oy = Math.sin(ang) * 15 - 12;
                         gc.drawImage(wpn, sx + ox - ww / 2, sy + oy - wh / 2, ww, wh);
                     }
+                    // 蓄力重击反馈：脚下画一圈随蓄力进度收拢的橙金环，蓄满时高亮
+                    if (ck == HeroClass.WARRIOR && w.warriorCharging()) {
+                        float cp = Math.min(1f, w.warriorChargeProgress());
+                        double cy2 = sy - 6;
+                        double pr = 26 - 8 * cp;                 // 越蓄越收拢
+                        double ratio = 0.35 + 0.65 * cp;         // 环的填充度随进度增长
+                        gc.setLineWidth(2.5 + 1.5 * cp);
+                        gc.setStroke(Color.color(0.55 + 0.45 * cp, 0.30 + 0.25 * cp, 0.05, 0.35 + 0.55 * cp));
+                        gc.strokeArc(sx - pr, cy2 - pr, pr * 2, pr * 2,
+                                -90, -360 * ratio, javafx.scene.shape.ArcType.OPEN);
+                        if (cp >= 0.999f) {
+                            // 蓄满：外圈再补一道亮金提醒可以放了
+                            gc.setStroke(Color.rgb(255, 236, 170, 0.85));
+                            gc.setLineWidth(2.0);
+                            gc.strokeOval(sx - pr - 3, cy2 - pr - 3, (pr + 3) * 2, (pr + 3) * 2);
+                        }
+                    }
+                    // 弓箭手冲刺充能 HUD：角色头顶三个小格，每格一颗。
+                    //   - 就绪：实心绿色
+                    //   - 缺弹药：空心，按"下一发的充能进度"从底部填蓝
+                    if (ck == HeroClass.ARCHER) {
+                        int charges = w.dashChargesOf(i);
+                        int max = Balance.ARCHER_DASH_MAX;
+                        double box = 8.0;             // 单格边长
+                        double gap = 3.0;
+                        double totalW = max * box + (max - 1) * gap;
+                        double ox0 = sx - totalW / 2;
+                        double oy0 = sy - rr - 18;    // 头顶上方
+                        float fillFrac = w.dashCdFraction(i);   // 0..1（充能中）
+                        for (int n = 0; n < max; n++) {
+                            double ox = ox0 + n * (box + gap);
+                            double oy = oy0;
+                            boolean ready = (n < charges);
+                            if (ready) {
+                                // 已就绪：实心绿，描边深绿
+                                gc.setFill(Color.rgb(150, 230, 130, 0.95));
+                                gc.fillRect(ox, oy, box, box);
+                                gc.setStroke(Color.rgb(60, 110, 50, 0.9));
+                                gc.setLineWidth(1.2);
+                                gc.strokeRect(ox, oy, box, box);
+                            } else {
+                                // 缺弹药：空心深色底
+                                gc.setFill(Color.rgb(28, 28, 36, 0.85));
+                                gc.fillRect(ox, oy, box, box);
+                                gc.setStroke(Color.rgb(70, 90, 80, 0.9));
+                                gc.setLineWidth(1.2);
+                                gc.strokeRect(ox, oy, box, box);
+                                // 从底部向上填蓝（用 fillFrac 表示该格对应的充能进度）
+                                double fill = box * fillFrac;
+                                gc.setFill(Color.rgb(110, 200, 255, 0.85));
+                                gc.fillRect(ox, oy + (box - fill), box, fill);
+                            }
+                        }
+                    }
                 }
                 case World.KIND_ENEMY -> {
                     if (i == w.kingId()) {
@@ -1093,6 +1147,30 @@ public final class Renderer {
                     gc.fillRect(sx - 11, sy - rr - 8, 22 * mf, 2);
                 }
                 case World.KIND_PROJECTILE -> {
+                    // 飞龙火球：橙红实心球 + 火焰拖尾；用方块旋转/位移做出"飞"的视觉
+                    if (w.meta[i] == -2) {
+                        double pulse = 0.85 + 0.15 * Math.sin(System.nanoTime() * 2e-8);
+                        // 外焰（橙黄半透明）
+                        gc.setFill(Color.rgb(255, 200, 60, 0.55 * pulse));
+                        gc.fillOval(sx - 11, sy - 11, 22, 22);
+                        // 内焰（橙红实心）
+                        gc.setFill(Color.rgb(255, 110, 30, 0.95));
+                        gc.fillOval(sx - 6, sy - 6, 12, 12);
+                        // 飞行方向尾迹：往速度反方向画 3 个递弱的圆
+                        double vlen = Math.hypot(w.vx[i], w.vy[i]);
+                        if (vlen > 0.01) {
+                            double ux = -w.vx[i] / vlen;
+                            double uy = -w.vy[i] / vlen;
+                            for (int k = 1; k <= 3; k++) {
+                                double px = sx + ux * (8 + k * 4);
+                                double py = sy + uy * (8 + k * 4);
+                                gc.setFill(Color.rgb(255, 140, 40, 0.45 / k));
+                                gc.fillOval(px - (5 - k), py - (5 - k),
+                                        (5 - k) * 2, (5 - k) * 2);
+                            }
+                        }
+                        break;
+                    }
                     // 敌人弹幕用统一的"敌意红"，玩家弹幕按元素上色——两者不能混成一种颜色，
                     // 否则弹幕海里根本分不清哪颗是要躲的、哪颗是自己打的。
                     Image img = (w.team[i] == World.TEAM_ENEMY)
@@ -2035,6 +2113,16 @@ public final class Renderer {
                 gc.fillPolygon(new double[] { px - bb * 0.22, px, px + bb * 0.22 },
                         new double[] { py - 2, py - bb * 1.1, py - 2 }, 3);
             }
+            return;
+        }
+        if (sub == World.ZONE_DRAGON_BURN) {
+            // 飞龙灼烧带：橙红实心 + 火焰描边；用 t 做淡入淡出
+            double pulse = 0.85 + 0.15 * Math.sin(System.nanoTime() * 1.5e-8);
+            gc.setFill(Color.rgb(255, 110, 40, 0.42 * t));
+            gc.fillOval(sx - w.r[i], sy - w.r[i], w.r[i] * 2, w.r[i] * 2);
+            gc.setStroke(Color.rgb(255, 180, 60, 0.85 * t * pulse));
+            gc.setLineWidth(2);
+            gc.strokeOval(sx - w.r[i], sy - w.r[i], w.r[i] * 2, w.r[i] * 2);
             return;
         }
         // 其他区域：元素色的填充
