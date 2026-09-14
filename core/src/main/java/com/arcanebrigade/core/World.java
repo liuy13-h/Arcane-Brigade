@@ -1576,7 +1576,9 @@ public final class World {
             // 主动位移（冲刺）：空格触发，朝鼠标方向飞速位移一小段（弓箭手 & 战士）
             handleDash(in, id, ck);
 
-            float baseSpeed = HeroClass.baseSpeed(ck) * arenaMap.movementMultiplierAt(x[id], y[id]);
+            // 基础移速：职业速度 - 二阶段惩罚（王座转场 -20，见 beginKingPhase2）；40 保底后乘地图移速系数
+            float baseSpeed = Math.max(40f, HeroClass.baseSpeed(ck) - kingSpeedPenalty)
+                    * arenaMap.movementMultiplierAt(x[id], y[id]);
             x[id] += in.dx * baseSpeed * moveMul * dt;
             y[id] += in.dy * baseSpeed * moveMul * dt;
             // 位移期间的额外冲量（叠加在普通移动之上）
