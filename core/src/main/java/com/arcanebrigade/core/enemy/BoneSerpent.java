@@ -27,6 +27,11 @@ public final class BoneSerpent {
 
     private BoneSerpent() {}
 
+    /** 骨蛇单条总段数（含头尾）。整条蛇在 World 里占 SEGMENT_COUNT 个敌人槽 */
+    public static final int SEGMENT_COUNT = EnemyStats.SERPENT_SEGMENTS;
+    /** 蛇身每段记录最近 HIST 帧的位置，用于身体跟随插值。数字越大蛇身越柔顺 */
+    public static final int HIST = 12;
+
     /**
      * 推进整条骨蛇。**只由头节点调用**（EnemyAI 认 serpent[i] == i），
      * 一次调用处理全身：头飞行 → 身体跟随 → 接触伤害。
