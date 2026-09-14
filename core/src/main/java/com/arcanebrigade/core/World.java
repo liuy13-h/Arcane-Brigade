@@ -875,13 +875,10 @@ public final class World {
                 return true;
             }
         }
-        ArenaMap.ExpeditionNode node = arenaMap.nodeAt(originX, originY);
-        if (node == null) {
-            return false;
-        }
-        float sign = rng.nextBoolean() ? 1f : -1f;
-        routeSpawnX = node.x() + sign * Math.max(0f, node.halfWidth() - radius - 28f);
-        routeSpawnY = node.y() + (rng.nextFloat() - 0.5f) * Math.max(0f, node.halfHeight() - radius) * 0.8f;
+        // 兜底：可走区已是城墙内侧整片连续区域，直接在原点沿随机方向取一点并钳制到边界内。
+        float ang = rng.nextFloat() * (float) (Math.PI * 2);
+        routeSpawnX = clampX(originX + (float) Math.cos(ang) * desiredDistance);
+        routeSpawnY = clampY(originY + (float) Math.sin(ang) * desiredDistance);
         return arenaMap.isWalkable(routeSpawnX, routeSpawnY, radius);
     }
 
@@ -2190,11 +2187,11 @@ public final class World {
 
     /** 连续战区的世界安全兜底；正常生成由 pickRouteSpawn 保证落在可走路线内。 */
     private float clampX(float v) {
-        return Math.max(-arenaMap.halfWidth(), Math.min(arenaMap.halfWidth(), v));
+        return Math.max(-Balance.PLAY_HALF, Math.min(Balance.PLAY_HALF, v));
     }
 
     private float clampY(float v) {
-        return Math.max(-arenaMap.halfHeight(), Math.min(arenaMap.halfHeight(), v));
+        return Math.max(-Balance.PLAY_HALF, Math.min(Balance.PLAY_HALF, v));
     }
 
     /** 最近的经验宝石（小偷用） */

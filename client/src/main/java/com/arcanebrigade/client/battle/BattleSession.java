@@ -38,6 +38,7 @@ public final class BattleSession {
 
     /** 以指定职业创建本局玩家。 */
     public void start(int heroClass) {
+        manualPaused = false;   // 新一局战斗永远从非暂停开始，避免「返回大厅」后残留暂停态
         if (world.wizardCount() == 0) {
             world.spawnWizard(0f, 0f, heroClass);
         }

@@ -198,15 +198,22 @@ public enum ArenaMap {
     public ExpeditionNode expeditionNode(int index) { return expeditionNodes[index]; }
     public int routeSectionCount() { return routeSections.length; }
     public RouteSection routeSection(int index) { return routeSections[index]; }
-    /** 路线以“节点 + 连接段”的并集定义；自然地形而非一张矩形地图决定可走区域。 */
+    /**
+     * 可走区域 = 棕色城墙内侧的整片连续战区（方形边界 PLAY_HALF），仅被 SOLID 障碍挡住。
+     * 这样玩家在地图内可自由移动，不会在节点 / 路线缝隙撞到看不见的空气墙；
+     * 边界由城墙（WALL_THICKNESS）收口，玩家 / 敌人 / 刷怪点都被钳制在内侧（见 World.clampToWorld）。
+     */
     public boolean isWalkable(float x, float y, float radius) {
-        for (ExpeditionNode node : expeditionNodes) {
-            if (node.contains(x, y, radius)) return true;
+        float bound = Balance.PLAY_HALF;
+        if (Math.abs(x) > bound - radius || Math.abs(y) > bound - radius) {
+            return false;                       // 越过城墙内侧：不可走（即地图边界）
         }
-        for (RouteSection section : routeSections) {
-            if (section.contains(x, y, radius)) return true;
+        for (Obstacle o : obstacles) {
+            if (o.blocksMovement() && o.overlapsCircle(x, y, radius)) {
+                return false;                   // 撞到实体岩石：不可走
+            }
         }
-        return false;
+        return true;
     }
     public ExpeditionNode nodeAt(float x, float y) {
         for (ExpeditionNode node : expeditionNodes) {
@@ -233,9 +240,9 @@ public enum ArenaMap {
      */
     private static final float ASSET_WORLD_SCALE = 1672f / 1280f;
 
-    /** 仅作安全兜底的世界范围；实际移动由 isWalkable 的蛇形路线限制。 */
-    public float halfWidth() { return 4_500f; }
-    public float halfHeight() { return 2_600f; }
+    /** 相机 / 世界外缘半宽：与 Balance.WORLD_HALF 一致（方形）。玩家被钳制在城墙内侧 PLAY_HALF。 */
+    public float halfWidth() { return Balance.WORLD_HALF; }
+    public float halfHeight() { return Balance.WORLD_HALF; }
 
     // 每套数据都从原始地图核心区起步，但转向节奏与节点功能刻意不同，避免三张图只是换皮。
     private static ExpeditionNode[] desertNodes() {

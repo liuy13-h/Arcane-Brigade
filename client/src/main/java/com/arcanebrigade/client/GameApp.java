@@ -944,12 +944,26 @@ public final class GameApp extends Application {
             return;                      // 胜利画面只认 R 键
         }
 
-        // 2) HUD 按钮：开火模式切换（自动 / 手动）
+        // 2) 手动暂停：暂停罩层的「继续战斗」/「返回大厅」按钮（此前只画不响应）
+        if (battle.isManualPaused()) {
+            if (hit(Renderer.pauseResumeRect(vw, vh), mx, my)) {
+                battle.toggleManualPause();
+                return;
+            }
+            if (hit(Renderer.pauseQuitRect(vw, vh), mx, my)) {
+                if (battle.isManualPaused()) battle.toggleManualPause();  // 离开前解除暂停
+                restart();
+                return;
+            }
+            return;   // 暂停时忽略其它点击（HUD 开火等），避免误触
+        }
+
+        // 3) HUD 按钮：开火模式切换（自动 / 手动）
         if (hit(Renderer.fireButtonRect(vw, vh), mx, my)) {
             world.setAutoFire(!world.isAutoFire());
             return;
         }
-        // 3) HUD 按钮：暂停 / 继续
+        // 4) HUD 按钮：暂停 / 继续（顶部 HUD 暂停按钮也可暂停 / 继续）
         if (hit(Renderer.pauseButtonRect(vw, vh), mx, my)) {
             battle.toggleManualPause();
             return;

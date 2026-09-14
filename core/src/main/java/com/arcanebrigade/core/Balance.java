@@ -370,8 +370,10 @@ public final class Balance {
 
     // ---- 世界 ----
     public static final float FIXED_STEP     = 1f / 60f;
-    /** 世界边界半宽：地图是 [-WORLD_HALF, +WORLD_HALF] 的方形区域 */
-    public static final float WORLD_HALF     = 1600f;
+    /** 世界边界半宽：地图是 [-WORLD_HALF, +WORLD_HALF] 的方形区域。
+     *  必须大到足以容纳全部地图内容（Boss 节点延伸到 x≈4350），否则城墙边界会落在
+     *  可玩区之内、玩家能走出墙外踩进虚空，并在节点边缘撞到看不见的空气墙。 */
+    public static final float WORLD_HALF     = 4800f;
     /** 棕色城墙厚度：城墙（棕色部分）作为地图边界，其内侧边缘才是可走区域 */
     public static final float WALL_THICKNESS = 56f;
     /** 可玩区半宽 = 城墙内侧边缘。玩家/敌人/刷怪点都钳制在此，碰不到棕色城墙 */
