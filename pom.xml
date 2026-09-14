@@ -17,11 +17,11 @@
   </modules>
 
   <properties>
-    <!-- 编译基线定为 17：生成的 class 版本是 61，与 JavaFX 21.0.12 的 -win 平台 jar
+    <!-- 编译基线定为 17：生成的 class 版本是 61，与 JavaFX 21.0.6 的 -win 平台 jar
          (class 61) 一致，凡是装有 JDK 17 及以上(含 21/26)的机器都能直接跑。 -->
     <maven.compiler.release>17</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <javafx.version>21.0.12</javafx.version>
+    <javafx.version>21.0.6</javafx.version>
     <!--
       平台分类器：javafx 的无后缀主 jar 在中央仓库里是空壳，
       真正的类在 -win / -mac / -linux 分类器 jar 里。
@@ -63,6 +63,21 @@
   <build>
     <pluginManagement>
       <plugins>
+        <!--
+          编译器插件必须锁定到 3.6+ 才会读取 maven.compiler.release；
+          Maven 默认的 3.1 只认 source/target（且默认 1.5），在 JDK 9+ 上会直接报
+          “不支持源选项 5 / 请使用 7 或更高版本”。这里锁 3.13.0 并显式使用
+          maven.compiler.release（当前 17，兼容 JDK 17~26+）。
+        -->
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <version>3.13.0</version>
+          <configuration>
+            <release>${maven.compiler.release}</release>
+            <encoding>${project.build.sourceEncoding}</encoding>
+          </configuration>
+        </plugin>
         <!--
           插件配置放在 pluginManagement 里统一管理：mainClass 在这里声明一次，
           client 模块直接继承即可运行。

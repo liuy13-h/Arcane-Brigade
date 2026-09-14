@@ -1,11 +1,11 @@
 package com.arcanebrigade.client;
 
-import com.arcanebrigade.core.Balance;
 import com.arcanebrigade.core.HeroClass;
 import com.arcanebrigade.core.InputCommand;
 import com.arcanebrigade.core.Loadout;
 import com.arcanebrigade.core.Upgrades;
 import com.arcanebrigade.core.World;
+import com.arcanebrigade.client.battle.BattleSession;
 import javafx.animation.AnimationTimer;
 import javafx.application.Application;
 import javafx.application.Platform;
@@ -29,16 +29,15 @@ import java.util.Set;
  */
 public final class GameApp extends Application {
 
-    private static final double STEP = Balance.FIXED_STEP;
-    /** 单帧最多补几步逻辑，防止卡顿后出现"死亡螺旋" */
-    private static final int MAX_STEPS = 5;
     /** 大厅里化身移动速度(px/s) */
     private static final double LOBBY_SPEED = 300.0;
 
     private final Set<KeyCode> pressed = EnumSet.noneOf(KeyCode.class);
     private final InputCommand input = new InputCommand();
 
-    private World world;
+    /** 战斗生命周期与固定步长只由这个边界对象管理。 */
+    private BattleSession battle;
+    private TaskSystem tasks;
     private Renderer renderer;
     private Stage stage;
 
@@ -73,6 +72,8 @@ public final class GameApp extends Application {
     private boolean lobbyPosInit;
     /** 大厅里已选职业：0=未选，否则是 LobbyClass.CLASSES 之一（含召唤师 4） */
     private int lobbyChoice = 0;
+    /** 大厅化身朝向：true=朝左（向左移动时），false=朝右。静止时沿用上一帧方向 */
+    private boolean lobbyFacingLeft = false;
     private double lobbyAnimT;
     /** 右侧细节立绘当前展示的职业：0=不展示。跟随「正站在谁面前」变化 */
     private int cardClass;
@@ -80,18 +81,71 @@ public final class GameApp extends Application {
     private double cardReveal;
     /** 大厅左上角操作指引是否展开（可点「✕」收起，点「❖ 操作指引 ▸」展开） */
     private boolean lobbyGuide = true;
-    /** 冒烟调试：截图输出路径（-Dab.snapshot=path，画完当帧存一次） */
-    private String snapshotPath;
-    private boolean snapshotSaved;
+    /** 左侧任务栏：任务分类与展开状态。 */
+    private boolean lobbyTasksOpen;
+    private TaskSystem.Category lobbyTaskCategory = TaskSystem.Category.DAILY;
+    /** 入局时冻结模拟并展示任务简报五秒。 */
+    private double taskBriefSeconds;
+    private int observedKills;
+    private boolean runCompletionRecorded;
 
     /** 鼠标左键是否按住（战斗阶段用于宠物指挥 + 手动开火） */
     private boolean mouseDown;
+    /** 「角色背景」滚动框偏移（px，上为正；换人时归零） */
+    private double loreScroll;
+    /** 「查看详情」弹层当前职业 id；0 = 未打开 */
+    private int detailClass;
+    /** 弹层正文滚动偏移（px） */
+    private double detailScroll;
+    /** 弹层淡入进度 0..1 */
+    private double detailFade;
+    /** 冒烟调试：截图输出路径（-Dab.snapshot=path，画完当帧存一次） */
+    private String snapshotPath;
+    private boolean snapshotSaved;
+    /** 冒烟调试：主菜单截图（-Dab.titleSnapshot=path），画完一次即退出 */
+    private String titleSnapshotPath;
+    /** 冒烟调试：强制主菜单悬停项（-Dab.titleHover=0..3，-1 表示不强制） */
+    private int titleHoverOverride = -1;
+
     /** ESC 手动暂停（战斗阶段） */
     private boolean manualPause;
+    /** 胜利流程状态机：是否已处理本局胜利（字幕只播一次） */
+    private boolean victoryHandled;
+    /** 通关剧情字幕是否已播完（之后才显示胜利结算） */
+    private boolean victoryStoryDone;
+    /** 字幕已播放秒数（真实时间累计） */
+    private double victoryStoryT;
+    /** 字幕最长时间（秒），到时自动进入胜利结算 */
+    private static final double VICTORY_STORY_DURATION = 9.0;
     /** 奶蛙 BGM 是否正在播放（用于检测奶蛙出场/消失的瞬间起停音乐） */
     private boolean bossMusicOn;
     /** 上一帧的奶蛙施法状态，用于捕捉「大笑起手」瞬间播音效 */
     private int lastMilkyCast;
+
+    /**
+     * 前置剧情 CG 状态：0=无剧情；1=奶娃遗言（击败奶娃后强制触发）。
+     * CG 期间锁操作、全程自动，World 不再推进（冻结战场），队伍与 Loadout 原样保留。
+     */
+    private int storyMode;
+    /** 当前正在播放的剧情脚本（galgame 式台词序列，见 Cutscene） */
+    private Cutscene cutscene;
+    /** 本段剧情已播放秒数（真实时间，冒烟截图时机与后续演出节拍共用） */
+    private double storyT;
+    /** 进入王宫大殿的时刻（storyT 时间轴），大殿演出的相对计时基准 */
+    private double hallT0;
+    /** 冒烟：CG2 旁白帧是否已截图（只截一次） */
+    private boolean cg2ShotDone;
+    /** 冒烟：决战场景截图是否已完成（-Dab.king 直进后截一帧，只截一次） */
+    private boolean arenaShotDone;
+    /** 冒烟：决战期内累计的渲染帧数（预警圈截图的时机基准） */
+    private int arenaShotFrames;
+    /** 冒烟：序列快照间隔毫秒（-Dab.snapSeqMs=N，配合 -Dab.snapshot 基名；0=关闭） */
+    private long snapSeqMs;
+    /** 冒烟：序列快照上限帧数（-Dab.snapSeqMax=M，默认 40） */
+    private int snapSeqMax = 40;
+    /** 冒烟：序列快照已存帧数与上一帧时刻 */
+    private int snapSeqCount;
+    private long snapSeqLast;
 
     @Override
     public void start(Stage stage) {
@@ -119,10 +173,18 @@ public final class GameApp extends Application {
         GameConfig.load();   // 音量 / 显示玩家 ID / 显示模式 / 分辨率 / 帧率（含首次生成玩家 ID）
         Sprites.load();
 
-        world = new World(20260907L);
-        if (System.getProperty("ab.noSpawn") != null) {
-            world.setSpawningEnabled(false);   // 调试：不刷小怪，只留 Boss
+        // 冒烟用：ab.titleSnapshot=路径 存一张主菜单 PNG；ab.titleHover=N 强制某个按钮高亮
+        String titleShot = System.getProperty("ab.titleSnapshot");
+        if (titleShot != null && !titleShot.isBlank()) {
+            titleSnapshotPath = titleShot;
         }
+        String titleHover = System.getProperty("ab.titleHover");
+        if (titleHover != null && !titleHover.isBlank()) {
+            titleHoverOverride = Integer.parseInt(titleHover.trim());
+        }
+
+        battle = new BattleSession(20260907L);
+        tasks = new TaskSystem();
 
         Canvas canvas = new Canvas(1280, 720);
         Pane root = new Pane(canvas);
@@ -151,22 +213,33 @@ public final class GameApp extends Application {
                 }
                 return;
             }
-            pressed.add(e.getCode());
-            // 战斗阶段：ESC 手动暂停；R 键在胜利/阵亡/退出结算后重开，在升级面板弹出时重抽
-            if (e.getCode() == KeyCode.ESCAPE) {
-                if (!world.victory() && !world.defeat() && !world.abandoned()) {
-                    manualPause = !manualPause;
+                // 前置剧情 CG：锁定玩家操作（空格推进对话/旁白；回大殿后空格开战；R 重开验收）。
+                // storyMode 4 = 国王决裂对白（一阶段击破后）、5 = 「王座本体」过渡（二阶段击破后）；
+                // storyMode==3 是决战本体，不在这里拦截。
+                if (storyMode == 1 || storyMode == 2 || storyMode == 4 || storyMode == 5) {
+                    if (e.getCode() == KeyCode.R
+                            && (storyMode == 2 || (cutscene != null && cutscene.done()))) {
+                        restart();
+                    } else if ((storyMode == 1 || storyMode == 4 || storyMode == 5) && e.getCode() == KeyCode.SPACE
+                            && cutscene != null) {
+                        cutscene.pressAdvance();   // 空格：打字中补全当前句，已打完翻下一句
+                    } else if (storyMode == 2 && e.getCode() == KeyCode.SPACE) {
+                        startKingDuel();           // 王宫大殿：空格 → 清场进入国王决战
+                    }
+                    return;
                 }
+                pressed.add(e.getCode());
+            // 战斗阶段：ESC 手动暂停；R 键在胜利/阵亡后重开，在升级面板弹出时重抽
+            if (e.getCode() == KeyCode.ESCAPE) {
+                battle.toggleManualPause();
                 return;
             }
             if (e.getCode() == KeyCode.R) {
-                if (world.victory() || world.defeat() || world.abandoned()) {
+                if (battle.world().victory() || battle.world().defeat()) {
                     restart();
                     return;
                 }
-                if (world.wizardCount() > 0 && world.pendingChoices(world.wizard(0)) > 0) {
-                    world.rerollChoices(world.wizard(0));
-                }
+                battle.rerollUpgradeChoices();
             }
         });
         scene.setOnKeyReleased(e -> pressed.remove(e.getCode()));
@@ -237,8 +310,31 @@ public final class GameApp extends Application {
                 return;
             }
             if (inLobby) {
+                // 大厅任务栏优先响应；职业交互仍走空格/E。
                 double vw = renderer.getCanvasWidth();
                 double vh = renderer.getCanvasHeight();
+                TaskSystem.TaskView[] views = tasks.tasks(lobbyTaskCategory);
+                Renderer.TaskGeom tg = Renderer.lobbyTaskGeom(vw, vh, views.length);
+                if (tg.toggle().hit(e.getX(), e.getY())) {
+                    lobbyTasksOpen = !lobbyTasksOpen;
+                    return;
+                }
+                if (lobbyTasksOpen) {
+                    if (tg.dailyTab().hit(e.getX(), e.getY())) {
+                        lobbyTaskCategory = TaskSystem.Category.DAILY;
+                        return;
+                    }
+                    if (tg.weeklyTab().hit(e.getX(), e.getY())) {
+                        lobbyTaskCategory = TaskSystem.Category.WEEKLY;
+                        return;
+                    }
+                    for (int i = 0; i < views.length; i++) {
+                        if (views[i].claimable() && tg.claims()[i].hit(e.getX(), e.getY())) {
+                            tasks.claim(views[i].id());
+                            return;
+                        }
+                    }
+                }
                 // 「查看详情」弹层打开：点 ✕ 或面板外 = 关闭；点在面板内不响应
                 if (detailClass != 0) {
                     double[] p = Renderer.detailPanelRect(vw, vh);
@@ -318,12 +414,24 @@ public final class GameApp extends Application {
         if (lobbyShot != null && !lobbyShot.isBlank()) {
             snapshotPath = lobbyShot;
         }
+        // 冒烟用：ab.snapSeqMs=N 开启序列快照（战斗/剧情每 N 毫秒存一帧「基名-01.png…」），
+        // ab.snapSeqMax=M 限制帧数（默认 40）。画面由画布自存，不依赖窗口焦点。
+        String snapMs = System.getProperty("ab.snapSeqMs");
+        if (snapMs != null && !snapMs.isBlank()) {
+            snapSeqMs = Long.parseLong(snapMs.trim());
+        }
+        String snapMax = System.getProperty("ab.snapSeqMax");
+        if (snapMax != null && !snapMax.isBlank()) {
+            snapSeqMax = Integer.parseInt(snapMax.trim());
+        }
 
         // 战斗冒烟：跳过大厅，自动选职业直接跑真实模拟+渲染路径做稳定性验证。
         // -Dab.class=N 可指定职业（默认巫师），用来覆盖各职业专属的渲染分支；
         // -Dab.boss=N 直接刷第 N 只 Boss，用来覆盖 Boss 立绘 / 阶段技能渲染路径。
         // -Dab.milky=1 可脱离冒烟使用：直接进入战斗并刷出奶蛙（不自动退出，可正常游玩）。
-        boolean directFight = smokeFrames > 0 || System.getProperty("ab.milky") != null;
+        // -Dab.king=1 直进王宫决战（清场 + 国王第一阶段），同样可脱离冒烟正常游玩。
+        boolean directFight = smokeFrames > 0 || System.getProperty("ab.milky") != null
+                || System.getProperty("ab.king") != null;
         if (directFight) {
             int pick = HeroClass.WIZARD;
             String cls = System.getProperty("ab.class");
@@ -334,16 +442,17 @@ public final class GameApp extends Application {
                 }
             }
             beginGame(pick);
+            World fightWorld = battle.world();
             if (System.getProperty("ab.milky") != null) {
-                world.forceSpawnMilky();   // 覆盖奶蛙动画 / 技能 / 血条路径
+                fightWorld.forceSpawnMilky();   // 覆盖奶蛙动画 / 技能 / 血条路径
                 // -Dab.milkyHp=N 临时把奶蛙血量调低，方便快速验证技能二（不写回配置）
                 String mhp = System.getProperty("ab.milkyHp");
                 if (mhp != null && !mhp.isBlank()) {
-                    int id = world.milkyId();
+                    int id = fightWorld.milkyId();
                     float v = Float.parseFloat(mhp);
                     if (id >= 0 && v > 0f) {
-                        world.maxHp[id] = v;
-                        world.hp[id] = v;
+                        fightWorld.maxHp[id] = v;
+                        fightWorld.hp[id] = v;
                     }
                 }
             }
@@ -351,21 +460,35 @@ public final class GameApp extends Application {
             if (bt != null && !bt.isBlank()) {
                 int tier = Integer.parseInt(bt);
                 if (tier >= 0 && tier < 4) {
-                    world.spawnBoss(tier);
+                    battle.spawnBossForSmoke(tier);
                 }
             }
             // -Dab.level=N 直接把主控玩家等级拉到 N，用于覆盖骨蛇登场后的渲染路径
             String lvl = System.getProperty("ab.level");
             if (lvl != null && !lvl.isBlank()) {
                 int target = Integer.parseInt(lvl);
-                int wid = world.firstWizard();
-                com.arcanebrigade.core.Loadout lo = world.loadout(wid);
+                int wid = fightWorld.firstWizard();
+                com.arcanebrigade.core.Loadout lo = fightWorld.loadout(wid);
                 if (lo != null) {
                     lo.level = target;
                 }
                 // 同时把血撑满：跑长时间冒烟时被骨蛇咬死会提前进结算，看不到骨蛇
-                world.maxHp[wid] = 99999f;
-                world.hp[wid] = 99999f;
+                fightWorld.maxHp[wid] = 99999f;
+                fightWorld.hp[wid] = 99999f;
+            }
+            // -Dab.king=1：直进王宫决战；-Dab.kingHp=N 可调低国王血量（快速验证击破结算）
+            if (System.getProperty("ab.king") != null) {
+                startKingDuel();
+                String khp = System.getProperty("ab.kingHp");
+                if (khp != null && !khp.isBlank()) {
+                    World kw = battle.world();
+                    int id = kw.kingId();
+                    float v = Float.parseFloat(khp);
+                    if (id >= 0 && v > 0f) {
+                        kw.maxHp[id] = v;
+                        kw.hp[id] = v;
+                    }
+                }
             }
         }
 
@@ -376,7 +499,6 @@ public final class GameApp extends Application {
 
         final long[] last = { System.nanoTime() };
         final long[] lastDraw = { System.nanoTime() };
-        final double[] acc = { 0.0 };
         final double[] fps = { 60.0 };
 
         new AnimationTimer() {
@@ -406,8 +528,18 @@ public final class GameApp extends Application {
                         double vh = canvas.getHeight();
                         int hover = overlay == Renderer.OVER_NONE
                                 ? Renderer.menuHit(mouseX, mouseY, vw, vh) : -1;
+                        if (titleHoverOverride >= 0) {
+                            hover = titleHoverOverride;   // 冒烟：强制高亮某项，便于校对高亮框位置
+                        }
                         renderer.drawTitle(lobbyAnimT, hover, overlay,
                                 GameConfig.displayMode == GameConfig.MODE_FULLSCREEN);
+                        if (titleSnapshotPath != null && !snapshotSaved) {
+                            snapshotSaved = true;
+                            renderer.saveSnapshot(titleSnapshotPath);
+                            System.out.printf("[title] 主菜单快照已保存: %s（hover=%d）%n",
+                                    titleSnapshotPath, hover);
+                            Platform.exit();
+                        }
                     }
                     return;
                 }
@@ -426,8 +558,8 @@ public final class GameApp extends Application {
                     renderer.setLobbyUi(loreScroll, detailClass, detailScroll, detailFade);
                     if (drawNow) {
                         renderer.setFps(fps[0]);
-                        renderer.drawLobby(g, lx, ly, lobbyChoice, lobbyAnimT, cardClass, cardReveal,
-                                lobbyGuide);
+                        renderer.drawLobby(g, lx, ly, lobbyChoice, lobbyFacingLeft, lobbyAnimT, cardClass, cardReveal,
+                                lobbyGuide, tasks, lobbyTaskCategory, lobbyTasksOpen);
                         // 冒烟调试：截图（ab.snapshot）在画完当帧立即保存
                         if (snapshotPath != null && !snapshotSaved) {
                             snapshotSaved = true;
@@ -443,6 +575,160 @@ public final class GameApp extends Application {
 
                 // ---- 正式战斗阶段（逻辑推进与画面刷新解耦） ----
                 renderer.setMouse(mouseX, mouseY);
+                World world = battle.world();
+
+                // ---- 前置剧情 CG：击败奶娃后强制进入（不结算通关、锁操作、全程自动） ----
+                // 用户要求：结束战斗后不直接通关，先看奶娃诉说；剧情期间冻结战场，只放演出。
+                // 停 BGM 的顺序有讲究：先清 battleTrack 再停 Boss 曲，否则 resumeBattle 会把战斗曲放回来。
+                if (storyMode == 0 && world.milkyFallen()) {
+                    storyMode = 1;
+                    cutscene = Cutscene.postMilky();
+                    storyT = 0.0;
+                    hallT0 = 0.0;
+                    GameAudio.stopBattleBgm();
+                    GameAudio.stopBossBgm();
+                    pressed.clear();
+                    mouseDown = false;
+                }
+                // ---- 一阶段击破 → 国王决裂对白（storyMode 4）----
+                // 用户要求：打败一阶段后弹对话框，画面短暂安静（战斗 BGM 已停，只剩大殿回声）。
+                if (storyMode == 3 && world.kingFallen()) {
+                    storyMode = 4;
+                    cutscene = Cutscene.postKing1();
+                    storyT = 0.0;
+                    GameAudio.stopBattleBgm();
+                    GameAudio.stopBossBgm();
+                    pressed.clear();
+                    mouseDown = false;
+                }
+                // ---- 二阶段击破 → 「王座本体」过渡剧情（storyMode 5）----
+                // 用户要求：二阶段血量归零后国王滑落王座、裂隙闭合，播完对白王座本体觉醒。
+                if (storyMode == 3 && world.kingFallen2()) {
+                    storyMode = 5;
+                    cutscene = Cutscene.postKing2();
+                    storyT = 0.0;
+                    GameAudio.stopBattleBgm();
+                    GameAudio.stopBossBgm();
+                    pressed.clear();
+                    mouseDown = false;
+                }
+                // storyMode==3（国王决战）不在这里：落回下方正常战斗循环
+                if (storyMode == 1 || storyMode == 2) {
+                    storyT += dt;
+                    double vw = canvas.getWidth();
+                    double vh = canvas.getHeight();
+                    renderer.setFps(fps[0]);
+                    if (storyMode == 1) {
+                        if (cutscene != null) {
+                            cutscene.update((float) dt);
+                            if (cutscene.done()) {
+                                storyMode = 2;       // 转场结束：进入王宫大殿
+                                hallT0 = storyT;
+                            }
+                        }
+                        renderer.drawCinematic(world, 0f);   // 冻结的战场：不再推进模拟、不读输入
+                        renderer.drawCutscene(world, cutscene, vw, vh);
+                    } else {
+                        // 王宫大殿：静态演出，等待下一阶段的决战接入
+                        renderer.drawKingHall(world, vw, vh, storyT);
+                    }
+                    // 冒烟截图：进入剧情 3 秒后截对话框帧（此时正文必定已打出）
+                    if (snapshotPath != null && !snapshotSaved && storyT >= 3.0) {
+                        snapshotSaved = true;
+                        renderer.saveSnapshot(snapshotPath);
+                    }
+                    // 冒烟截图：CG2 旁白段（黑屏字幕）各截一帧
+                    if (snapshotPath != null && !cg2ShotDone && storyMode == 1 && cutscene != null) {
+                        Cutscene.Step st = cutscene.current();
+                        if (st != null && st.kind == Cutscene.K_NARRATE && cutscene.stepT() >= 0.9) {
+                            cg2ShotDone = true;
+                            String cg2Shot = snapshotPath.endsWith(".png")
+                                    ? snapshotPath.substring(0, snapshotPath.length() - 4) + "_cg2.png"
+                                    : snapshotPath + "_cg2.png";
+                            renderer.saveSnapshot(cg2Shot);
+                        }
+                    }
+                    if (smokeFrames > 0) {
+                        // 冒烟退出：帧数上限到，或王宫大殿停留 3 秒后（收尾画面已可拍）
+                        boolean framesUp = ++renderedFrames >= smokeFrames;
+                        boolean storyOver = storyMode == 2 && storyT >= hallT0 + 3.0;
+                        if (framesUp || storyOver) {
+                            smokeFrames = 0;   // 防重入：Platform.exit() 生效前可能还会再进一帧
+                            if (snapshotPath != null) {
+                                // 退出前另存一帧：留给"王宫大殿"人工校对（不覆盖上一张）
+                                String endShot = snapshotPath.endsWith(".png")
+                                        ? snapshotPath.substring(0, snapshotPath.length() - 4) + "_end.png"
+                                        : snapshotPath + "_end.png";
+                                renderer.saveSnapshot(endShot);
+                            }
+                            System.out.printf("[smoke] 剧情链完成（t=%.1fs, 帧=%d, mode=%d），退出%n",
+                                    storyT, renderedFrames, storyMode);
+                            Platform.exit();
+                        }
+                    }
+                    return;
+                }
+                // storyMode == 4：国王决裂对白；播完 → 二阶段（王座重生 + 玩家 -20 移速 + 裂隙刷怪）
+                if (storyMode == 4) {
+                    storyT += dt;
+                    double vw = canvas.getWidth();
+                    double vh = canvas.getHeight();
+                    renderer.setFps(fps[0]);
+                    if (cutscene != null && !cutscene.done()) {
+                        cutscene.update((float) dt);
+                    }
+                    if (cutscene == null || cutscene.done()) {
+                        // 对白播完（末尾闪白→黑场）：国王在王座上以二阶段重生，回战斗循环
+                        world.beginKingPhase2();
+                        storyMode = 3;
+                        GameAudio.setBattleMusic(3);   // 恢复决战曲
+                        return;                        // 本帧不再绘制对白
+                    }
+                    renderer.drawCinematic(world, 0f);   // 冻结的战场：国王倒地剪影 + 压暗
+                    renderer.drawCutscene(world, cutscene, vw, vh);
+                    maybeSnapSeq();
+                    if (smokeFrames > 0 && ++renderedFrames >= smokeFrames) {
+                        System.out.printf("[smoke] 决裂对白，渲染 %d 帧完成，退出%n", renderedFrames);
+                        Platform.exit();
+                    }
+                    return;
+                }
+                // storyMode == 5：「王座本体」过渡；播完 → 三阶段（12000 血 / 80% 减伤 / 传送）
+                if (storyMode == 5) {
+                    storyT += dt;
+                    double vw = canvas.getWidth();
+                    double vh = canvas.getHeight();
+                    renderer.setFps(fps[0]);
+                    if (cutscene != null && !cutscene.done()) {
+                        cutscene.update((float) dt);
+                    }
+                    if (cutscene == null || cutscene.done()) {
+                        // 对白播完（末尾黑场）：王座本体觉醒，回战斗循环
+                        world.beginKingPhase3();
+                        storyMode = 3;
+                        GameAudio.setBattleMusic(3);   // 恢复决战曲
+                        return;                        // 本帧不再绘制对白
+                    }
+                    renderer.drawCinematic(world, 0f);   // 冻结的战场：王座滑落剪影 + 压暗
+                    renderer.drawCutscene(world, cutscene, vw, vh);
+                    maybeSnapSeq();
+                    if (smokeFrames > 0 && ++renderedFrames >= smokeFrames) {
+                        System.out.printf("[smoke] 王座本体过渡剧情，渲染 %d 帧完成，退出%n", renderedFrames);
+                        Platform.exit();
+                    }
+                    return;
+                }
+
+                // 入局任务简报：五秒内不推进模拟，确保玩家能读完本局目标。
+                if (taskBriefSeconds > 0) {
+                    taskBriefSeconds = Math.max(0, taskBriefSeconds - dt);
+                    if (drawNow) {
+                        renderer.setFps(fps[0]);
+                        renderer.draw(world, 0f);
+                        renderer.drawTaskBrief(tasks, taskBriefSeconds);
+                    }
+                    return;
+                }
 
                 // 奶蛙 BGM：在场时循环播放，血量归零消失/重开一局时停止。
                 // 奶蛙优先级高于战斗槽——出场时战斗曲让位，倒下后自动恢复（见 GameAudio）。
@@ -467,14 +753,41 @@ public final class GameApp extends Application {
                 // 战斗 BGM 跟着 Boss 走：Boss 在场放它专属的登场音乐，Boss 倒下换回普通战斗曲。
                 // setBattleMusic 内部只在曲目变化时才重起播放器，逐帧调用无额外开销；
                 // 奶蛙曲在播时它只记录不抢占（奶蛙优先）。
-                GameAudio.setBattleMusic(world.bossTier());
+                // 决战场景固定放「终焉之影」（BOSS_FILES 下标 3 = bgm_boss4.mp3）。
+                GameAudio.setBattleMusic(world.kingArena() ? 3 : world.bossTier());
 
-                // 胜利：冻结模拟，罩层结算。模拟一旦停了就不再推进，直到按 R 重开
+                // 胜利：先播通关剧情字幕（从下往上滚动），再弹结算画面。
+                // 模拟已冻结，不再推进；直到字幕放完或玩家跳过，才显示胜利结算。
                 if (world.victory()) {
-                    GameAudio.stopBattleBgm();   // 通关：让位给结算画面，不再循环战斗曲
+                    if (!victoryHandled) {
+                        victoryHandled = true;
+                        // 决战里击破国王：跳过奶蛙通关滚动字幕，直接弹结算（文案在 drawVictory 里分叉）
+                        victoryStoryDone = world.kingArena();
+                        victoryStoryT = 0.0;
+                        GameAudio.stopBattleBgm();   // 通关：不再循环战斗曲
+                        GameAudio.stopBossBgm();     // 奶蛙专属 BGM 暂停
+                    }
+                    finishRun(world);
                     renderer.setFps(fps[0]);
                     renderer.draw(world, 0f);
-                    renderer.drawVictory(world, canvas.getWidth(), canvas.getHeight());
+                    if (!victoryStoryDone) {
+                        victoryStoryT += dt;
+                        renderer.drawVictoryStory(victoryStoryT);
+                        // 字幕滚过 0.5s 后，点击或按任意键可跳过
+                        boolean canSkip = victoryStoryT > 0.5
+                                && (mouseDown || !pressed.isEmpty());
+                        if (victoryStoryT >= VICTORY_STORY_DURATION || canSkip) {
+                            victoryStoryDone = true;
+                        }
+                    } else {
+                        renderer.drawVictory(world, canvas.getWidth(), canvas.getHeight());
+                        // 决战冒烟：击破结算画面存一帧（若此前预警圈帧未截过）
+                        if (snapshotPath != null && !arenaShotDone && world.kingArena()) {
+                            arenaShotDone = true;
+                            renderer.saveSnapshot(snapshotPath);
+                            System.out.printf("[king] 击破结算快照已保存: %s%n", snapshotPath);
+                        }
+                    }
                     if (smokeFrames > 0 && ++renderedFrames >= smokeFrames) {
                         System.out.printf("[smoke] 胜利画面，渲染 %d 帧完成，退出%n", renderedFrames);
                         Platform.exit();
@@ -482,59 +795,56 @@ public final class GameApp extends Application {
                     return;
                 }
 
-                // 阵亡 / 主动退出结算：同样冻结模拟，弹结算战报，点「继续」或按 R 回大厅。
+                // 阵亡：同样冻结模拟，弹结算战报，点「继续」或按 R 回大厅。
                 // 之前玩家倒下后没有任何终局状态，游戏会一直空转却永远不结束。
                 if (world.defeat() || world.abandoned()) {
+                    finishRun(world);
                     GameAudio.stopBattleBgm();   // 结算：冻结模拟时不再放战斗曲
                     renderer.setFps(fps[0]);
                     renderer.draw(world, 0f);
                     renderer.drawDefeatOverlay(world, canvas.getWidth(), canvas.getHeight());
                     if (smokeFrames > 0 && ++renderedFrames >= smokeFrames) {
-                        System.out.printf("[smoke] 结算画面，渲染 %d 帧完成，退出%n", renderedFrames);
+                        System.out.printf("[smoke] 阵亡结算，渲染 %d 帧完成，退出%n", renderedFrames);
                         Platform.exit();
                     }
                     return;
                 }
 
-                boolean upgradePaused = world.wizardCount() > 0
-                        && world.pendingChoices(world.wizard(0)) > 0;
-                boolean paused = manualPause || upgradePaused;
-                if (!paused) {
-                    acc[0] += dt;
-                    int steps = 0;
-                    while (acc[0] >= STEP && steps < MAX_STEPS) {
-                        readInput();
-                        world.step((float) STEP, input);
-                        acc[0] -= STEP;
-                        steps++;
-                    }
-                    if (steps == MAX_STEPS) {
-                        acc[0] = 0.0;
-                    }
-                } else {
-                    acc[0] = 0.0;   // 暂停时不累积
-                }
+                boolean upgradePaused = battle.hasPendingUpgrade();
+                readInput();
+                float alpha = battle.advance(dt, input);
+                syncTaskKills(world);
 
                 if (!drawNow) {
                     return;
                 }
-                renderer.setPaused(manualPause);
+                renderer.setPaused(battle.isManualPaused());
                 renderer.setFps(fps[0]);
-                renderer.draw(world, (float) (acc[0] / STEP));
+                renderer.draw(world, alpha);
 
                 // 升级面板始终叠加在画面最上层
                 if (upgradePaused) {
-                    int wid = world.wizard(0);
-                    Loadout lo = world.loadout(wid);
+                    Loadout lo = battle.playerLoadout();
                     if (lo != null) {
-                        Upgrades.Choice[] cs = world.peekChoices(wid);
+                        Upgrades.Choice[] cs = battle.pendingChoices();
                         renderer.drawUpgradePanel(cs, lo.rerolls,
                                 canvas.getWidth(), canvas.getHeight());
                     }
-                } else if (manualPause) {
+                } else if (battle.isManualPaused()) {
                     renderer.drawPauseOverlay(canvas.getWidth(), canvas.getHeight());
                 }
 
+                // 决战冒烟：第一次出现技能预警圈时截一帧（国王 + 预警圈 + 血条同框），只截一次
+                if (snapshotPath != null && !arenaShotDone && world.kingArena() && world.kingCasting()) {
+                    if (++arenaShotFrames >= 30) {   // 预警圈前中段（前摇共 1.4 秒 = 84 帧）
+                        arenaShotDone = true;
+                        renderer.saveSnapshot(snapshotPath);
+                        System.out.printf("[king] 决战快照已保存: %s（国王 id=%d, 阶段=%d, HP=%.0f）%n",
+                                snapshotPath, world.kingId(), world.kingPhase(),
+                                world.kingId() >= 0 ? world.hp[world.kingId()] : 0f);
+                    }
+                }
+                maybeSnapSeq();
                 if (smokeFrames > 0 && ++renderedFrames >= smokeFrames) {
                     System.out.printf("[smoke] 渲染 %d 帧完成，实体 %d，敌人 %d，退出%n",
                             renderedFrames, world.liveCount(), world.enemyCount());
@@ -549,8 +859,10 @@ public final class GameApp extends Application {
         inTitle = false;
         inLobby = true;
         overlay = Renderer.OVER_NONE;
-        closeDetail();    // 重进大厅清掉可能残留的档案弹层状态
+        storyMode = 0;            // 防御性复位：正常情况下开局时不可能带着剧情状态
+        cutscene = null;
         lobbyPosInit = false;    // 首帧按出生点落位
+        lobbyFacingLeft = false; // 默认朝右
         cardClass = 0;
         cardReveal = 0;
         closeDetail();           // 重进大厅清掉可能残留的档案弹层状态
@@ -590,7 +902,9 @@ public final class GameApp extends Application {
                 case 0 -> enterLobby();                     // 开始游戏 → 准备大厅
                 case 1 -> overlay = Renderer.OVER_SETTINGS; // 设置
                 case 2 -> overlay = Renderer.OVER_HELP;     // 操作说明
-                case 3 -> Platform.exit();                  // 退出游戏
+                case 3 -> {                                 // 退出游戏
+                    Platform.exit();
+                }
                 default -> { /* 空白区不响应 */ }
             }
             return;
@@ -612,11 +926,6 @@ public final class GameApp extends Application {
         Renderer.SettingsGeom g = Renderer.settingsGeom(vw, vh);
         if (g.close().hit(mx, my)) {
             overlay = Renderer.OVER_NONE;
-            return;
-        }
-        if (g.showId().hit(mx, my)) {
-            GameConfig.showPlayerId = !GameConfig.showPlayerId;
-            GameConfig.save();
             return;
         }
         int s = settingsSliderAt(mx, my);
@@ -729,6 +1038,9 @@ public final class GameApp extends Application {
             ly += dy * inv * LOBBY_SPEED * dt;
             lx = Math.max(g.minX(), Math.min(g.maxX(), lx));
             ly = Math.max(g.minY(), Math.min(g.maxY(), ly));
+            // 水平移动决定化身朝向：左移朝左、右移朝右；纯上下移动时沿用上一帧
+            if (dx < 0) lobbyFacingLeft = true;
+            else if (dx > 0) lobbyFacingLeft = false;
         }
         // 圆-圆检测：正站在谁面前（只做判定，不自动选人——选人由空格确认触发）
         int[] cls = LobbyClass.CLASSES;
@@ -813,11 +1125,27 @@ public final class GameApp extends Application {
         if (!inTitle && !inLobby) {
             return;                       // 已在战斗中，忽略重复触发
         }
-        world.spawnWizard(0f, 0f, classKind);
+        battle.start(classKind);
+        // 调试钩子：强制立即触发某个战斗事件（-Dab.eventForce=0/1/2），便于检验雕像等任务
+        String ef = System.getProperty("ab.eventForce");
+        if (ef != null) {
+            try {
+                int idx = Integer.parseInt(ef.trim());
+                battle.world().forceEvent(idx);
+            } catch (NumberFormatException ignored) {
+                // 非法值忽略
+            }
+        }
+        taskBriefSeconds = 5.0;
+        observedKills = 0;
+        runCompletionRecorded = false;
         inTitle = false;
         inLobby = false;
         overlay = Renderer.OVER_NONE;
         manualPause = false;
+        victoryHandled = false;   // 新一局：胜利字幕状态复位，通关时重新播放
+        victoryStoryDone = false;
+        victoryStoryT = 0.0;
         closeDetail();           // 进战斗前也清一次（防御性）
         GameAudio.stopMenuBgm();  // 出征 / 战斗冒烟都离开主界面
         GameAudio.stopLobbyBgm(); // 出大厅，交棒给战斗 BGM
@@ -827,13 +1155,60 @@ public final class GameApp extends Application {
 
     /** 胜利/阵亡后重开：换一个种子重建世界，回到准备大厅重新选人 */
     private void restart() {
-        boolean auto = (world != null) && world.isAutoFire();   // 保留玩家的开火模式偏好
-        world = new World(System.nanoTime());
-        world.setAutoFire(auto);
-        manualPause = false;
+        battle.reset(System.nanoTime());
+        taskBriefSeconds = 0;
         lobbyChoice = 0;
         renderedFrames = 0;
+        storyMode = 0;            // 重开新局：退出剧情状态
+        cutscene = null;
+        cg2ShotDone = false;      // 冒烟截图标记复位，下一局剧情链可重新截图
         enterLobby();
+    }
+
+    /**
+     * 冒烟：序列快照（-Dab.snapSeqMs）——战斗/剧情分支画完后调用，按间隔把当帧
+     * 画面存成「基名-01.png、基名-02.png…」。与 ab.snapshot 单帧路径互不影响。
+     */
+    private void maybeSnapSeq() {
+        if (snapshotPath == null || snapSeqMs <= 0 || snapSeqCount >= snapSeqMax) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (snapSeqLast == 0) {
+            snapSeqLast = now;    // 首帧只记时：间隔从下一次调用起算，避开开场加载帧
+            return;
+        }
+        if (now - snapSeqLast < snapSeqMs) {
+            return;
+        }
+        snapSeqLast = now;
+        snapSeqCount++;
+        String base = snapshotPath.endsWith(".png")
+                ? snapshotPath.substring(0, snapshotPath.length() - 4) : snapshotPath;
+        renderer.saveSnapshot(String.format("%s-%02d.png", base, snapSeqCount));
+        System.out.printf("[snapSeq] %02d saved%n", snapSeqCount);
+    }
+
+    /**
+     * 王宫大殿按空格：正式进入国王决战（第一阶段）。
+     * 清空战场杂兵/弹幕/掉落，玩家与国王按竞技场摆位，相机锁定大殿，
+     * BGM 切到决战曲（bgm_boss4）；之后 storyMode=3，走下方正常战斗循环。
+     */
+    private void startKingDuel() {
+        World world = battle.world();
+        world.enterKingArena();
+        storyMode = 3;
+        pressed.clear();
+        mouseDown = false;
+        GameAudio.setBattleMusic(3);   // BOSS_FILES 下标 3 = bgm_boss4.mp3
+        // 调试/表演直进：-Dab.kingPhase=2 跳过一阶段与决裂对白（王座上直接是二阶段）；
+        // =3 再跳过二阶段过渡剧情，直接进「王座本体」最终决战。
+        String kp = System.getProperty("ab.kingPhase");
+        if (kp != null && "2".equals(kp.trim())) {
+            world.beginKingPhase2();
+        } else if (kp != null && "3".equals(kp.trim())) {
+            world.beginKingPhase3();
+        }
     }
 
     /**
@@ -846,11 +1221,17 @@ public final class GameApp extends Application {
      * 命中区域 3 个等宽矩形，y 范围 vh*0.32 .. vh*0.32 + 220。
      */
     private void handleBattleClick(double mx, double my) {
+        // 前置剧情 CG（1/2/4/5）：锁定操作，点击一律不响应（含 HUD / 升级卡 / 暂停菜单）。
+        // storyMode==3 是决战本体，点击照常派发。
+        if (storyMode == 1 || storyMode == 2 || storyMode == 4 || storyMode == 5) {
+            return;
+        }
+        World world = battle.world();
         double vw = renderer.getCanvasWidth();
         double vh = renderer.getCanvasHeight();
 
-        // 1) 阵亡 / 退出结算：右下角「继续」回到准备大厅
-        if (world.defeat() || world.abandoned()) {
+        // 1) 阵亡结算：右下角「继续」回到准备大厅
+        if (world.defeat()) {
             if (hit(Renderer.continueButtonRect(vw, vh), mx, my)) {
                 restart();
             }
@@ -860,18 +1241,18 @@ public final class GameApp extends Application {
             return;                      // 胜利画面只认 R 键
         }
 
-        // 2) 手动暂停菜单：「继续战斗」/「退出结算」
-        if (manualPause) {
+        // 2) 手动暂停：暂停罩层的「继续战斗」/「返回大厅」按钮（此前只画不响应）
+        if (battle.isManualPaused()) {
             if (hit(Renderer.pauseResumeRect(vw, vh), mx, my)) {
-                manualPause = false;
+                battle.toggleManualPause();
                 return;
             }
             if (hit(Renderer.pauseQuitRect(vw, vh), mx, my)) {
-                world.abandon();          // 主动结束本局 → 结算画面 → 继续回大厅
-                manualPause = false;
+                if (battle.isManualPaused()) battle.toggleManualPause();  // 离开前解除暂停
+                restart();
                 return;
             }
-            return;                       // 暂停菜单内点击其它区域不响应
+            return;   // 暂停时忽略其它点击（HUD 开火等），避免误触
         }
 
         // 3) HUD 按钮：开火模式切换（自动 / 手动）
@@ -879,13 +1260,13 @@ public final class GameApp extends Application {
             world.setAutoFire(!world.isAutoFire());
             return;
         }
-        // 4) HUD 按钮：暂停 / 继续
+        // 4) HUD 按钮：暂停 / 继续（顶部 HUD 暂停按钮也可暂停 / 继续）
         if (hit(Renderer.pauseButtonRect(vw, vh), mx, my)) {
-            manualPause = !manualPause;
+            battle.toggleManualPause();
             return;
         }
 
-        // 5) 升级三选一
+        // 4) 升级三选一
         if (world.wizardCount() == 0) {
             return;
         }
@@ -906,7 +1287,7 @@ public final class GameApp extends Application {
         for (int i = 0; i < cs.length; i++) {
             double bx = x0 + i * (cardW + gap);
             if (mx >= bx && mx <= bx + cardW && my >= y0 && my <= y0 + cardH) {
-                world.applyChoice(wid, i);
+                battle.chooseUpgrade(i);
                 return;
             }
         }
@@ -915,6 +1296,24 @@ public final class GameApp extends Application {
     /** 点 (mx,my) 是否落在 [x, y, w, h] 矩形内 */
     private static boolean hit(double[] r, double mx, double my) {
         return mx >= r[0] && mx <= r[0] + r[2] && my >= r[1] && my <= r[1] + r[3];
+    }
+
+    /** 将本局新增击杀同步进局外任务，避免按帧重复计数。 */
+    private void syncTaskKills(World world) {
+        int current = world.killCount();
+        if (current > observedKills) {
+            tasks.recordKills(current - observedKills);
+            observedKills = current;
+        }
+    }
+
+    /** 胜利或阵亡都算完成一局；同一局只登记一次。 */
+    private void finishRun(World world) {
+        syncTaskKills(world);
+        if (!runCompletionRecorded) {
+            tasks.recordCompletedRun();
+            runCompletionRecorded = true;
+        }
     }
 
     private void readInput() {
@@ -936,12 +1335,16 @@ public final class GameApp extends Application {
 
         // 开火：手动模式下按住鼠标左键，朝鼠标世界坐标开火
         input.buttons = 0;
-        if (!world.isAutoFire() && mouseDown) {
+        if (!battle.world().isAutoFire() && mouseDown) {
             input.buttons |= InputCommand.BUTTON_FIRE;
         }
         // 指挥：按住鼠标左键就是给宠物下令（与开火模式无关，自动开火时也能指挥）
         if (mouseDown) {
             input.buttons |= InputCommand.BUTTON_ORDER;
+        }
+        // 战士冲刺：空格按下即请求冲刺（世界层按冷却与职业判定是否真正触发）
+        if (pressed.contains(KeyCode.SPACE)) {
+            input.buttons |= InputCommand.BUTTON_DASH;
         }
         double camX = renderer.getCamX();
         double camY = renderer.getCamY();

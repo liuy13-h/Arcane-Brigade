@@ -5,8 +5,8 @@ import java.nio.ByteBuffer;
 /**
  * 一帧的输入指令。
  *
- * 这是联机的关键抽象：客户端只上报这个结构，主机只消费这个结构。
- * 现在它来自键盘，D5 联机时它来自网络，World 的代码一行都不用改。
+ * 一帧的输入指令抽象：上层只上报这个结构，World 只消费它。
+ * 当前来源是键盘，未来也可来自其他输入源，World 的写法无需改动。
  */
 public final class InputCommand {
 
@@ -25,6 +25,8 @@ public final class InputCommand {
     public static final int BUTTON_FIRE = 1;
     /** 指挥按钮位：鼠标点击/按住，给召唤师的宠物下令"朝这里进攻" */
     public static final int BUTTON_ORDER = 2;
+    /** 战士冲刺按钮位：空格触发，冷却内只认就绪的那一次 */
+    public static final int BUTTON_DASH = 4;
 
     public void reset() {
         dx = 0f;
