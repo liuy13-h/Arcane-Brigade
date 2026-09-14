@@ -112,8 +112,21 @@ public final class Upgrades {
             if (lo.passiveStacks(pid) >= d.maxStacks) {
                 continue;
             }
+            // 战士纯近战：剔除一切依赖投射物/弹幕/穿透机制的被动（弹幕之王/穿透弹/跳弹/临界质量），
+            // 否则近战拿到远程被动毫无收益，也不贴合职业。
+            if (lo.classKind == HeroClass.WARRIOR && isRangedOnlyPassive(pid)) {
+                continue;
+            }
             pool.add(new Cand(KIND_PASSIVE, pid, d.rarity));
         }
+    }
+
+    /** 仅对远程弹幕职业有意义、战士（纯近战）拿到零收益的被动；三选一里直接剔除。 */
+    private static boolean isRangedOnlyPassive(int pid) {
+        return pid == Passives.PIERCING_SHOT   // 穿透弹：投射物 +1 穿透
+            || pid == Passives.RICOCHET        // 跳弹：投射物命中后弹射
+            || pid == Passives.BARRAGE_KING    // 弹幕之王：每秒投射物 ≥8 时攻速 +25%
+            || pid == Passives.CRITICAL_MASS;  // 临界质量：穿透 ≥5 时全伤害 +50%
     }
 
     /** 按稀有度权重加权抽一个，不放回 */
@@ -222,5 +235,34 @@ public final class Upgrades {
             this.id = id;
             this.rarity = rarity;
         }
+    }
+
+    /**
+     * 仅从该职业的主动技池中抽 3 张不重复的技能卡（Boss 击杀奖励用）。
+     * 与 roll() 的区别：不含被动 / 填充，保证"拿到的是一张技能卡"。
+     * 候选不足 3 个（池子已被抽空）时，用通用填充补齐。
+     */
+    public static Choice[] rollSpell(Loadout lo, Random rng) {
+        int[] pool = Spells.poolForClass(lo.classKind);
+        List<Integer> avail = new ArrayList<>();
+        for (int sid : pool) {
+            if (!lo.contains(sid)) {
+                avail.add(sid);
+            }
+        }
+        java.util.Collections.shuffle(avail, rng);
+        int n = 3;
+        Choice[] out = new Choice[n];
+        int filled = 0;
+        for (int sid : avail) {
+            if (filled >= n) {
+                break;
+            }
+            out[filled++] = makeChoice(new Cand(KIND_SPELL, sid, Spells.rarityOf(sid)), lo);
+        }
+        while (filled < n) {
+            out[filled++] = makeFiller(filled, rng);
+        }
+        return out;
     }
 }

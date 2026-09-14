@@ -41,7 +41,7 @@ public final class Spells {
     public static final int SUMMONER_BOLT    = 17;  // 秘能弹：起手，远程单体
     public static final int SUMMONER_ORB     = 18;  // 秘能球：慢速大范围
     public static final int SUMMONER_SPIRITS = 19;  // 灵体箭幕：穿透扇形
-    public static final int SUMMONER_PULSE   = 20;  // 秘法脉冲：近身爆发 + 击退
+    public static final int SUMMONER_PULSE   = 20;  // 秘法脉冲：奥术环形弹幕（远程）
 
     // ---- 进化形态（战士 / 弓箭手）----
     public static final int WARRIOR_SLASH_EVO = 21; // 巨力斩（挥砍 + 力量训练）
@@ -154,9 +154,11 @@ public final class Spells {
                 .element(Element.ARCANE)
                 .build();
 
-        TABLE[SUMMONER_PULSE] = SpellDef.builder(SUMMONER_PULSE, "秘法脉冲", SpellDef.Form.MELEE_ARC)
-                .cooldown(1.10f).damage(24f).knockback(180f)
-                .arcRadius(120f).arcAngle((float) Math.toRadians(360))
+        // 秘法脉冲：奥术脉冲呈环形弹幕向四周迸射，契合召唤师远程定位（原近战扇形已改为远程）
+        TABLE[SUMMONER_PULSE] = SpellDef.builder(SUMMONER_PULSE, "秘法脉冲", SpellDef.Form.PROJECTILE)
+                .cooldown(1.10f).damage(16f).range(520f)
+                .speed(480f).boltRadius(7f)
+                .count(8).spread((float) Math.toRadians(360))
                 .element(Element.ARCANE)
                 .build();
 
@@ -231,6 +233,19 @@ public final class Spells {
         evolution(WHIRLWIND, WHIRLWIND_EVO, Passives.ALACRITY);
         evolution(ARCHER_ARROW, ARCHER_ARROW_EVO, Passives.DEADLY_STRIKE);
         evolution(ARCHER_MULTISHOT, ARCHER_MULTI_EVO, Passives.PIERCING_SHOT);
+
+        // 设计约束兜底：战士池（含进化）必须全部为 MELEE_ARC 近战，禁止任何 PROJECTILE/穿透物。
+        // 若有人误把穿透/弹射物塞进战士池，启动即抛异常，fail-fast 暴露回归。
+        for (int wid : warriorPool()) {
+            int[] chain = { wid, EVOLVED_OF[wid] };
+            for (int id : chain) {
+                if (id == 0) continue;
+                SpellDef d = TABLE[id];
+                if (d == null || d.form != SpellDef.Form.MELEE_ARC) {
+                    throw new IllegalStateException("战士技能池含非近战形态(穿透/弹射物): id=" + id);
+                }
+            }
+        }
     }
 
     private static void evolution(int base, int evolved, int catalyst) {
@@ -255,7 +270,12 @@ public final class Spells {
         return new int[] { MAGIC_MISSILE, FIREBALL, ICE_SHARD, CHAIN_LIGHTNING };
     }
 
-    /** 战士可用池 */
+    /**
+     * 战士可用池。
+     * 设计硬约束：战士是纯近战职业，池内所有技能（含其进化形态）必须全部为
+     * MELEE_ARC（近战扇形），不得混入任何 PROJECTILE / pierce（穿透物）类技能。
+     * 改动后由下方静态校验兜底，违反则启动即失败。
+     */
     public static int[] warriorPool() {
         return new int[] { WARRIOR_SLASH, WHIRLWIND, GROUND_SLAM, SHIELD_BASH };
     }
