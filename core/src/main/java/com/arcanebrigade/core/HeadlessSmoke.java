@@ -811,7 +811,7 @@ public final class HeadlessSmoke {
                 && Math.abs(w3.y[wid3] - Balance.ARENA_ENTER_Y) < 0.5f;
         int openerEnemies = countKind(w3, World.KIND_ENEMY) - (k2 >= 0 ? 1 : 0);
 
-        // ---- 3c 玩家移速：法师基础 195 - 20 = 175（0.5 秒右移 ≈ 87.5 px） ----
+        // ---- 3c 玩家移速：法师基础移速 - 二阶段惩罚，0.5 秒右移 ----
         InputCommand run3 = new InputCommand();
         clearNonBoss(w3);    // 清掉开场裂隙的魔物，隔离档位走位观测
         run3.set(1f, 0f);
@@ -821,6 +821,8 @@ public final class HeadlessSmoke {
             w3.step(Balance.FIXED_STEP, run3);
         }
         float moved = w3.x[wid3] - mx0;
+        // 从 Balance 推导而非写死：数值平衡调整后这里不会失配
+        float expectMovePx = (Balance.WIZARD_SPEED - Balance.KING2_SPEED_PENALTY) * 30f * Balance.FIXED_STEP;
         run3.reset();
         w3.x[wid3] = Balance.ARENA_ENTER_X;   // 归位殿中：档位测试以 (0,220) 为圆心
         w3.y[wid3] = Balance.ARENA_ENTER_Y;
@@ -1299,8 +1301,8 @@ public final class HeadlessSmoke {
         System.out.println("=== 王宫二阶段 · 转场 / 追击走位 / 3 连发魔弹验证 ===");
         System.out.printf("击破一阶段：决裂信号=%s 国王退场=%s 未结算=%s 倒地锚点=%s%n",
                 fallenSig, kingGone, notVictoryYet, downAnchor);
-        System.out.printf("王座重生：位置(%.0f,%.0f) 血 %.0f 玩家回位=%s 开场裂隙魔物 %d；玩家 0.5 秒右移 %.1f px（期望 87.5）%n",
-                king2X, king2Y, hp2Val, playerBack, openerEnemies, moved);
+        System.out.printf("王座重生：位置(%.0f,%.0f) 血 %.0f 玩家回位=%s 开场裂隙魔物 %d；玩家 0.5 秒右移 %.1f px（期望 %.1f）%n",
+                king2X, king2Y, hp2Val, playerBack, openerEnemies, moved, expectMovePx);
         System.out.printf("追击走位：远档 %.2f px/帧（期望 2.83）中档 %.2f（2.42）近档 %.2f（2.08，dy=%.2f）贴脸仍追击 %.2f px%n",
                 farStep, midStep, nearStep, nearDy, closeDist0 - closeDist1);
         System.out.printf("贴身碰撞：国王压身一帧掉血 %.1f（期望 -25）%n", contactDelta);
@@ -1343,8 +1345,8 @@ public final class HeadlessSmoke {
             System.out.println("!! 失败：二阶段重生（王座位 / 6000 血 / 玩家回位 / 开场裂隙）不正确");
             ok = false;
         }
-        if (moved < 86f || moved > 89f) {
-            System.out.println("!! 失败：二阶段玩家移速不是 195-20=175");
+        if (Math.abs(moved - expectMovePx) > 1.5f) {
+            System.out.println("!! 失败：二阶段玩家移速不等于 (法师基础移速 - 二阶段惩罚)");
             ok = false;
         }
         if (Math.abs(farStep - 2.83f) > 0.12f) {
