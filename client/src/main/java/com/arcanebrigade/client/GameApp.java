@@ -46,16 +46,6 @@ public final class GameApp extends Application {
     private int dragSlider = -1;
     private double mouseX = -1000, mouseY = -1000;
 
-    // ---- 「角色背景」滚动框 与 「查看详情」弹层状态（选人卡/大厅） ----
-    /** 选人卡右栏背景滚动偏移（px），由滚轮更新 */
-    private double loreScroll;
-    /** 查看详情弹层的职业 id：0=关闭；>0 时弹层打开并淡入 */
-    private int detailClass;
-    /** 弹层正文滚动偏移（px） */
-    private double detailScroll;
-    /** 弹层淡入进度 0..1（打开时从 0 升至 1） */
-    private double detailFade;
-
     /** 战斗冒烟帧数：-Dab.smoke=180 = 自动选职业打 180 帧后退出（战斗路径回归） */
     private int smokeFrames = -1;
     private int renderedFrames;
@@ -512,7 +502,6 @@ public final class GameApp extends Application {
                 fps[0] += (1.0 / Math.max(dt, 1e-6) - fps[0]) * 0.08;
 
                 // 帧率上限只限制「画面刷新」：逻辑仍每帧按固定步长推进。
-                // 30=隔帧绘制；60=默认；120 受显示器刷新限制，高于实际刷新时等同不限。
                 double period = 1.0 / GameConfig.fpsCap;
                 boolean drawNow = (now - lastDraw[0]) / 1e9 >= period - 1e-9;
                 if (drawNow) {
@@ -1016,7 +1005,6 @@ public final class GameApp extends Application {
 
     /** 大厅一帧：按 WASD 移动并夹紧在可走范围内，靠近角色即选中（含召唤师可高亮） */
     private void stepLobby(double dt, Renderer.LobbyGeom g) {
-        // 「查看详情」弹层打开：国王与卡片全部冻结，等待 ESC / 点 ✕ / 点面板外关闭
         if (detailClass != 0) {
             return;              // 档案弹层打开时冻结大厅：国王站定、卡片保持原位
         }

@@ -8,27 +8,12 @@ rem         jars are missing, open the project in IntelliJ once and
 rem         click "Reload Maven" (needs internet).
 rem
 rem  This builds core and client with javac --release 17 on EVERY
-rem  launch, then runs com.arcanebrigade.client.GameLauncher.
-rem  Rebuilding each time guarantees the running classes always match
-rem  this source (class file version 61, runnable on Java 17 through
-rem  Java 26+), so a stale or foreign-compiled build can never be
-rem  launched by mistake.
-rem
-rem  Keep every line of this file ASCII-only. cmd re-reads a batch file at
-rem  a byte offset once `chcp` (below) changes the code page, and any
-rem  multi-byte text after that point makes it resume parsing mid-line -
-rem  fragments of the comments then get run as commands. That really
-rem  happened here with Chinese comments, so they are English now.
+rem  launch, then runs com.arcanebrigade.client.GameLauncher from
+rem  the classpath. Rebuilding each time guarantees the running
+rem  classes always match this source (class version 61, runnable
+rem  on Java 17 through Java 26+), so a stale or foreign-compiled
+rem  build can never be launched by mistake.
 rem ============================================================
-rem ------------------------------------------------------------------
-rem  Chinese-path fix: `dir /s /b` emits FULLY-QUALIFIED source paths,
-rem  so the javac @argfiles written below contain this project's
-rem  non-ASCII directory name. JDK18+ reads @argfiles as UTF-8, and on a
-rem  non-UTF-8 console code page that aborts the build with
-rem  MalformedInputException. Switch to UTF-8 (65001) up front so the
-rem  argfile writer and the javac reader agree.
-rem ------------------------------------------------------------------
-chcp 65001 >nul
 setlocal
 chcp 65001 >nul
 cd /d "%~dp0"
@@ -42,8 +27,6 @@ if not defined JAVAC (
 )
 if "%JAVAC%"=="javac" (set "JAVAEXE=java") else (set "JAVAEXE=%JAVAC:javac.exe=java.exe%")
 
-rem Local repo: prefer D:\.m2 (some dev machines keep Maven there),
-rem fall back to the standard per-user location. No hand-editing needed.
 set "M2=D:\.m2\repository"
 if not exist "%M2%\org\openjfx\javafx-base\21.0.6" set "M2=%USERPROFILE%\.m2\repository"
 set "FX=%M2%\org\openjfx"
@@ -91,6 +74,11 @@ if exist "client\src\main\resources" (
 del /q "%TEMP%\ab_core_src.txt" "%TEMP%\ab_client_src.txt" >nul 2>nul
 
 :run
+rem JavaFX 21 必须作为命名模块加载：把 4 个 javafx 平台 jar 所在目录挂到模块路径，
+rem 并用 --add-modules 让全部 javafx 模块对未命名模块（classpath 上的游戏代码）可见。
+rem 否则 Application.launch 会报 "JavaFX runtime components are missing"。
+rem 注意：--sun-misc-unsafe-memory-access=allow 是 JDK 23+ 的选项，本机是 JDK 21，
+rem 写了会令 JVM 直接启动失败（黑窗口一闪而过）。--enable-native-access 在 JDK 21 上合法。
 set "CP=%COREOUT%;%CLIENTOUT%"
 rem 模块路径直接列出 win 平台 jar：目录形式会把 sources jar / 空壳主 jar
 rem 一起挂进模块层，JVM 报 "Two versions of module javafx.xxx found"。
