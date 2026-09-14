@@ -54,7 +54,7 @@ public final class Loadout {
     /** 三选一缓存。null 表示当前没有待选选项（pendingUps==0） */
     public Upgrades.Choice[] pendingChoices;
 
-    /** 职业。决定基础属性、特性与技能池。默认巫师，由 World.spawnWizard 设置 */
+    /** 职业。决定基础属性、特性与技能池。默认法师，由 World.spawnWizard 设置 */
     public int classKind = HeroClass.WIZARD;
 
     public Loadout() {

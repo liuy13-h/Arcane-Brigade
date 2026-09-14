@@ -53,32 +53,45 @@ set "CORE_RC=%ERRORLEVEL%"
 popd
 if not "%CORE_RC%"=="0" goto :failbuild
 
-rem Java's compiler can fail to resolve a directory classpath when this
-rem project is stored below a non-ASCII parent folder. Package core locally.
-powershell -NoProfile -Command "Remove-Item -LiteralPath 'core\target\arcane-core.jar' -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath 'core\target\arcane-core.zip' -Force -ErrorAction SilentlyContinue; Compress-Archive -Path 'core\target\classes\*' -DestinationPath 'core\target\arcane-core.zip' -Force; Move-Item -LiteralPath 'core\target\arcane-core.zip' -Destination 'core\target\arcane-core.jar' -Force"
-if errorlevel 1 goto :failbuild
+rem This used to zip core\target\classes into arcane-core.jar, which javac 26
+rem cannot read when it comes from PowerShell's Compress-Archive -- the client
+rem then fails with "package com.arcanebrigade.core does not exist". Using the
+rem classes directory directly works. See build.bat for the full note.
+
 
 echo Building client ...
 if not exist "%CLIENTOUT%" mkdir "%CLIENTOUT%"
 pushd client\src\main\java
 dir /s /b *.java > "%TEMP%\ab_client_src.txt"
-"%JAVAC%" --release 17 -encoding UTF-8 -cp "..\..\..\..\core\target\arcane-core.jar;%FB%;%FG%;%FC%;%FM%" -d "..\..\..\target\classes" "@%TEMP%\ab_client_src.txt"
+"%JAVAC%" --release 17 -encoding UTF-8 -cp "..\..\..\..\core\target\classes;%FB%;%FG%;%FC%;%FM%" -d "..\..\..\target\classes" "@%TEMP%\ab_client_src.txt"
 set "CLIENT_RC=%ERRORLEVEL%"
 popd
 if not "%CLIENT_RC%"=="0" goto :failbuild
-rem javac 路径不会像 Maven 那样复制 resources，手动同步一次，
-rem 否则 sprites 下的职业/Boss/小怪素材在运行期找不到，会退回程序化兜底形象
+rem javac does NOT copy resources the way Maven does, so sync them by hand.
+rem Without this the class/boss/mob art under sprites/ is missing at runtime
+rem and the renderer silently falls back to its procedural placeholder art.
+rem (Keep every comment in this file ASCII: non-ASCII text in a .bat under
+rem  chcp 65001 gets mis-parsed by cmd and leaks a stray command into the run.)
 if exist "client\src\main\resources" (
   xcopy /e /i /y /q "client\src\main\resources\*" "%CLIENTOUT%" >nul
 )
 del /q "%TEMP%\ab_core_src.txt" "%TEMP%\ab_client_src.txt" >nul 2>nul
 
 :run
-rem JavaFX 21 必须作为命名模块加载：把 4 个 javafx 平台 jar 所在目录挂到模块路径，
-rem 并用 --add-modules 让全部 javafx 模块对未命名模块（classpath 上的游戏代码）可见。
-rem 否则 Application.launch 会报 "JavaFX runtime components are missing"。
-rem 注意：--sun-misc-unsafe-memory-access=allow 是 JDK 23+ 的选项，本机是 JDK 21，
-rem 写了会令 JVM 直接启动失败（黑窗口一闪而过）。--enable-native-access 在 JDK 21 上合法。
+rem JavaFX 21 has to load as named modules: put the four platform jars on the
+rem module path and use --add-modules so every javafx module is visible to the
+rem unnamed module (the game code, which sits on the classpath). Without this
+rem Application.launch fails with "JavaFX runtime components are missing".
+rem
+rem The module path lists the jars explicitly rather than pointing at the four
+rem 21.0.12 directories. A directory on the module path is scanned wholesale,
+rem so the moment a -sources.jar lands in ~/.m2 next to the -win.jar (IntelliJ
+rem does this when it downloads sources) the JDK sees two javafx.base modules
+rem and dies with module.FindException before main() ever runs.
+rem
+rem Note: --sun-misc-unsafe-memory-access=allow is a JDK 23+ flag. This machine
+rem is on JDK 21, where it makes the JVM refuse to start (black window flash).
+rem --enable-native-access is legal on JDK 21.
 set "CP=%COREOUT%;%CLIENTOUT%"
 rem 模块路径直接列出 win 平台 jar：目录形式会把 sources jar / 空壳主 jar
 rem 一起挂进模块层，JVM 报 "Two versions of module javafx.xxx found"。

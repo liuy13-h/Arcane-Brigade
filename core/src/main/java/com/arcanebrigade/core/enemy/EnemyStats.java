@@ -44,7 +44,7 @@ public final class EnemyStats {
      * 共享血池。小 Boss 的定位是"打得动但耗时间"，所以约等于同档大 Boss 的一半；
      * 它是 12 个实体共用一个数——打头打身子一个价，玩家不必追着头打。
      */
-    public static final float SERPENT_HP = 1100f;
+    public static final float SERPENT_HP = 2200f;   // 骨蛇血条翻倍
     public static final float SERPENT_DMG = 16f;
 
     /** 节与节之间的中心距。比身体美术高度（24）略小，让骨节重叠成一条连续的脊骨 */

@@ -1,5 +1,6 @@
 package com.arcanebrigade.client;
 
+import com.arcanebrigade.core.Balance;
 import com.arcanebrigade.core.HeroClass;
 import com.arcanebrigade.core.InputCommand;
 import com.arcanebrigade.core.Loadout;
@@ -34,6 +35,8 @@ public final class GameApp extends Application {
 
     private final Set<KeyCode> pressed = EnumSet.noneOf(KeyCode.class);
     private final InputCommand input = new InputCommand();
+    /** 位移键（空格）的边沿触发标记：按下当帧置位，readInput 消费后清除，避免按住连续冲 */
+    private boolean dashQueued = false;
 
     /** 战斗生命周期与固定步长只由这个边界对象管理。 */
     private BattleSession battle;
@@ -81,6 +84,13 @@ public final class GameApp extends Application {
 
     /** 鼠标左键是否按住（战斗阶段用于宠物指挥 + 手动开火） */
     private boolean mouseDown;
+    /**
+     * 左键按下的时间戳（纳秒）。用于给战士算"蓄力进度"：
+     * 按住越久蓄力越满（到 Balance.WARRIOR_CHARGE_MAX 封顶），松开即归零。
+     */
+    private long fireHoldStartNs;
+    /** 蓄力进度 0..1（渲染用，让 HUD/人物能画出蓄力反馈） */
+    private float chargeNorm;
     /** 「角色背景」滚动框偏移（px，上为正；换人时归零） */
     private double loreScroll;
     /** 「查看详情」弹层当前职业 id；0 = 未打开 */
@@ -219,6 +229,11 @@ public final class GameApp extends Application {
                     return;
                 }
                 pressed.add(e.getCode());
+            pressed.add(e.getCode());
+            // 主动位移（冲刺）：空格边沿触发，交给 readInput 消费
+            if (e.getCode() == KeyCode.SPACE) {
+                dashQueued = true;
+            }
             // 战斗阶段：ESC 手动暂停；R 键在胜利/阵亡后重开，在升级面板弹出时重抽
             if (e.getCode() == KeyCode.ESCAPE) {
                 battle.toggleManualPause();
@@ -267,6 +282,7 @@ public final class GameApp extends Application {
         scene.setOnMousePressed(e -> {
             if (e.getButton() == MouseButton.PRIMARY) {
                 mouseDown = true;
+                fireHoldStartNs = System.nanoTime();    // 记录按下时刻，用于蓄力计时
             }
             if (e.getButton() != MouseButton.PRIMARY
                     || !inTitle || overlay != Renderer.OVER_SETTINGS) {
@@ -286,6 +302,7 @@ public final class GameApp extends Application {
         // 音量在拖动中不落盘，松开时写一次，避免拖动过程高频写配置
         scene.setOnMouseReleased(e -> {
             mouseDown = false;
+            chargeNorm = 0f;    // 松开即清空蓄力（World 会在这一帧读到归零的 charge）
             if (dragSlider >= 0) {
                 GameConfig.save();
             }
@@ -416,7 +433,7 @@ public final class GameApp extends Application {
         }
 
         // 战斗冒烟：跳过大厅，自动选职业直接跑真实模拟+渲染路径做稳定性验证。
-        // -Dab.class=N 可指定职业（默认巫师），用来覆盖各职业专属的渲染分支；
+        // -Dab.class=N 可指定职业（默认法师），用来覆盖各职业专属的渲染分支；
         // -Dab.boss=N 直接刷第 N 只 Boss，用来覆盖 Boss 立绘 / 阶段技能渲染路径。
         // -Dab.milky=1 可脱离冒烟使用：直接进入战斗并刷出奶蛙（不自动退出，可正常游玩）。
         // -Dab.king=1 直进王宫决战（清场 + 国王第一阶段），同样可脱离冒烟正常游玩。
@@ -707,6 +724,9 @@ public final class GameApp extends Application {
                     }
                     return;
                 }
+
+                // ---- 正式战斗阶段（逻辑推进与画面刷新解耦） ----
+                renderer.setMouse(mouseX, mouseY);
 
                 // 入局任务简报：五秒内不推进模拟，确保玩家能读完本局目标。
                 if (taskBriefSeconds > 0) {
@@ -1323,16 +1343,27 @@ public final class GameApp extends Application {
 
         // 开火：手动模式下按住鼠标左键，朝鼠标世界坐标开火
         input.buttons = 0;
-        if (!battle.world().isAutoFire() && mouseDown) {
+        boolean manualFire = !battle.world().isAutoFire() && mouseDown;
+        if (manualFire) {
             input.buttons |= InputCommand.BUTTON_FIRE;
         }
+        // 蓄力进度：按住左键的时间线性映射到 0..1（到 WARRIOR_CHARGE_MAX 封顶）。
+        // 仅战士消费；其他职业 World 不看这个字段，无副作用。松开那一帧由 release 事件归零。
+        if (manualFire && fireHoldStartNs > 0L) {
+            double heldSec = (System.nanoTime() - fireHoldStartNs) / 1e9;
+            chargeNorm = (float) Math.max(0.0, Math.min(1.0, heldSec / Balance.WARRIOR_CHARGE_MAX));
+        } else {
+            chargeNorm = 0f;
+        }
+        input.charge = chargeNorm;
         // 指挥：按住鼠标左键就是给宠物下令（与开火模式无关，自动开火时也能指挥）
         if (mouseDown) {
             input.buttons |= InputCommand.BUTTON_ORDER;
         }
-        // 战士冲刺：空格按下即请求冲刺（世界层按冷却与职业判定是否真正触发）
-        if (pressed.contains(KeyCode.SPACE)) {
+        // 主动位移（冲刺）：消费一次空格按下（边沿触发，冷却内由 World 自行判定）
+        if (dashQueued) {
             input.buttons |= InputCommand.BUTTON_DASH;
+            dashQueued = false;
         }
         double camX = renderer.getCamX();
         double camY = renderer.getCamY();

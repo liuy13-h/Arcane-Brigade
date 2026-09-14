@@ -13,7 +13,7 @@ package com.arcanebrigade.core;
  *   java -cp core/target/classes com.arcanebrigade.core.HeadlessSmoke [帧数] react      元素反应定向验证
  *   java -cp core/target/classes com.arcanebrigade.core.HeadlessSmoke [帧数] upgrade    D3 升级链路：自动选升级跑 N 秒
  *   java -cp core/target/classes com.arcanebrigade.core.HeadlessSmoke [帧数] stage      D4 场景/障碍/阶段/Boss：越阶段边界 + 显式刷 Boss
- *   java -cp core/target/classes com.arcanebrigade.core.HeadlessSmoke [帧数] classes   四职业：各生成巫师/战士/弓箭手/召唤师，验证技能开火、抽卡与宠物
+ *   java -cp core/target/classes com.arcanebrigade.core.HeadlessSmoke [帧数] classes   四职业：各生成法师/战士/弓箭手/召唤师，验证技能开火、抽卡与宠物
  *   java -cp core/target/classes com.arcanebrigade.core.HeadlessSmoke 0 king           王宫决战：一/二/三阶段全链（转场/走位/魔弹/AOE/裂隙→减伤/传送/地刺/牵引/召唤，时序固定）
  *   java -cp core/target/classes com.arcanebrigade.core.HeadlessSmoke [帧数] debug      逐步诊断
  */
@@ -409,7 +409,7 @@ public final class HeadlessSmoke {
     }
 
     /**
-     * 四职业验证：分别生成巫师 / 战士 / 弓箭手 / 召唤师，各带满本职业技能池，
+     * 四职业验证：分别生成法师 / 战士 / 弓箭手 / 召唤师，各带满本职业技能池，
      * 跑一段时间后确认各系技能都能正常开火、击杀，且按职业抽卡不抛异常。
      * 召唤师额外验证：宠物按节奏成批刷新、数量封顶、不会跑出拴绳范围。
      */
@@ -744,7 +744,7 @@ public final class HeadlessSmoke {
         boolean gavePassive = lo2.addPassive(Passives.POWER_TRAINING);
         w2.enterKingArena();
         float attrT = -1f;
-        int passiveBefore = lo2.passiveCount();   // 巫师起手自带"重抽"，这里按实际数量记
+        int passiveBefore = lo2.passiveCount();   // 法师起手自带"重抽"，这里按实际数量记
         int passiveAfterAttr = -1;
         int frames2 = (int) ((Balance.KING_ATTRITION_INTERVAL + 0.4f) * 60);
         for (int i = 0; i < frames2; i++) {
@@ -811,7 +811,7 @@ public final class HeadlessSmoke {
                 && Math.abs(w3.y[wid3] - Balance.ARENA_ENTER_Y) < 0.5f;
         int openerEnemies = countKind(w3, World.KIND_ENEMY) - (k2 >= 0 ? 1 : 0);
 
-        // ---- 3c 玩家移速：巫师基础 195 - 20 = 175（0.5 秒右移 ≈ 87.5 px） ----
+        // ---- 3c 玩家移速：法师基础 195 - 20 = 175（0.5 秒右移 ≈ 87.5 px） ----
         InputCommand run3 = new InputCommand();
         clearNonBoss(w3);    // 清掉开场裂隙的魔物，隔离档位走位观测
         run3.set(1f, 0f);

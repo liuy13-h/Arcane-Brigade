@@ -1038,6 +1038,60 @@ public final class Renderer {
                         double oy = Math.sin(ang) * 15 - 12;
                         gc.drawImage(wpn, sx + ox - ww / 2, sy + oy - wh / 2, ww, wh);
                     }
+                    // 蓄力重击反馈：脚下画一圈随蓄力进度收拢的橙金环，蓄满时高亮
+                    if (ck == HeroClass.WARRIOR && w.warriorCharging()) {
+                        float cp = Math.min(1f, w.warriorChargeProgress());
+                        double cy2 = sy - 6;
+                        double pr = 26 - 8 * cp;                 // 越蓄越收拢
+                        double ratio = 0.35 + 0.65 * cp;         // 环的填充度随进度增长
+                        gc.setLineWidth(2.5 + 1.5 * cp);
+                        gc.setStroke(Color.color(0.55 + 0.45 * cp, 0.30 + 0.25 * cp, 0.05, 0.35 + 0.55 * cp));
+                        gc.strokeArc(sx - pr, cy2 - pr, pr * 2, pr * 2,
+                                -90, -360 * ratio, javafx.scene.shape.ArcType.OPEN);
+                        if (cp >= 0.999f) {
+                            // 蓄满：外圈再补一道亮金提醒可以放了
+                            gc.setStroke(Color.rgb(255, 236, 170, 0.85));
+                            gc.setLineWidth(2.0);
+                            gc.strokeOval(sx - pr - 3, cy2 - pr - 3, (pr + 3) * 2, (pr + 3) * 2);
+                        }
+                    }
+                    // 弓箭手冲刺充能 HUD：角色头顶三个小格，每格一颗。
+                    //   - 就绪：实心绿色
+                    //   - 缺弹药：空心，按"下一发的充能进度"从底部填蓝
+                    if (ck == HeroClass.ARCHER) {
+                        int charges = w.dashChargesOf(i);
+                        int max = Balance.ARCHER_DASH_MAX;
+                        double box = 8.0;             // 单格边长
+                        double gap = 3.0;
+                        double totalW = max * box + (max - 1) * gap;
+                        double ox0 = sx - totalW / 2;
+                        double oy0 = sy - rr - 18;    // 头顶上方
+                        float fillFrac = w.dashCdFraction(i);   // 0..1（充能中）
+                        for (int n = 0; n < max; n++) {
+                            double ox = ox0 + n * (box + gap);
+                            double oy = oy0;
+                            boolean ready = (n < charges);
+                            if (ready) {
+                                // 已就绪：实心绿，描边深绿
+                                gc.setFill(Color.rgb(150, 230, 130, 0.95));
+                                gc.fillRect(ox, oy, box, box);
+                                gc.setStroke(Color.rgb(60, 110, 50, 0.9));
+                                gc.setLineWidth(1.2);
+                                gc.strokeRect(ox, oy, box, box);
+                            } else {
+                                // 缺弹药：空心深色底
+                                gc.setFill(Color.rgb(28, 28, 36, 0.85));
+                                gc.fillRect(ox, oy, box, box);
+                                gc.setStroke(Color.rgb(70, 90, 80, 0.9));
+                                gc.setLineWidth(1.2);
+                                gc.strokeRect(ox, oy, box, box);
+                                // 从底部向上填蓝（用 fillFrac 表示该格对应的充能进度）
+                                double fill = box * fillFrac;
+                                gc.setFill(Color.rgb(110, 200, 255, 0.85));
+                                gc.fillRect(ox, oy + (box - fill), box, fill);
+                            }
+                        }
+                    }
                 }
                 case World.KIND_ENEMY -> {
                     if (i == w.kingId()) {
@@ -1054,12 +1108,23 @@ public final class Renderer {
                         drawEnemySprite(w, i, sx, sy, rr);
                     }
                     drawEnemyStatus(w, i, sx, sy);
-                    if (i != w.milkyId() && i != w.kingId() && w.hp[i] < w.maxHp[i]) {
+                    // 血条：血量掉了或还有护盾就显示。
+                    // 精英/Boss 的伤害先扣护盾，之前护盾没破时血条压根不出现，
+                    // 看上去就像"打不动、几秒不掉血"——这里把护盾画成蓝色段给出反馈。
+                    // 奶蛙与国王走各自的大血条，这里不重复画。
+                    boolean hasShield = w.enemyShield[i] > 0f;
+                    if (i != w.milkyId() && i != w.kingId()
+                            && (w.hp[i] < w.maxHp[i] || hasShield)) {
                         float f = Math.max(0f, w.hp[i] / w.maxHp[i]);
                         gc.setFill(Color.rgb(30, 12, 16));
                         gc.fillRect(sx - 13, sy - rr - 10, 26, 4);
                         gc.setFill(Color.rgb(235, 70, 90));
                         gc.fillRect(sx - 12, sy - rr - 9, 24 * f, 2);
+                        if (hasShield) {
+                            float sf = Math.min(1f, w.enemyShield[i] / w.maxHp[i]);
+                            gc.setFill(Color.rgb(150, 200, 255));
+                            gc.fillRect(sx - 12, sy - rr - 9, 24 * sf, 2);
+                        }
                     }
                 }
                 case World.KIND_MINION -> {
@@ -1082,6 +1147,30 @@ public final class Renderer {
                     gc.fillRect(sx - 11, sy - rr - 8, 22 * mf, 2);
                 }
                 case World.KIND_PROJECTILE -> {
+                    // 飞龙火球：橙红实心球 + 火焰拖尾；用方块旋转/位移做出"飞"的视觉
+                    if (w.meta[i] == -2) {
+                        double pulse = 0.85 + 0.15 * Math.sin(System.nanoTime() * 2e-8);
+                        // 外焰（橙黄半透明）
+                        gc.setFill(Color.rgb(255, 200, 60, 0.55 * pulse));
+                        gc.fillOval(sx - 11, sy - 11, 22, 22);
+                        // 内焰（橙红实心）
+                        gc.setFill(Color.rgb(255, 110, 30, 0.95));
+                        gc.fillOval(sx - 6, sy - 6, 12, 12);
+                        // 飞行方向尾迹：往速度反方向画 3 个递弱的圆
+                        double vlen = Math.hypot(w.vx[i], w.vy[i]);
+                        if (vlen > 0.01) {
+                            double ux = -w.vx[i] / vlen;
+                            double uy = -w.vy[i] / vlen;
+                            for (int k = 1; k <= 3; k++) {
+                                double px = sx + ux * (8 + k * 4);
+                                double py = sy + uy * (8 + k * 4);
+                                gc.setFill(Color.rgb(255, 140, 40, 0.45 / k));
+                                gc.fillOval(px - (5 - k), py - (5 - k),
+                                        (5 - k) * 2, (5 - k) * 2);
+                            }
+                        }
+                        break;
+                    }
                     // 敌人弹幕用统一的"敌意红"，玩家弹幕按元素上色——两者不能混成一种颜色，
                     // 否则弹幕海里根本分不清哪颗是要躲的、哪颗是自己打的。
                     Image img = (w.team[i] == World.TEAM_ENEMY)
@@ -1156,13 +1245,15 @@ public final class Renderer {
         if (img == null) {
             return;
         }
-        double h = rr * 2.6;
+        // 精英怪模型放大到原来的 2 倍（仅视觉；碰撞半径不变，Boss 不受影响）
+        double modelMul = (w.variant[i] == World.V_ELITE) ? 2.0 : 1.0;
+        double h = rr * 2.6 * modelMul;
         double dw = img.getWidth() * (h / img.getHeight());
-        gc.drawImage(img, sx - dw / 2, sy - h + rr * 0.35, dw, h);
+        gc.drawImage(img, sx - dw / 2, sy - h + rr * 0.35 * modelMul, dw, h);
     }
 
     /**
-     * 玩家弹体形象：按施法职业取专属素材——巫师=充能爆能法球、弓箭手=飞刀（按飞行方向取预烘焙朝向），
+     * 玩家弹体形象：按施法职业取专属素材——法师=充能爆能法球、弓箭手=飞刀（按飞行方向取预烘焙朝向），
      * 其余职业（召唤师等）沿用元素配色弹。职业从 owner 的 Loadout 读，拿不到就退回元素弹。
      */
     private Image playerBoltImage(World w, int i) {
@@ -2022,6 +2113,16 @@ public final class Renderer {
                 gc.fillPolygon(new double[] { px - bb * 0.22, px, px + bb * 0.22 },
                         new double[] { py - 2, py - bb * 1.1, py - 2 }, 3);
             }
+            return;
+        }
+        if (sub == World.ZONE_DRAGON_BURN) {
+            // 飞龙灼烧带：橙红实心 + 火焰描边；用 t 做淡入淡出
+            double pulse = 0.85 + 0.15 * Math.sin(System.nanoTime() * 1.5e-8);
+            gc.setFill(Color.rgb(255, 110, 40, 0.42 * t));
+            gc.fillOval(sx - w.r[i], sy - w.r[i], w.r[i] * 2, w.r[i] * 2);
+            gc.setStroke(Color.rgb(255, 180, 60, 0.85 * t * pulse));
+            gc.setLineWidth(2);
+            gc.strokeOval(sx - w.r[i], sy - w.r[i], w.r[i] * 2, w.r[i] * 2);
             return;
         }
         // 其他区域：元素色的填充
@@ -3003,21 +3104,21 @@ public final class Renderer {
     private static final double LOBBY_STATION_RADIUS = 46.0;
 
     // ------------------------------------------------------------------
-    // 右侧角色细节卡：文案与数值。下标=职业 id（1..4 = 巫师/战士/弓箭手/召唤师）。
+    // 右侧角色细节卡：文案与数值。下标=职业 id（1..4 = 法师/战士/弓箭手/召唤师）。
     // ------------------------------------------------------------------
-    private static final String[] CARD_NAME = { "", "巫师", "战士", "弓箭手", "召唤师" };
+    private static final String[] CARD_NAME = { "", "法师", "战士", "弓箭手", "召唤师" };
     private static final String[] CARD_EN = { "", "WIZARD", "VANGUARD", "ARCHER", "SUMMONER" };
     private static final String[] CARD_ROLE = {
             "", "远程 · 法系爆发", "近战 · 范围挥砍", "远程 · 穿透点射", "辅助 · 召唤协战" };
     private static final String[][] CARD_FEATS = {
             {},
             { "法术伤害 +10%", "每 30 秒免费重抽", "远程弹幕 · 拉扯走位" },
-            { "生命 140 · 能扛能打", "受伤减免 15% · 击杀回血", "近战弧形 · 贴身压制" },
+            { "生命 280 · 能扛能打", "受伤减免 15% · 击杀回血", "近战弧形 · 贴身压制" },
             { "移速最快 · 游走风筝", "暴击 +10% · 箭箭穿心", "身板最脆 · 注意走位" },
-            { "生命 90 · 召唤协战", "每 10 秒召唤 4 只宠物", "宠物护主 · 鼠标指挥集火" } };
-    /** 数值条：0..1 的归一值（召唤师已开放，接 main 的真实属性） */
-    private static final double[] CARD_LIFE = { 0, 100 / 150.0, 140 / 150.0, 85 / 150.0, 90 / 150.0 };
-    private static final double[] CARD_SPEED = { 0, 195 / 235.0, 180 / 235.0, 205 / 235.0, 185 / 235.0 };
+            { "生命 180 · 召唤协战", "每 10 秒召唤 4 只宠物", "宠物护主 · 鼠标指挥集火" } };
+    /** 生命 / 移速条的满格标尺：直接读 HeroClass 实时值，调平衡时卡片自动跟随 */
+    private static final float CARD_LIFE_SCALE  = 300f;   // 最高 280（战士）
+    private static final float CARD_SPEED_SCALE = 240f;   // 最高 230（弓箭手）
     /**
      * 起手武器数值条的满格标尺：攻击力 30（最强起手挥砍 26）、攻击范围 800（最远箭矢 760）。
      * 这两个数值不落数组——直接读 HeroClass.startSpell 的实时值，调平衡时卡片自动跟随。
@@ -3056,13 +3157,13 @@ public final class Renderer {
                 minX, minY, maxX, maxY, altarC, altarR, gx, gy, gR, avatarR);
     }
 
-    /** 职业代表色：巫师 紫 / 战士 橙红 / 弓箭手 绿 / 召唤师 冰蓝 */
+    /** 职业代表色：法师 紫 / 战士 橙红 / 弓箭手 绿 / 召唤师 冰蓝 */
     private static Color classAccent(int cls) {
         return switch (cls) {
             case HeroClass.WARRIOR   -> Color.rgb(255, 140, 90);
             case HeroClass.ARCHER    -> Color.rgb(140, 230, 150);
             case LobbyClass.SUMMONER -> Color.rgb(150, 235, 255);
-            default                  -> Color.rgb(200, 140, 255);   // 巫师
+            default                  -> Color.rgb(200, 140, 255);   // 法师
         };
     }
 
@@ -3420,11 +3521,13 @@ public final class Renderer {
         // 数值条（宽度适配左栏；标签列统一按最宽标签「攻击范围」对齐）
         double barLabelW = measureWidth(Font.font("Microsoft YaHei", 12.5), "攻击范围");
         double barW = Math.max(56, leftW - barLabelW - 42);
-        drawCardBar(lx, iy, "生命", Math.round(CARD_LIFE[ck] * 150) + "",
-                CARD_LIFE[ck], ac, barW, barLabelW);
+        double lifeFrac = HeroClass.baseHp(ck) / CARD_LIFE_SCALE;
+        drawCardBar(lx, iy, "生命", Math.round(HeroClass.baseHp(ck)) + "",
+                lifeFrac, ac, barW, barLabelW);
         iy += 27;
-        drawCardBar(lx, iy, "移速", Math.round(CARD_SPEED[ck] * 235) + "",
-                CARD_SPEED[ck], Color.rgb(120, 220, 255), barW, barLabelW);
+        double speedFrac = HeroClass.baseSpeed(ck) / CARD_SPEED_SCALE;
+        drawCardBar(lx, iy, "移速", Math.round(HeroClass.baseSpeed(ck)) + "",
+                speedFrac, Color.rgb(120, 220, 255), barW, barLabelW);
         iy += 27;
         drawCardBar(lx, iy, "攻击力", Math.round(starterDamage(ck)) + "",
                 starterDamage(ck) / CARD_ATK_SCALE, Color.rgb(255, 140, 105), barW, barLabelW);

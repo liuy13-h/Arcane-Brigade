@@ -10,7 +10,7 @@ import java.nio.ByteBuffer;
  */
 public final class InputCommand {
 
-    public static final int BYTES = 4 + 4 + 4 + 4 + 4;
+    public static final int BYTES = 4 + 4 + 4 + 4 + 4 + 4;
 
     /** 期望移动方向，未归一化时长度 &lt;= 1 */
     public float dx;
@@ -20,12 +20,17 @@ public final class InputCommand {
     /** 手动开火时的瞄准世界坐标 */
     public float aimX;
     public float aimY;
+    /**
+     * 蓄力进度 0..1：长按开火键期间由客户端累计（到 1 封顶），松开当帧归零。
+     * 目前仅战士的近战扇形消费它（蓄力重击放大斩击范围与伤害）；其他职业忽略。
+     */
+    public float charge;
 
     /** 手动开火按钮位 */
     public static final int BUTTON_FIRE = 1;
     /** 指挥按钮位：鼠标点击/按住，给召唤师的宠物下令"朝这里进攻" */
     public static final int BUTTON_ORDER = 2;
-    /** 战士冲刺按钮位：空格触发，冷却内只认就绪的那一次 */
+    /** 主动位移（冲刺）按钮位：空格触发，冷却内只认就绪的那一次（弓箭手 & 战士的位移技共用） */
     public static final int BUTTON_DASH = 4;
 
     public void reset() {
@@ -34,6 +39,7 @@ public final class InputCommand {
         buttons = 0;
         aimX = 0f;
         aimY = 0f;
+        charge = 0f;
     }
 
     public void set(float dx, float dy) {
@@ -55,6 +61,7 @@ public final class InputCommand {
         b.putInt(buttons);
         b.putFloat(aimX);
         b.putFloat(aimY);
+        b.putFloat(charge);
     }
 
     public void read(ByteBuffer b) {
@@ -63,6 +70,7 @@ public final class InputCommand {
         buttons = b.getInt();
         aimX = b.getFloat();
         aimY = b.getFloat();
+        charge = b.getFloat();
     }
 
     public InputCommand copy() {
@@ -72,6 +80,7 @@ public final class InputCommand {
         c.buttons = buttons;
         c.aimX = aimX;
         c.aimY = aimY;
+        c.charge = charge;
         return c;
     }
 }

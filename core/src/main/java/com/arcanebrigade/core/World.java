@@ -46,6 +46,12 @@ public final class World {
     public static final int ZONE_KING_SPIKE_TELE = 5;
     /** 三阶段地刺：出刺后的刺身视觉（纯视觉载体，不参与 tick 伤害） */
     public static final int ZONE_KING_SPIKE = 6;
+    /**
+     * 飞龙灼烧带：用 KIND_ZONE 但**不走通用 updateZones**——单独由 updateDragonBurns tick，
+     * 只对玩家/宠物生效（飞龙火球留下的"惩罚带"，不能用来烧怪）。
+     * 渲染按 ZONE_FIRE 的火焰地效处理，客户端判断 meta==ZONE_DRAGON_BURN 时用同款红橙色。
+     */
+    public static final int ZONE_DRAGON_BURN = 7;
 
     /** 敌人变体。普通怪不做特殊行为，其余按类型分派 */
     public static final int V_NORMAL = 0;
@@ -108,14 +114,22 @@ public final class World {
     public final float[] cd = new float[MAX];
     /** 受击无敌剩余时间，&lt;=0 才能再次受伤 */
     public final float[] iframe = new float[MAX];
-
-    /** 战士冲刺：冲刺剩余持续时间（>0 表示正在冲刺） */
-    public final float[] dashTimer = new float[MAX];
-    /** 战士冲刺：冷却剩余（>0 表示尚不可用） */
+    /** 主动位移（冲刺）冷却剩余（秒），&lt;=0 才就绪。弓箭手：每发充能恢复 1 格的计时；战士：单发 CD */
     public final float[] dashCd = new float[MAX];
-    /** 战士冲刺：本段冲刺的方向（单位向量） */
-    public final float[] dashDirX = new float[MAX];
-    public final float[] dashDirY = new float[MAX];
+    /**
+     * 弓箭手的冲刺弹药数（0..ARCHER_DASH_MAX）。出生即满发。
+     * 每用一发减 1，CD 到 0 再回 1，直到满发为止。
+     * 战士与无冲刺职业该字段恒为 0（不画 HUD）。
+     */
+    public final int[] dashCharges = new int[MAX];
+    /** 主动位移剩余持续时长（秒），&gt;0 时按 dash 速度位移 */
+    public final float[] dashTime = new float[MAX];
+
+    /** 战士是否正处于"蓄力重击"状态（上一帧判定，用于识别松开帧的释放） */
+    private boolean warriorCharging;
+    /** 松开鼠标当帧锁存的蓄力进度 0..1，供这次重击放大斩击与伤害 */
+    private float warriorChargePower;
+
 
     public final int[] kind = new int[MAX];
     public final int[] team = new int[MAX];
@@ -182,13 +196,6 @@ public final class World {
     private int enemiesAlive;
     private int kills;
     /**
-     * 骨蛇的节链，**按顺序**存放（0 = 头，末尾 = 尾），生成时一次填好。
-     * 渲染与链式跟随都要"第 n 节"，而 SoA 只有 id 没有顺序——靠这张表补上。
-     * 场上同时最多一条骨蛇（WaveDirector 等上一条倒下才刷下一条）。
-     */
-    private final IntList serpentSegments =
-            new IntList(com.arcanebrigade.core.enemy.EnemyStats.SERPENT_SEGMENTS);
-    /**
      * 骨蛇上一次结算伤害的**世界时间戳**，用于"一帧只挨一次打"。
      * time 每步递增一个 FIXED_STEP，同一帧内的多次 damage() 拿到的是同一个值，
      * 所以相等即同帧。初值 -1f 永远不会等于正常时间，无需在生成时重置。
@@ -244,6 +251,12 @@ public final class World {
      * 一个字段就够用。线程/上下文切换只会让代码复杂、不会带来性能。
      */
     private final int[] curSerpentSegs = new int[BONE_SERPENT_SEG];
+    {
+        // 必须显式填 -1：int[] 默认是 0，而 0 是合法实体 id（法师本人），
+        // 第一次 setSerpentContext 之前会让 serpentSegment(0) 返回一个"活着的
+        // 非骨蛇实体"，把 BoneSerpent.followBody 和外部调用方一起骗过去。
+        for (int i = 0; i < BONE_SERPENT_SEG; i++) curSerpentSegs[i] = -1;
+    }
 
     /** 把槽 slot 的段快照到 curSerpentSegs，供 BoneSerpent.update 访问 */
     private void setSerpentContext(int slot) {
@@ -263,13 +276,31 @@ public final class World {
         return BONE_SERPENT_SEG;
     }
 
-    /** BoneSerpent.update 用：当前正在更新的骨蛇第 n 段的 enemies[] id（无效时返回 -1） */
+    /** 骨蛇第 n 段的 enemies[] id（无效时返回 -1） */
     public int serpentSegment(int n) {
         if (n < 0 || n >= BONE_SERPENT_SEG) {
             return -1;
         }
         int id = curSerpentSegs[n];
-        return (id >= 0 && alive[id]) ? id : -1;
+        if (id >= 0 && alive[id]) {
+            return id;
+        }
+        // 更新上下文之外（step 之前、或当场没有蛇在更新）退回常驻的槽位列表。
+        // curSerpentSegs 只在 BoneSerpent.update 期间被 setSerpentContext 填过，
+        // 没有这层兜底，任何 step() 之前的调用都会拿到 -1——对 BoneSerpent 之外的
+        // 调用方（冒烟测试、外部查询）来说，这个公开访问器就等于永远返回 -1。
+        // 多条蛇并存时取第一条活着的；更新期间永远走上面的快路径，不受影响。
+        for (int slot = 0; slot < MAX_BONE_SERPENT; slot++) {
+            IntList list = serpentSegsBySlot[slot];
+            if (list == null || n >= list.size()) {
+                continue;
+            }
+            int sid = list.get(n);
+            if (sid >= 0 && alive[sid]) {
+                return sid;
+            }
+        }
+        return -1;
     }
 
     /** 推进骨蛇 slot（由 updateEnemies 调用）。头死了就释放槽位 */
@@ -319,8 +350,26 @@ public final class World {
     private boolean abandoned;
     /** 开火模式：true=自动索敌开火，false=手动（朝鼠标方向，按住开火） */
     private boolean autoFire = true;
+    /** 预警圈倒计时（phase≥2 才有） */
     private float bossWarningTimer;
+    /** 召唤小怪倒计时（phase≥3 才有） */
     private float bossSummonTimer;
+    /**
+     * 飞碟 Boss（tier 0）专属：追踪炮弹齐射的倒计时。
+     * 场上没有飞碟时此字段无意义（更新时按 tier==0 才扣时间）。
+     */
+    private float bossHomingTimer;
+    /**
+     * 飞龙 Boss（tier 1 / tier 2）专属：飞行火球的齐射倒计时。
+     * tier 1 单发 → DRAGON_BOLT_CD_TIER1，tier 2 双发 → DRAGON_BOLT_CD_TIER2。
+     */
+    private float bossBoltTimer;
+    /** 场上所有"飞龙火球"实体 id（用于每帧推进 + 播种灼烧带） */
+    private final IntList dragonBolts = new IntList(8);
+    /** 场上所有"飞龙灼烧带"实体 id（5 秒内持续扣血，独立 tick 不走 updateZones） */
+    private final IntList dragonBurns = new IntList(32);
+    /** 飞龙火球飞行过程中已播种的距离（每凑够 DRAGON_BURN_STEP 就归零重铺一团） */
+    private final float[] burnStep = new float[MAX];
 
     // ---- 战斗事件（小任务）状态 ----
     /** 下一个待触发事件的 EVENT_TIMES 下标 */
@@ -698,7 +747,7 @@ public final class World {
     }
 
     /**
-     * 按职业生成玩家。设置基础 HP / 移速、起手主动技能、起手被动（巫师带"重抽"），
+     * 按职业生成玩家。设置基础 HP / 移速、起手主动技能、起手被动（法师带"重抽"），
      * 并把职业记到 Loadout 上——Stats.recompute 据此套用职业特性（减伤 / 暴击 / 法伤）。
      */
     public int spawnWizard(float sx, float sy, int classKind) {
@@ -718,6 +767,12 @@ public final class World {
         }
         loadout[id] = lo;
         wizards.add(id);
+        dashCd[id] = 0f;       // 出生即可用一次位移
+        // 弓箭手：出生即满发；其他职业不画冲刺 HUD，charge 字段无意义
+        dashCharges[id] = (classKind == HeroClass.ARCHER) ? Balance.ARCHER_DASH_MAX : 0;
+        dashTime[id] = 0f;
+        vx[id] = 0f;
+        vy[id] = 0f;
         return id;
     }
 
@@ -960,6 +1015,11 @@ public final class World {
         bossTier = t;
         bossWarningTimer = Balance.WARNING_TELEGRAPH + 1.5f;
         bossSummonTimer = Balance.BOSS_SUMMON_INTERVAL;
+        // 飞碟（tier 0）：首轮追踪弹从第一个 CD 开始计时，让玩家一上来就被告知「会飞弹」的压迫感
+        bossHomingTimer = (t == 0) ? Balance.BOSS_HOMING_CD : 0f;
+        // 飞龙（tier 1 / 2）：首轮火球按对应 CD 起步，让飞龙出场就能立刻吐火——节奏跟飞碟对齐
+        bossBoltTimer = (t == 1) ? Balance.DRAGON_BOLT_CD_TIER1
+                       : (t == 2) ? Balance.DRAGON_BOLT_CD_TIER2 : 0f;
     }
 
     /**
@@ -1117,8 +1177,10 @@ public final class World {
         }
         castSpells(dt, in);
         updateProjectiles(dt);
+        updateDragonBolts(dt);     // 飞龙火球：定向飞行 + 沿途播种灼烧带
         updatePickups(dt);
         updateZones(dt);
+        updateDragonBurns(dt);     // 飞龙灼烧带：玩家/宠物路过持续扣血
         updateArenaTraps();
         updateFx(dt);
         if (!kingArena) {
@@ -1482,47 +1544,21 @@ public final class World {
                 moveMul *= 1f + Balance.LAST_STAND_MOVE;
             }
 
-            // 战士冲刺：每 5 秒可触发一次短距冲刺，冲刺期间无敌
-            if (dashCd[id] > 0f) {
-                dashCd[id] -= dt;
-            }
-            if (ck == HeroClass.WARRIOR && (in.buttons & InputCommand.BUTTON_DASH) != 0
-                    && dashCd[id] <= 0f && dashTimer[id] <= 0f) {
-                float ddx = in.dx, ddy = in.dy;
-                if (ddx == 0f && ddy == 0f) {
-                    // 没按方向：朝最近敌人冲，否则默认朝上
-                    int tgt = nearestEnemy(x[id], y[id], 99999f);
-                    if (tgt >= 0) {
-                        ddx = x[tgt] - x[id];
-                        ddy = y[tgt] - y[id];
-                    } else {
-                        ddx = 0f;
-                        ddy = -1f;
-                    }
-                }
-                float dl = (float) Math.sqrt(ddx * ddx + ddy * ddy);
-                if (dl > 1e-4f) {
-                    ddx /= dl;
-                    ddy /= dl;
-                }
-                dashDirX[id] = ddx;
-                dashDirY[id] = ddy;
-                dashTimer[id] = Balance.DASH_DURATION;
-                dashCd[id] = Balance.DASH_CD;
-            }
+            // 主动位移（冲刺）：空格触发，朝鼠标方向飞速位移一小段（弓箭手 & 战士）
+            handleDash(in, id, ck);
 
-            // 决战二阶段：国王夺走 20 点移速（保底 40，避免角色完全无法行动）
-            float baseSpeed = Math.max(40f, HeroClass.baseSpeed(ck) * arenaMap.movementMultiplierAt(x[id], y[id]) - kingSpeedPenalty);
+            float baseSpeed = HeroClass.baseSpeed(ck) * arenaMap.movementMultiplierAt(x[id], y[id]);
             x[id] += in.dx * baseSpeed * moveMul * dt;
             y[id] += in.dy * baseSpeed * moveMul * dt;
-            if (dashTimer[id] > 0f) {
-                // 冲刺在普通移动之上叠加一段爆发位移
-                x[id] += dashDirX[id] * Balance.DASH_SPEED * dt;
-                y[id] += dashDirY[id] * Balance.DASH_SPEED * dt;
-                dashTimer[id] -= dt;
-                // 冲刺全程无敌：把受击无敌刷到不低于剩余冲刺时间
-                if (iframe[id] < dashTimer[id]) {
-                    iframe[id] = dashTimer[id];
+            // 位移期间的额外冲量（叠加在普通移动之上）
+            if (dashTime[id] > 0f) {
+                x[id] += vx[id] * dt;
+                y[id] += vy[id] * dt;
+                dashTime[id] -= dt;
+                if (dashTime[id] <= 0f) {
+                    dashTime[id] = 0f;
+                    vx[id] = 0f;
+                    vy[id] = 0f;
                 }
             }
             resolveObstacles(id);
@@ -1534,14 +1570,96 @@ public final class World {
             if (iframe[id] > 0f) {
                 iframe[id] -= dt;
             }
+            // 主动位移冷却推进：战士单发 CD；弓箭手只缺弹药时计充能
+            if (ck == HeroClass.ARCHER) {
+                // 弓箭手：满发就停表，绝不往后跑负数
+                if (dashCharges[id] < Balance.ARCHER_DASH_MAX) {
+                    dashCd[id] -= dt;
+                    if (dashCd[id] <= 0f) {
+                        dashCharges[id]++;
+                        dashCd[id] = (dashCharges[id] < Balance.ARCHER_DASH_MAX)
+                                ? Balance.ARCHER_DASH_CD : 0f;
+                    }
+                }
+            } else if (ck == HeroClass.WARRIOR) {
+                if (dashCd[id] > 0f) {
+                    dashCd[id] -= dt;
+                }
+            }
             // 回血：基础 + 被动 + 绝境爆发
             float regen = Balance.WIZARD_REGEN
-                    + (st != null ? st.regenAdd : 0f)
-                    + (st != null && st.lastStandActive ? Balance.LAST_STAND_DAMAGE * 4f : 0f);
+                    + (st != null ? st.regenAdd : 0f);
             if (hp[id] < maxHp[id]) {
                 hp[id] = Math.min(maxHp[id], hp[id] + regen * dt);
             }
         }
+    }
+
+    /**
+     * 主动位移（冲刺）：空格按下且冷却就绪时，朝鼠标所指方向飞速位移一小段。
+     *   - 弓箭手：充能型，出生满 3 发；每用一发扣 1 颗，每 5s 补 1 颗
+     *   - 战士：单发 CD，5 秒一次
+     * 位移期间附带短暂无敌帧，使其能真正用来躲避弹幕与接触伤害。
+     * 位移用 vx/vy 承载冲量（与渲染朝向共用，冲刺时人物会朝位移方向），结束时归零。
+     */
+    private void handleDash(InputCommand in, int id, int ck) {
+        if (ck != HeroClass.ARCHER && ck != HeroClass.WARRIOR) {
+            return;     // 仅弓箭手与战士拥有主动位移（巫师/召唤师无）
+        }
+        if ((in.buttons & InputCommand.BUTTON_DASH) == 0) {
+            return;     // 本帧未触发
+        }
+        // 就绪判定：弓箭手看充能数（>0 才能冲），战士看 dashCd 归零
+        if (ck == HeroClass.ARCHER) {
+            if (dashCharges[id] <= 0) {
+                return;     // 弹药耗尽，硬等下一发
+            }
+        } else {
+            if (dashCd[id] > 0f) {
+                return;     // 战士的 CD 没好
+            }
+        }
+        float dx = in.aimX - x[id];
+        float dy = in.aimY - y[id];
+        float len = (float) Math.sqrt(dx * dx + dy * dy);
+        if (len < 1e-3f) {
+            // 鼠标正好压在身上：改用当前移动输入方向；都没有则取消本次位移
+            dx = in.dx;
+            dy = in.dy;
+            len = (float) Math.sqrt(dx * dx + dy * dy);
+            if (len < 1e-3f) {
+                return;
+            }
+        }
+        float nx = dx / len;
+        float ny = dy / len;
+        // 按职业取对应的位移参数（集中在 Balance）
+        float dashDist, dashTimeVal, dashCdReset, dashIframe;
+        if (ck == HeroClass.WARRIOR) {
+            dashDist    = Balance.WARRIOR_DASH_DIST;
+            dashTimeVal = Balance.WARRIOR_DASH_TIME;
+            dashCdReset = Balance.WARRIOR_DASH_CD;
+            dashIframe  = Balance.WARRIOR_DASH_IFRAME;
+        } else { // ARCHER
+            dashDist    = Balance.ARCHER_DASH_DIST;
+            dashTimeVal = Balance.ARCHER_DASH_TIME;
+            dashCdReset = Balance.ARCHER_DASH_CD;
+            dashIframe  = Balance.ARCHER_DASH_IFRAME;
+        }
+        float dashSpeed = dashDist / dashTimeVal;
+        vx[id] = nx * dashSpeed;
+        vy[id] = ny * dashSpeed;
+        this.dashTime[id] = dashTimeVal;
+        // 扣弹药 vs 重置战士 CD
+        if (ck == HeroClass.ARCHER) {
+            dashCharges[id]--;
+            // dashCd 仍是下一发的充能倒计时：耗完一发后启动下一发的充能
+            this.dashCd[id] = dashCdReset;
+        } else { // WARRIOR
+            this.dashCd[id] = dashCdReset;
+        }
+        // 位移无敌：取较大者，避免覆盖已有的受击无敌
+        iframe[id] = Math.max(iframe[id], dashIframe);
     }
 
     private void updateEnemies(float dt) {
@@ -1592,7 +1710,7 @@ public final class World {
             }
             // 冰霜减速
             float slow = (elem[i] == Element.FROST)
-                    ? Math.min(elemP[i], Balance.ELEM_FROST_MAX_SLOW) : 0f;
+                    ? Math.min(elemP[i], Balance.ELEM_FROST_MAX_SLOW) * ccMul(i) : 0f;
             float moveSpeed = speed[i] * (1f - slow) * arenaMap.movementMultiplierAt(x[i], y[i]);
 
             float dx = x[target] - x[i];
@@ -1695,6 +1813,11 @@ public final class World {
         }
         x[id] += vx[id] * dt;
         y[id] += vy[id] * dt;
+        // 击退：小偷的移动分支会覆写 vx/vy，所以 kx/ky 必须单独叠加，否则挨打毫无反馈
+        x[id] += kx[id] * dt;
+        y[id] += ky[id] * dt;
+        kx[id] *= (float) Math.exp(-Balance.KNOCKBACK_DECAY * dt);
+        ky[id] *= (float) Math.exp(-Balance.KNOCKBACK_DECAY * dt);
         resolveObstacles(id);
         clampToWorld(id);
         if (gem >= 0) {
@@ -1736,6 +1859,11 @@ public final class World {
             vy[id] = ny * move;
             x[id] += vx[id] * dt;
             y[id] += vy[id] * dt;
+            // 击退：远程怪的 vx/vy 是"站位速度"，kx/ky 单独叠加才看得到挨打反馈
+            x[id] += kx[id] * dt;
+            y[id] += ky[id] * dt;
+            kx[id] *= (float) Math.exp(-Balance.KNOCKBACK_DECAY * dt);
+            ky[id] *= (float) Math.exp(-Balance.KNOCKBACK_DECAY * dt);
             resolveObstacles(id);
             clampToWorld(id);   // 远程怪同样被边界挡住
             cd[id] -= dt;
@@ -1772,7 +1900,7 @@ public final class World {
         projTarget[id] = -1;
     }
 
-    /** Boss 阶段技能：预警圈 + 召唤。Boss 的追击与接触伤害由 updateEnemies 通用逻辑驱动 */
+    /** Boss 阶段技能：预警圈 + 召唤 + 飞碟专属追踪弹。Boss 的追击与接触伤害由 updateEnemies 通用逻辑驱动 */
     private void updateBossPhase(float dt) {
         int b = bossId;
         if (!alive[b]) {
@@ -1806,6 +1934,313 @@ public final class World {
                 bossSummonTimer = Balance.BOSS_SUMMON_INTERVAL;
             }
         }
+        // 飞碟 Boss（tier 0）专属：低频率齐射追踪弹，四向散开，缓慢追踪。
+        // 仅在 phase >= 1 起就启用——飞碟的"招牌动作"不该等半血才放。
+        if (bossTier == 0) {
+            bossHomingTimer -= dt;
+            if (bossHomingTimer <= 0f) {
+                spawnBossHomingVolley(b);
+                bossHomingTimer = Balance.BOSS_HOMING_CD;
+            }
+        }
+        // 飞龙 Boss（tier 1 熔岩飞龙 / tier 2 霜寂飞龙）专属：
+        // 定向直线慢速火球 + 飞行路径上撒 5 秒灼烧带。
+        // tier 1 单发、tier 2 双发（双发时 CD 稍长一档，避免弹幕墙）。
+        if (bossTier == 1 || bossTier == 2) {
+            bossBoltTimer -= dt;
+            if (bossBoltTimer <= 0f) {
+                spawnDragonBoltVolley(b);
+                bossBoltTimer = (bossTier == 1)
+                        ? Balance.DRAGON_BOLT_CD_TIER1
+                        : Balance.DRAGON_BOLT_CD_TIER2;
+            }
+        }
+    }
+
+    /**
+     * 在 Boss 周围均分 BOSS_HOMING_COUNT 个方向各发射一颗追踪弹。
+     * 初始朝向沿"该方向"斜飞出去，再由每帧转向逻辑缓慢追玩家——刻意做"撒出去再追"。
+     */
+    private void spawnBossHomingVolley(int boss) {
+        if (!alive[boss]) {
+            return;
+        }
+        int count = Balance.BOSS_HOMING_COUNT;
+        // 起始角度带一点点随机抖动，避免多轮弹道完全重合
+        float baseAngle = rng.nextFloat() * (float) (Math.PI * 2);
+        for (int i = 0; i < count; i++) {
+            float a = baseAngle + (float) (Math.PI * 2) * i / count;
+            int id = alloc(KIND_PROJECTILE,
+                    x[boss] + (float) Math.cos(a) * (r[boss] + 6f),
+                    y[boss] + (float) Math.sin(a) * (r[boss] + 6f),
+                    Balance.BOSS_HOMING_RADIUS, TEAM_ENEMY);
+            if (id < 0) {
+                continue;
+            }
+            // 弹道初始速度按"沿出膛方向 + 一点斜向上"的合成方向飞出去
+            vx[id] = (float) Math.cos(a) * Balance.BOSS_HOMING_SPD;
+            vy[id] = (float) Math.sin(a) * Balance.BOSS_HOMING_SPD;
+            dmg[id] = Balance.BOSS_HOMING_DMG;
+            life[id] = Balance.BOSS_HOMING_LIFE;
+            owner[id] = boss;
+            // meta 用一个对玩家无歧义的"魔法"id：之后渲染用这个判定是否画追踪弹
+            meta[id] = -1;
+            pierce[id] = 0;
+            lastHit[id] = -1;
+            projAoe[id] = Balance.BOSS_HOMING_BLAST_R;
+            projChain[id] = 0;
+            projBounce[id] = 0;
+            projTarget[id] = -1;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 飞龙 Boss（tier 1 熔岩飞龙 / tier 2 霜寂飞龙）专属：定向飞行火球 + 灼烧带
+    // ------------------------------------------------------------------
+
+    /**
+     * 朝玩家当前所在方向吐火球。tier 1 单发、tier 2 双发（扇形 ±半角展开）。
+     * 火球是"定向直线"——不追踪，只是朝着按下发射键那一刻的玩家方向直飞。
+     * 飞行过程中按固定间距播种灼烧带（DRAGON_BURN_STEP 一团），
+     * 玩家即使躲开火球本体，也要花 5 秒绕开身后的灼烧带。
+     */
+    private void spawnDragonBoltVolley(int boss) {
+        if (!alive[boss]) {
+            return;
+        }
+        int w = firstWizard();
+        if (w < 0) {
+            return;
+        }
+        // 瞄准方向：朝向玩家当前位置
+        float dx = x[w] - x[boss];
+        float dy = y[w] - y[boss];
+        float len = (float) Math.sqrt(dx * dx + dy * dy);
+        if (len < 1e-3f) {
+            return;
+        }
+        float baseAngle = (float) Math.atan2(dy, dx);
+        int count = (bossTier == 2) ? 2 : 1;
+        float half = Balance.DRAGON_BOLT_TIER2_HALF;
+        for (int i = 0; i < count; i++) {
+            // i=0 用 -half、i=1 用 +half；count==1 时偏移为 0
+            float a = baseAngle + (count == 1 ? 0f : (i == 0 ? -half : half));
+            int id = alloc(KIND_PROJECTILE,
+                    x[boss] + (float) Math.cos(a) * (r[boss] + 4f),
+                    y[boss] + (float) Math.sin(a) * (r[boss] + 4f),
+                    Balance.DRAGON_BOLT_RADIUS, TEAM_ENEMY);
+            if (id < 0) {
+                continue;
+            }
+            vx[id] = (float) Math.cos(a) * Balance.DRAGON_BOLT_SPD;
+            vy[id] = (float) Math.sin(a) * Balance.DRAGON_BOLT_SPD;
+            dmg[id] = Balance.DRAGON_BOLT_DMG;
+            life[id] = Balance.DRAGON_BOLT_LIFE;
+            owner[id] = boss;
+            // meta = -2：飞龙火球的"魔法"id（与飞碟追踪弹 -1 错开）
+            meta[id] = -2;
+            pierce[id] = 0;
+            lastHit[id] = -1;
+            projAoe[id] = 0f;
+            projChain[id] = 0;
+            projBounce[id] = 0;
+            projTarget[id] = -1;
+            // 起飞瞬间先铺第一团灼烧，免得火球刚出膛玩家就已经路过
+            spawnDragonBurn(x[id], y[id]);
+            // 飞行播种进度：从 0 开始累加，每走够 DRAGON_BURN_STEP 再铺一团
+            burnStep[id] = 0f;
+            dragonBolts.add(id);
+        }
+    }
+
+    /**
+     * 在指定点种一团 5 秒灼烧带（ZONE_FIRE）。
+     * 走 updateZones 的常规周期 tick 路径，但需要把"打敌人"改成"打玩家/宠物"——
+     * 这里在 spawnDragonBurn 里把 owner 标为 TEAM_ENEMY 的飞龙本体，
+     * 然后在 updateDragonBolts 里**单独维护一个飞龙灼烧带列表**，
+     * 每帧对玩家/宠物做距离判定并按 tick 频率扣血，避免污染 updateZones 的通用逻辑。
+     * （直接把伤害写进 dmg 数组 + 单独 tick，最小改动现有 zone 系统。）
+     */
+    private void spawnDragonBurn(float sx, float sy) {
+        int id = alloc(KIND_ZONE, sx, sy, Balance.DRAGON_BURN_RADIUS, TEAM_ENEMY);
+        if (id < 0) {
+            return;
+        }
+        life[id] = Balance.DRAGON_BURN_DURATION;
+        speed[id] = Balance.DRAGON_BURN_DURATION;
+        // 把"持续 DPS"塞进 dmg（标准 zone 用法，updateZones 也是这么读的）
+        dmg[id] = Balance.DRAGON_BURN_DPS;
+        elem[id] = Element.FIRE;
+        // 用 iframe 当 tick 计时器（0 = 刚铺、0.5 = 已 tick 过一次）
+        iframe[id] = 0f;
+        cd[id] = 0f;
+        owner[id] = -1;     // Boss 来源，zone 走不到元素叠加公式里
+        // 单独 sub type：让 updateZones 跳过，由 updateDragonBurns 接管
+        meta[id] = ZONE_DRAGON_BURN;
+        dragonBurns.add(id);
+    }
+
+    /**
+     * 每帧推进所有飞行中的飞龙火球：
+     * ① 按 vx/vy 移动；② 每飞够 DRAGON_BURN_STEP 在当前位置铺一团灼烧；
+     * ③ 撞玩家/宠物/障碍/到寿就消散。
+     * 撞玩家按标准 onHit 路径：damage + 设 iframe；撞宠物同理；
+     * 撞障碍/世界边：直接消散（不爆，灼烧带已经留下去了）。
+     */
+    private void updateDragonBolts(float dt) {
+        for (int n = dragonBolts.size() - 1; n >= 0; n--) {
+            int id = dragonBolts.get(n);
+            if (!alive[id]) {
+                dragonBolts.removeAt(n);
+                continue;
+            }
+            float px = x[id];
+            float py = y[id];
+            // 1) 推进位置
+            x[id] = px + vx[id] * dt;
+            y[id] = py + vy[id] * dt;
+            // 2) 寿命倒数
+            life[id] -= dt;
+            // 3) 跨出可玩区 → 消散（避免遗留在场外）
+            float half = Balance.PLAY_HALF;
+            if (x[id] < -half || x[id] > half || y[id] < -half || y[id] > half) {
+                despawn(id);
+                dragonBolts.removeAt(n);
+                continue;
+            }
+            // 4) 寿命到 0 → 消散（不再留灼烧）
+            if (life[id] <= 0f) {
+                despawn(id);
+                dragonBolts.removeAt(n);
+                continue;
+            }
+            // 5) 飞行过程中按固定间距播种灼烧带
+            burnStep[id] += Balance.DRAGON_BOLT_SPD * dt;
+            if (burnStep[id] >= Balance.DRAGON_BURN_STEP) {
+                burnStep[id] = 0f;
+                spawnDragonBurn(x[id], y[id]);
+            }
+            // 6) 撞障碍（用标准 pushOutOfObstacle 的"是否重叠"判定，简化版：圆 vs 圆）
+            if (overlapsAnyObstacle(x[id], y[id], r[id])) {
+                despawn(id);
+                dragonBolts.removeAt(n);
+                continue;
+            }
+            // 7) 撞玩家
+            boolean hit = false;
+            for (int w = 0; w < wizards.size(); w++) {
+                int wz = wizards.get(w);
+                if (!alive[wz]) continue;
+                float ddx = x[wz] - x[id];
+                float ddy = y[wz] - y[id];
+                float rr = r[id] + r[wz];
+                if (ddx * ddx + ddy * ddy <= rr * rr) {
+                    if (iframe[wz] <= 0f) {
+                        damage(wz, dmg[id]);
+                        iframe[wz] = heroIframe(wz);
+                    }
+                    hit = true;
+                    break;
+                }
+            }
+            // 8) 撞宠物（召唤师也要被飞龙打到）
+            if (!hit) {
+                for (int m = 0; m < minions.size(); m++) {
+                    int mn = minions.get(m);
+                    if (!alive[mn]) continue;
+                    float ddx = x[mn] - x[id];
+                    float ddy = y[mn] - y[id];
+                    float rr = r[id] + r[mn];
+                    if (ddx * ddx + ddy * ddy <= rr * rr) {
+                        if (iframe[mn] <= 0f) {
+                            damage(mn, dmg[id]);
+                            iframe[mn] = Balance.MINION_IFRAME;
+                        }
+                        hit = true;
+                        break;
+                    }
+                }
+            }
+            if (hit) {
+                despawn(id);
+                dragonBolts.removeAt(n);
+            }
+        }
+    }
+
+    /**
+     * 每帧推进所有飞龙灼烧带：玩家/宠物走过即按 tick 节奏扣血。
+     * 复用 updateZones 的 0.5s tick 间隔：把"累计时间"塞进 iframe 字段，到 0.5 就结算一次并清零。
+     * 这样玩家踩在灼烧带里就是 5 秒 × (DRAGON_BURN_DPS × 0.5) = 5 × DPS 的累计伤害。
+     */
+    private void updateDragonBurns(float dt) {
+        for (int n = dragonBurns.size() - 1; n >= 0; n--) {
+            int zid = dragonBurns.get(n);
+            if (!alive[zid]) {
+                dragonBurns.removeAt(n);
+                continue;
+            }
+            life[zid] -= dt;
+            if (life[zid] <= 0f) {
+                despawn(zid);
+                dragonBurns.removeAt(n);
+                continue;
+            }
+            // 每 0.5 秒 tick 一次
+            iframe[zid] += dt;
+            if (iframe[zid] < 0.5f) {
+                continue;
+            }
+            iframe[zid] = 0f;
+            float radius = r[zid];
+            float dps = dmg[zid];
+            float halfTick = dps * 0.5f;   // 单次 tick 伤害 = DPS × 0.5s
+            // 玩家：踩到就吃
+            for (int w = 0; w < wizards.size(); w++) {
+                int wz = wizards.get(w);
+                if (!alive[wz]) continue;
+                float ddx = x[wz] - x[zid];
+                float ddy = y[wz] - y[zid];
+                float rr = radius + r[wz];
+                if (ddx * ddx + ddy * ddy <= rr * rr && iframe[wz] <= 0f) {
+                    damage(wz, halfTick);
+                    iframe[wz] = heroIframe(wz);
+                }
+            }
+            // 宠物：同样吃
+            for (int m = 0; m < minions.size(); m++) {
+                int mn = minions.get(m);
+                if (!alive[mn]) continue;
+                float ddx = x[mn] - x[zid];
+                float ddy = y[mn] - y[zid];
+                float rr = radius + r[mn];
+                if (ddx * ddx + ddy * ddy <= rr * rr && iframe[mn] <= 0f) {
+                    damage(mn, halfTick);
+                    iframe[mn] = Balance.MINION_IFRAME;
+                }
+            }
+        }
+    }
+
+    /**
+     * 飞龙火球撞障碍的简化版：圆 vs 圆。箱子和胶囊也按外接圆粗判——
+     * 火球撞到就消散，不需要"贴边滑行"那么精细。
+     */
+    private boolean overlapsAnyObstacle(float cx, float cy, float cr) {
+        obstacleHash.query(cx, cy, cr + Balance.OBSTACLE_MAX_R, scratch2);
+        for (int n = 0; n < scratch2.size(); n++) {
+            int o = scratch2.get(n);
+            if (!alive[o] || kind[o] != KIND_OBSTACLE || !obstacleBlocksMovement[o]) {
+                continue;
+            }
+            float ddx = x[o] - cx;
+            float ddy = y[o] - cy;
+            float rr = cr + r[o];
+            if (ddx * ddx + ddy * ddy <= rr * rr) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // ------------------------------------------------------------------
@@ -3014,6 +3449,22 @@ public final class World {
     /** 施法。自动模式下自动索敌放技能；手动模式下按住开火键朝 aim 方向放。 */
     private void castSpells(float dt, InputCommand in) {
         boolean manual = !autoFire;
+        /**
+         * 战士蓄力重击：长按左键累计到阈值即进入"蓄力"，此时近战扇形暂停自动触发；
+         * 松开鼠标的那一刻倾泻一次放大版重击。
+         * 用 warriorCharging 记录"上一帧是否处于蓄力"，从而在松开帧识别 release，
+         * 并把松开那一帧记下的 charge 值（warriorChargePower）交给本次重击使用。
+         */
+        int heroId = firstWizard();
+        boolean warriorHeld = manual && (in.buttons & InputCommand.BUTTON_FIRE) != 0
+                && heroId >= 0 && classOf(heroId) == HeroClass.WARRIOR;
+        boolean warriorNowCharging = warriorHeld && in.charge >= Balance.WARRIOR_CHARGE_MIN;
+        boolean warriorRelease = warriorCharging && !warriorNowCharging;
+        if (warriorNowCharging) {
+            warriorChargePower = in.charge;     // 持续刷新，松开那一刻即为最终蓄力值
+        }
+        warriorCharging = warriorNowCharging;
+
         for (int n = 0; n < wizards.size(); n++) {
             int id = wizards.get(n);
             if (!alive[id]) {
@@ -3023,6 +3474,7 @@ public final class World {
             if (lo == null) {
                 continue;
             }
+            boolean warrior = lo.classKind == HeroClass.WARRIOR;
             for (int s = 0; s < Loadout.SLOTS; s++) {
                 int raw = lo.spells[s];
                 if (raw == Spells.NONE) {
@@ -3036,22 +3488,37 @@ public final class World {
                 if (lo.cd[s] > 0f) {
                     continue;
                 }
+                // 战士的近战扇形受蓄力接管：蓄力中不放，松开帧放一次重击（并顺带放掉其他槽位）
+                boolean meleeArc = def.form == SpellDef.Form.MELEE_ARC;
+                float chargeOverride = 0f;
                 boolean fired;
                 if (manual) {
-                    // 手动：没按住开火键就不放，也不进冷却
-                    if ((in.buttons & InputCommand.BUTTON_FIRE) == 0) {
+                    boolean fireHeld = (in.buttons & InputCommand.BUTTON_FIRE) != 0;
+                    if (warrior && meleeArc && warriorCharging) {
+                        continue;       // 蓄力中：近战扇形暂停自动挥砍，等松开
+                    }
+                    boolean chargedRelease = warrior && meleeArc && warriorRelease;
+                    // 松开蓄力的那一帧开火键已经抬起，必须放行这次"重击"；
+                    // 其余情况仍要求按住开火键（没按住就不放，也不进冷却）。
+                    if (!fireHeld && !chargedRelease) {
                         continue;
                     }
+                    if (chargedRelease) {
+                        chargeOverride = warriorChargePower;   // 松开：释放放大版重击
+                    }
                     float facing = (float) Math.atan2(in.aimY - y[id], in.aimX - x[id]);
-                    fired = castOne(def, raw, id, s, true, facing);
+                    fired = castOne(def, raw, id, s, true, facing, chargeOverride);
                 } else {
-                    fired = castOne(def, raw, id, s, false, 0f);
+                    fired = castOne(def, raw, id, s, false, 0f, 0f);
                 }
                 if (fired) {
                     float cdTime = def.cooldown / Math.max(0.1f, lo.stats.atkSpeed);
                     lo.cd[s] = cdTime;
                 }
             }
+        }
+        if (warriorRelease) {
+            warriorChargePower = 0f;    // 重击已倾泻，清空蓄力
         }
     }
 
@@ -3079,6 +3546,14 @@ public final class World {
 
     /** 施放一个法术。返回是否成功出手（自动模式没找到目标就不进冷却，手动模式朝 aim 方向必出手） */
     private boolean castOne(SpellDef def, int rawSpellId, int caster, int slot, boolean manualAim, float facing) {
+        return castOne(def, rawSpellId, caster, slot, manualAim, facing, 0f);
+    }
+
+    /**
+     * 施放一个法术。charge 为这次出手的蓄力进度 0..1（仅近战扇形消费，0 即普通出手）。
+     * 返回是否成功出手（自动模式没找到目标就不进冷却，手动模式朝 aim 方向必出手）。
+     */
+    private boolean castOne(SpellDef def, int rawSpellId, int caster, int slot, boolean manualAim, float facing, float charge) {
         Loadout lo = loadout[caster];
         Stats st = lo.stats;
         if (!manualAim) {
@@ -3090,6 +3565,18 @@ public final class World {
             facing = (float) Math.atan2(y[target] - y[caster], x[target] - x[caster]);
         }
         float power = computePower(def, lo);
+        // 蓄力重击：范围/张角/伤害按 charge 线性放大（0 → 原值，1 → 满蓄力倍率）
+        float arcRadiusMul = 1f;
+        float arcAngleMul  = 1f;
+        float knockbackMul = 1f;
+        if (charge > 0f) {
+            float c = Math.min(1f, charge);
+            arcRadiusMul = 1f + (Balance.WARRIOR_CHARGE_RADIUS - 1f) * c;
+            arcAngleMul  = 1f + (Balance.WARRIOR_CHARGE_ANGLE  - 1f) * c;
+            power *= 1f + (Balance.WARRIOR_CHARGE_DAMAGE - 1f) * c;
+            // 击退也随蓄力放大——战士蓄满的重击是全游戏击退最强的一击
+            knockbackMul = 1f + (Balance.WARRIOR_CHARGE_KNOCKBACK_MUL - 1f) * c;
+        }
 
         switch (def.form) {
             case PROJECTILE -> {
@@ -3108,21 +3595,26 @@ public final class World {
                             power, pierce, aoe, totalChain, bounce);
                 }
             }
-            case MELEE_ARC -> arcHit(def, caster, facing, power, lo.stats);
+            case MELEE_ARC -> arcHit(def, caster, facing, power, lo.stats, arcRadiusMul, arcAngleMul, knockbackMul);
         }
         return true;
     }
 
     /** 近战扇形：命中范围内所有敌人，不需要单体弹道判定 */
-    private void arcHit(SpellDef def, int caster, float facing, float power, Stats st) {
-        int fx = spawnFx(FX_ARC, x[caster], y[caster], 0f, 0f, def.arcRadius, 0.15f, def.element);
+    private void arcHit(SpellDef def, int caster, float facing, float power, Stats st,
+                        float radiusMul, float angleMul, float knockbackMul) {
+        float arcRadius = def.arcRadius * radiusMul;
+        float arcAngle  = def.arcAngle * angleMul;
+        // 近战击退：法术自带 knockback（盾击/裂地）+ 基准小幅击退，再乘蓄力倍率
+        float knockSpeed = (def.knockback + Balance.HIT_KNOCKBACK) * knockbackMul;
+        int fx = spawnFx(FX_ARC, x[caster], y[caster], 0f, 0f, arcRadius, 0.15f, def.element);
         if (fx >= 0) {
             dmg[fx] = facing;                       // FX 不用 dmg，借来存扇形朝向
-            vx[fx] = def.arcAngle * 0.5f;           // 借 vx 存半张角（弧度）
+            vx[fx] = arcAngle * 0.5f;               // 借 vx 存半张角（弧度）
         }
         float cosF = (float) Math.cos(facing);
         float sinF = (float) Math.sin(facing);
-        float cosHalf = (float) Math.cos(def.arcAngle * 0.5f);
+        float cosHalf = (float) Math.cos(arcAngle * 0.5f);
 
         // 元素参数：DoT 时长和强度都要走被动乘算
         int ele = def.element;
@@ -3134,7 +3626,7 @@ public final class World {
             eleDur *= st.frostDurMul;
         }
 
-        enemyHash.query(x[caster], y[caster], def.arcRadius + Balance.MAX_TARGET_RADIUS, scratch);
+        enemyHash.query(x[caster], y[caster], arcRadius + Balance.MAX_TARGET_RADIUS, scratch);
         for (int n = 0; n < scratch.size(); n++) {
             int e = scratch.get(n);
             if (!alive[e] || kind[e] != KIND_ENEMY) {
@@ -3143,7 +3635,7 @@ public final class World {
             float dx = x[e] - x[caster];
             float dy = y[e] - y[caster];
             float d2 = dx * dx + dy * dy;
-            float reach = def.arcRadius + r[e];
+            float reach = arcRadius + r[e];
             if (d2 > reach * reach) {
                 continue;
             }
@@ -3154,6 +3646,7 @@ public final class World {
             damage(e, power);
             if (alive[e]) {
                 applyElement(e, ele, elePot, eleDur, power);
+                knockbackEnemy(e, x[caster], y[caster], knockSpeed);
             }
         }
     }
@@ -3201,9 +3694,36 @@ public final class World {
                     vy[i] = (float) Math.sin(na) * sp;
                 }
             }
+            // 飞碟 Boss 的追踪弹（meta == -1 的敌方弹幕）：每帧朝最近的玩家缓慢转向
+            if (team[i] == TEAM_ENEMY && meta[i] == -1) {
+                int tgt = nearestWizard(x[i], y[i]);
+                if (tgt >= 0) {
+                    float d2 = (x[tgt] - x[i]) * (x[tgt] - x[i])
+                            + (y[tgt] - y[i]) * (y[tgt] - y[i]);
+                    // 超出索敌半径就放弃这帧的追踪，保持当前弹道自顾自地飞
+                    if (d2 <= Balance.BOSS_HOMING_SEEK * Balance.BOSS_HOMING_SEEK) {
+                        float desired = (float) Math.atan2(y[tgt] - y[i], x[tgt] - x[i]);
+                        float cur = (float) Math.atan2(vy[i], vx[i]);
+                        float diff = desired - cur;
+                        while (diff > Math.PI) diff -= Math.PI * 2f;
+                        while (diff < -Math.PI) diff += Math.PI * 2f;
+                        float turn = Math.max(-Balance.BOSS_HOMING_TURN,
+                                Math.min(Balance.BOSS_HOMING_TURN, diff));
+                        float na = cur + turn;
+                        float sp = Balance.BOSS_HOMING_SPD;
+                        vx[i] = (float) Math.cos(na) * sp;
+                        vy[i] = (float) Math.sin(na) * sp;
+                    }
+                }
+            }
             x[i] += vx[i] * dt;
             y[i] += vy[i] * dt;
             life[i] -= dt;
+            // 飞碟 Boss 的追踪弹（meta == -1）：寿命到了没人接着，就原地自爆（AOE 砸玩家）
+            if (meta[i] == -1 && life[i] <= 0f) {
+                detonateBossHoming(i);
+                continue;
+            }
             if (life[i] <= 0f) {
                 despawn(i);
                 continue;
@@ -3256,7 +3776,12 @@ public final class World {
             } else {
                 // 敌方弹幕：打玩家本体，也会被宠物挡下（宠物护主的一部分）
                 if (enemyBoltHit(i)) {
-                    kill(i);
+                    // 飞碟 Boss 追踪弹命中即炸（不靠直接撞的伤害，而是 AOE）
+                    if (meta[i] == -1) {
+                        detonateBossHoming(i);
+                    } else {
+                        kill(i);
+                    }
                     continue;
                 }
             }
@@ -3298,6 +3823,74 @@ public final class World {
             }
         }
         return false;
+    }
+
+    /**
+     * 飞碟 Boss 追踪弹的爆炸结算：原地放一个 FX_BLAST + 半径内对玩家/宠物造成伤害与击退。
+     * 命中玩家/宠物时由 updateProjectiles 在 enemyBoltHit 之后调用，自爆时由寿命耗尽分支调用。
+     */
+    private void detonateBossHoming(int p) {
+        if (!alive[p]) {
+            return;
+        }
+        float ex = x[p], ey = y[p];
+        spawnFx(FX_BLAST, ex, ey, 0f, 0f, Balance.BOSS_HOMING_BLAST_R, 0.25f, Element.NONE);
+        float r = Balance.BOSS_HOMING_BLAST_R;
+        float kb = Balance.BOSS_HOMING_BLAST_KB;
+        // 玩家本体：按距离衰减的中心点爆炸（越靠近弹心越痛）
+        for (int n = 0; n < wizards.size(); n++) {
+            int w = wizards.get(n);
+            if (!alive[w]) {
+                continue;
+            }
+            float dx = x[w] - ex, dy = y[w] - ey;
+            float d2 = dx * dx + dy * dy;
+            if (d2 > r * r) {
+                continue;
+            }
+            float d = (float) Math.sqrt(d2);
+            float ratio = 1f - d / r;          // 0..1 线性衰减（中心满伤）
+            if (iframe[w] <= 0f) {
+                damage(w, Balance.BOSS_HOMING_DMG * ratio);
+                iframe[w] = heroIframe(w);
+            }
+            // 击退：远离弹心推开，方向沿玩家-弹心；零向量兜底随机方向
+            if (d > 1e-3f) {
+                kx[w] += dx / d * kb * ratio;
+                ky[w] += dy / d * kb * ratio;
+            } else {
+                float a = rng.nextFloat() * (float) (Math.PI * 2);
+                kx[w] += (float) Math.cos(a) * kb;
+                ky[w] += (float) Math.sin(a) * kb;
+            }
+        }
+        // 宠物（召唤师）：同样吃 AOE 与击退。无敌帧用宠物专属
+        for (int n = 0; n < minions.size(); n++) {
+            int m = minions.get(n);
+            if (!alive[m]) {
+                continue;
+            }
+            float dx = x[m] - ex, dy = y[m] - ey;
+            float d2 = dx * dx + dy * dy;
+            if (d2 > r * r) {
+                continue;
+            }
+            float d = (float) Math.sqrt(d2);
+            float ratio = 1f - d / r;
+            if (iframe[m] <= 0f) {
+                damage(m, Balance.BOSS_HOMING_DMG * 0.7f * ratio);   // 宠物吃 70% 伤害
+                iframe[m] = Balance.MINION_IFRAME;
+            }
+            if (d > 1e-3f) {
+                kx[m] += dx / d * kb * ratio;
+                ky[m] += dy / d * kb * ratio;
+            } else {
+                float a = rng.nextFloat() * (float) (Math.PI * 2);
+                kx[m] += (float) Math.cos(a) * kb;
+                ky[m] += (float) Math.sin(a) * kb;
+            }
+        }
+        despawn(p);
     }
 
     /**
@@ -3345,6 +3938,13 @@ public final class World {
         if (def == null) {
             return;
         }
+        // 弹幕命中击退：沿弹道方向小幅推挤（比近战轻，避免把怪推出自己的弹道）
+        if (alive[e]) {
+            float sp = (float) Math.sqrt(vx[p] * vx[p] + vy[p] * vy[p]);
+            float kbSrcX = (sp > 1e-3f) ? hx - vx[p] / sp : hx - 1f;
+            float kbSrcY = (sp > 1e-3f) ? hy - vy[p] / sp : hy;
+            knockbackEnemy(e, kbSrcX, kbSrcY, Balance.HIT_KNOCKBACK * Balance.HIT_KNOCKBACK_RANGED_MUL);
+        }
         if (alive[e]) {
             // 元素参数按施法者 Stats 修正：DoT 时长走 dotDurMul，火焰伤害走 fireMul，冰霜时长走 frostDurMul
             float eleDur = def.elemDuration * (olo != null ? olo.stats.dotDurMul : 1f);
@@ -3357,7 +3957,7 @@ public final class World {
             applyElement(e, def.element, elePot, eleDur, power);
         }
         if (def.freeze > 0f) {
-            stunT[e] = Math.max(stunT[e], def.freeze);
+            stunT[e] = Math.max(stunT[e], def.freeze * ccMul(e));
         }
         if (projAoe[p] > 0f) {
             float aoeDmg = power * 0.6f;
@@ -3540,6 +4140,10 @@ public final class World {
                 continue;
             }
             int sub = meta[i];
+            // 飞龙灼烧带：单独走 updateDragonBurns，不打敌人、不叠加元素
+            if (sub == ZONE_DRAGON_BURN) {
+                continue;
+            }
             life[i] -= dt;
             if (life[i] <= 0f) {
                 if (sub == ZONE_WARNING) {
@@ -3583,7 +4187,7 @@ public final class World {
                         if (dx * dx + dy * dy <= Balance.SPIKE_RADIUS * Balance.SPIKE_RADIUS) {
                             damage(e, Balance.SPIKE_DAMAGE);
                             if (alive[e]) {
-                                stunT[e] = Math.max(stunT[e], Balance.SPIKE_STUN);
+                                stunT[e] = Math.max(stunT[e], Balance.SPIKE_STUN * ccMul(e));
                             }
                             iframe[i] = 1f;   // 标记已触发
                             break;
@@ -3691,8 +4295,9 @@ public final class World {
                         float dy = y[e] - y[id];
                         float d = (float) Math.sqrt(dx * dx + dy * dy);
                         if (d > 1e-3f && d <= Balance.WARCRY_RADIUS) {
-                            kx[e] += dx / d * Balance.WARCRY_KNOCKBACK;
-                            ky[e] += dy / d * Balance.WARCRY_KNOCKBACK;
+                            float kbw = Balance.WARCRY_KNOCKBACK * ccMul(e);
+                            kx[e] += dx / d * kbw;
+                            ky[e] += dy / d * kbw;
                         }
                     }
                     lo.warCryTimer = Balance.WARCRY_INTERVAL;
@@ -3806,7 +4411,7 @@ public final class World {
                 float dmg = Balance.REACTION_STEAM_DAMAGE * statsMulForReactionDmg(target);
                 explode(x[target], y[target], r, dmg, Element.FIRE, 0f);
                 if (alive[target]) {
-                    stunT[target] = Math.max(stunT[target], Balance.REACTION_STEAM_STUN);
+                    stunT[target] = Math.max(stunT[target], Balance.REACTION_STEAM_STUN * ccMul(target));
                 }
             }
             case Element.R_SUPERCONDUCT -> {
@@ -3814,7 +4419,7 @@ public final class World {
                         * statsMulForReactionDmg(target);
                 damage(target, incoming * ratio);
                 if (alive[target]) {
-                    stunT[target] = Math.max(stunT[target], Balance.REACTION_SUPERCONDUCT_STUN);
+                    stunT[target] = Math.max(stunT[target], Balance.REACTION_SUPERCONDUCT_STUN * ccMul(target));
                 }
             }
             case Element.R_OVERLOAD -> {
@@ -3882,11 +4487,12 @@ public final class World {
             //（三阶段的传送前摇同理由 kingTeleT 一并覆盖，用户要求）
             if (knockback > 0f && alive[e] && !(e == kingId && (kingTelegraphT > 0f || kingTeleT > 0f))) {
                 float d = (float) Math.sqrt(d2);
+                float kb = knockback * ccMul(e);   // Boss 抗性：击退被削弱
                 if (d > 1e-3f) {
-                    kx[e] += dx / d * knockback;
-                    ky[e] += dy / d * knockback;
+                    kx[e] += dx / d * kb;
+                    ky[e] += dy / d * kb;
                 } else {
-                    kx[e] += knockback;
+                    kx[e] += kb;
                 }
             }
         }
@@ -4028,7 +4634,7 @@ public final class World {
         return -1;
     }
 
-    /** 该玩家实体的职业（找不到返回巫师） */
+    /** 该玩家实体的职业（找不到返回法师） */
     private int classOf(int id) {
         Loadout lo = loadout[id];
         return (lo != null) ? lo.classKind : HeroClass.WIZARD;
@@ -4063,16 +4669,32 @@ public final class World {
      *
      * crit 已经在调用方（castOne）掷过了，这里只处理减伤。
      */
+    /** 被控抗性系数：Boss（含奶蛙）与骨蛇只吃 (1 - BOSS_CC_RESIST) 的眩晕/冰冻/减速/击退 */
+    private float ccMul(int id) {
+        return (variant[id] == V_BOSS || variant[id] == V_SERPENT)
+                ? 1f - Balance.BOSS_CC_RESIST : 1f;
+    }
+
     public void damage(int id, float amount) {
         if (id < 0 || !alive[id] || amount <= 0f) {
             return;
         }
         // 骨蛇：所有节共享一个血池，统一扣在头上。身体挨打也算血
-        if (kind[id] == KIND_ENEMY && variant[id] == V_SERPENT && serpent[id] >= 0 && serpent[id] != id) {
-            id = serpent[id];
-            if (id < 0 || !alive[id]) {
+        if (kind[id] == KIND_ENEMY && variant[id] == V_SERPENT) {
+            int h = serpent[id];
+            if (h < 0 || !alive[h]) {
                 return;
             }
+            // 同一帧内只结算一次：骨蛇有 12 个实体，一发火球的爆炸半径里
+            // 往往同时罩住好几节，逐节转发会让这一发打出 12 倍伤害
+            // （实测能把本该撑一分钟的小 Boss 压到 4 秒内被秒）。连锁闪电
+            // 在它自己身上来回弹也是同一个问题，一并被这行挡掉。
+            // 跨帧的持续输出不受影响，所以单发 DPS 手感不变。
+            if (serpentHitT == time) {
+                return;
+            }
+            serpentHitT = time;
+            id = h;
         }
         // 附着雷电的目标更脆
         float amt = (elem[id] == Element.SHOCK)
@@ -4105,6 +4727,33 @@ public final class World {
         if (hp[id] <= 0f) {
             kill(id);
         }
+    }
+
+    /**
+     * 给敌人施加一次击退，方向为 (srcX,srcY) → 敌人。
+     * 只对"普通敌怪"生效：玩家、宠物、Boss、事件雕像都免疫（否则会把 Boss 推走或让雕像飘起来）。
+     * 已有击退会被叠加而不是覆盖，所以连续命中会持续把怪往外顶。
+     */
+    private void knockbackEnemy(int e, float srcX, float srcY, float speed) {
+        if (speed <= 0f || !alive[e] || kind[e] != KIND_ENEMY) {
+            return;
+        }
+        if (variant[e] == V_BOSS || variant[e] == V_STATUE || variant[e] == V_SERPENT) {
+            return;     // Boss / 雕像 / 骨蛇：站桩不动，不吃击退
+        }
+        float dx = x[e] - srcX;
+        float dy = y[e] - srcY;
+        float d2 = dx * dx + dy * dy;
+        if (d2 < 1e-6f) {
+            // 完全重合时给一个随机方向，避免零向量导致无位移
+            float a = rng.nextFloat() * (float) (Math.PI * 2);
+            kx[e] += (float) Math.cos(a) * speed;
+            ky[e] += (float) Math.sin(a) * speed;
+            return;
+        }
+        float d = (float) Math.sqrt(d2);
+        kx[e] += dx / d * speed;
+        ky[e] += dy / d * speed;
     }
 
     /** 装配法术到指定槽。槽位越界或无此角色则忽略 */
@@ -4411,6 +5060,56 @@ public final class World {
         return autoFire;
     }
 
+    /**
+     * 战士当前是否正处于蓄力状态（供 HUD 画蓄力反馈）。
+     * charge >= WARRIOR_CHARGE_MIN 起为 true，松开后立刻转 false。
+     */
+    public boolean warriorCharging() {
+        return warriorCharging;
+    }
+
+    /** 当前蓄力进度 0..1（0 表示未蓄力）。供 HUD 画蓄力环/条 */
+    public float warriorChargeProgress() {
+        return warriorCharging ? warriorChargePower : 0f;
+    }
+
+    /**
+     * 玩家当前可用的冲刺发数。弓箭手 0..ARCHER_DASH_MAX；其他职业恒为 0（HUD 不画）。
+     * 仅做读访问器，调用方只用来画 UI，不要据此修改世界状态。
+     */
+    public int dashChargesOf(int wizardId) {
+        if (wizardId < 0 || wizardId >= MAX || !alive[wizardId] || kind[wizardId] != KIND_WIZARD) {
+            return 0;
+        }
+        return dashCharges[wizardId];
+    }
+
+    /**
+     * 玩家当前冲刺单发充能进度 0..1。1 表示刚发出去（刚开始冷却）；0 表示已就绪。
+     * 弓箭手：当前缺弹药时返回"下一发的充能进度"，满发时返回 1。
+     * 战士：返回当前 dashCd 的归一化进度。
+     * 非冲刺职业恒返回 1（HUD 不画时无意义）。
+     */
+    public float dashCdFraction(int wizardId) {
+        if (wizardId < 0 || wizardId >= MAX || !alive[wizardId] || kind[wizardId] != KIND_WIZARD) {
+            return 1f;
+        }
+        int ch = dashCharges[wizardId];
+        if (ch <= 0) {
+            return 0f;   // 弹药耗尽：HUD 显示"全暗"
+        }
+        Loadout lo = loadout[wizardId];
+        if (lo == null || lo.classKind != HeroClass.ARCHER) {
+            return 1f;
+        }
+        // 弓箭手：满发返回 1（就绪），否则是下一发的充能进度（0=刚发、1=就绪）
+        if (ch >= Balance.ARCHER_DASH_MAX) {
+            return 1f;
+        }
+        float cdTotal = Balance.ARCHER_DASH_CD;
+        return cdTotal > 0f ? Math.max(0f, Math.min(1f, 1f - dashCd[wizardId] / cdTotal)) : 1f;
+    }
+
     /** 当前 Boss 档位（BOSS_NAMES 下标），没有 Boss 时返回 -1 */
     public int bossTier() {
         return bossId >= 0 ? bossTier : -1;
@@ -4420,6 +5119,11 @@ public final class World {
     public String bossName() {
         if (bossId < 0) {
             return "";
+        }
+        // 骨蛇（小 Boss）不在 Balance.BOSS_NAMES 里——它用 bossTier = -2 做标记，
+        // 不单独取名的话血条会显示兜底的 "Boss"
+        if (variant[bossId] == V_SERPENT) {
+            return EnemyStats.SERPENT_NAME;
         }
         return (bossTier >= 0 && bossTier < Balance.BOSS_NAMES.length)
                 ? Balance.BOSS_NAMES[bossTier] : "Boss";

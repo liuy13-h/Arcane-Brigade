@@ -7,26 +7,70 @@ public final class Balance {
 
     private Balance() {}
 
-    // ---- 巫师 ----
-    public static final float WIZARD_SPEED   = 195f;
+    // ---- 法师 ----
+    public static final float WIZARD_SPEED   = 200f;
     public static final float WIZARD_RADIUS  = 14f;
-    public static final float WIZARD_HP      = 100f;
+    public static final float WIZARD_HP      = 200f;
     public static final float WIZARD_REGEN   = 0.6f;   // 每秒回血
     /** 受击无敌帧。没有这个，被几十只怪围住会在同一帧内被打光血，瞬间暴毙 */
     public static final float WIZARD_IFRAME  = 0.35f;
-    /** 弓箭手无敌帧：比巫师略短（脆但快，靠走位躲） */
+    /** 弓箭手无敌帧：比法师略短（脆但快，靠走位躲） */
     public static final float ARCHER_IFRAME  = 0.30f;
+
+    // ---- 主动位移（冲刺）：弓箭手 & 战士通用，空格朝鼠标方向突进一小段 ----
+    // 战士本就是该技能的原始设计目标（空格=冲刺，单次 5 秒 CD），弓箭手复用同一机制
+    // 并**额外支持储存次数**——一次最多攒 3 发，每发独立 5 秒 CD，耗光后会一颗颗补回来。
+    // 这种"弹药"模型让弓箭手可以做连击位移，战士仍是单次 CD，两套手感不同。
+    /** 弓箭手位移冷却（秒）——同时是单发的 CD 与一颗新充能的恢复时长 */
+    public static final float ARCHER_DASH_CD     = 6.5f;
+    /** 弓箭手位移总距离（像素）。一小段，约 0.16 秒走完 */
+    public static final float ARCHER_DASH_DIST   = 160f;
+    /** 弓箭手位移持续时长（秒）。speed = DIST / TIME ≈ 1000 px/s，像一个快速突进 */
+    public static final float ARCHER_DASH_TIME   = 0.16f;
+    /** 弓箭手位移期间的无敌帧（秒），让位移能真正用来躲弹幕/接触伤害 */
+    public static final float ARCHER_DASH_IFRAME = 0.16f;
+    /** 弓箭手可同时储存的冲刺发数。出生即满；空格一发一发地扣，每 CD 5s 补一发 */
+    public static final int   ARCHER_DASH_MAX    = 3;
+
+    /** 战士位移冷却（秒）。与弓箭手同步，可独立调 */
+    public static final float WARRIOR_DASH_CD     = 5f;
+    /** 战士位移总距离（像素） */
+    public static final float WARRIOR_DASH_DIST   = 160f;
+    /** 战士位移持续时长（秒） */
+    public static final float WARRIOR_DASH_TIME   = 0.16f;
+    /** 战士位移期间的无敌帧（秒） */
+    public static final float WARRIOR_DASH_IFRAME = 0.16f;
+
+    // ---- 战士 · 蓄力重击（长按鼠标左键蓄力，松开释放）----
+    /**
+     * 蓄力判定：按住左键累计到该时长（秒）才视为"蓄力"，此时近战扇形不再自动触发，
+     * 改为抬起时释放一次重击。短于此值即普通挥砍（保持原有手感）。
+     */
+    public static final float WARRIOR_CHARGE_MIN      = 0.25f;
+    /** 蓄满所需时长（秒）。超过按满算，不会无限增强 */
+    public static final float WARRIOR_CHARGE_MAX      = 1.00f;
+    /** 满蓄力时扇形半径倍率（斩击范围放大） */
+    public static final float WARRIOR_CHARGE_RADIUS   = 2.00f;
+    /** 满蓄力时扇形张角倍率（斩击更宽） */
+    public static final float WARRIOR_CHARGE_ANGLE    = 1.50f;
+    /** 满蓄力时伤害倍率 */
+    public static final float WARRIOR_CHARGE_DAMAGE   = 2.60f;
+    /**
+     * 满蓄力重击的击退倍率。战士重击是全游戏击退最强的一击——
+     * 普通命中只有 HIT_KNOCKBACK 的小幅推挤，重击则能把怪掀出去。
+     */
+    public static final float WARRIOR_CHARGE_KNOCKBACK_MUL = 3.20f;
     /** 战士无敌帧：明显削弱。战士有 15% 减伤 + 击杀回血，无需长时间无敌保护 */
     public static final float WARRIOR_IFRAME = 0.12f;
 
     // ---- 战士 / 弓箭手 / 召唤师（职业基础属性，设计文档第 2 节）----
-    public static final float WARRIOR_HP    = 140f;
-    public static final float WARRIOR_SPEED = 180f;
-    public static final float ARCHER_HP     = 85f;
-    public static final float ARCHER_SPEED  = 205f;
+    public static final float WARRIOR_HP    = 280f;
+    public static final float WARRIOR_SPEED = 190f;
+    public static final float ARCHER_HP     = 160f;
+    public static final float ARCHER_SPEED  = 230f;
     /** 召唤师：本体偏脆——他有 4 只宠物替他挨打，本体再厚就没弱点了 */
-    public static final float SUMMONER_HP    = 90f;
-    public static final float SUMMONER_SPEED = 185f;
+    public static final float SUMMONER_HP    = 180f;
+    public static final float SUMMONER_SPEED = 180f;
     public static final float SUMMONER_IFRAME = 0.32f;
 
     // ---- 职业特性（集中在这里，不在逻辑里散落）----
@@ -36,7 +80,7 @@ public final class Balance {
     public static final float WARRIOR_LIFESTEAL = 2f;
     /** 弓箭手：暴击率 +10% */
     public static final float ARCHER_CRIT       = 0.10f;
-    /** 巫师：法术伤害 +10% */
+    /** 法师：法术伤害 +10% */
     public static final float WIZARD_SPELL_DMG  = 0.10f;
 
     // ---- 召唤物（召唤师的宠物）----
@@ -98,13 +142,23 @@ public final class Balance {
     /** 击退速度的每秒衰减系数。太小会看到怪被推着滑行很远 */
     public static final float KNOCKBACK_DECAY = 6.0f;
 
+    // ---- 命中击退（所有攻击对敌怪的小幅推挤）----
+    /**
+     * 每次命中敌人时附带的基准击退速度（像素/秒）。
+     * 刻意做小：只是让打击"有手感"，不该把怪打出攻击范围。
+     * 法术自带的 knockback（盾击/裂地）叠在这个基准之上；战士蓄力重击再乘倍率。
+     */
+    public static final float HIT_KNOCKBACK = 70f;
+    /** 弹幕命中的击退衰减（远程推挤比近战更轻，避免弓箭手/巫师把怪推出弹道） */
+    public static final float HIT_KNOCKBACK_RANGED_MUL = 0.55f;
+
     // ---- 敌人 ----
     public static final float ENEMY_RADIUS   = 12f;
     /** 明显低于玩家的 195，保证"能逃但甩不干净"——低于 70 就会出现追不上的滑稽场面 */
     public static final float ENEMY_SPEED    = 92f;
     /** 碰撞查询时的最大目标半径，投射物搜索范围要按它放宽，否则边缘擦过会漏判 */
     public static final float MAX_TARGET_RADIUS = 16f;
-    public static final float ENEMY_HP       = 26f;
+    public static final float ENEMY_HP       = 52f;   // 小怪血翻倍
     public static final float ENEMY_DAMAGE   = 9f;
     public static final float ENEMY_ATTACK_CD = 0.7f;
     /** 分离力强度，相对移动速度。太大会散开成稀粥，太小会叠成一支穿云箭 */
@@ -150,13 +204,17 @@ public final class Balance {
     public static final float HOMING_TURN  = 0.16f;   // 约 9°/帧
     public static final float MAX_CRIT_CHANCE      = 0.85f;
     /** 减伤硬上限。不封顶后期能堆到免疫，游戏就没了 */
-    public static final float MAX_DAMAGE_REDUCTION = 0.70f;
+    public static final float MAX_DAMAGE_REDUCTION = 0.60f;   // 减伤上限：达到后不再刷新减伤类被动
+    /** Boss 的被控抗性：眩晕 / 冰冻 / 减速 / 击退 的效果按此削弱（0.7 = 只吃 30% 控制） */
+    public static final float BOSS_CC_RESIST = 0.70f;
 
     // ---- 质变阈值（DESIGN.md "质变阈值"一节）----
     /** 元素共鸣：每装备一种元素，全伤害 +5% */
-    public static final float RESONANCE_PER_ELEMENT = 0.05f;
+    public static final float RESONANCE_PER_ELEMENT = 0.10f;
     /** 孤注一掷：只带 1 个主动时的伤害加成 */
-    public static final float ALL_IN_DAMAGE         = 0.80f;
+    public static final float ALL_IN_DAMAGE         = 1.50f;
+    /** 孤注一掷：冷却 −50%（换算成攻速倍率 1/(1-0.5)） */
+    public static final float ALL_IN_CD_REDUCTION   = 0.50f;
     /** 临界质量：穿透达到多少触发 */
     public static final int   CRITICAL_MASS_PIERCE  = 5;
     public static final float CRITICAL_MASS_DAMAGE  = 0.50f;
@@ -166,7 +224,7 @@ public final class Balance {
     /** 连锁反应：元素反应范围加成 */
     public static final float CHAIN_REACTION_RADIUS  = 0.50f;
     /** 元素过载：触发反应时的伤害加成 */
-    public static final float ELEM_OVERLOAD_DAMAGE   = 0.30f;
+    public static final float ELEM_OVERLOAD_DAMAGE   = 0.60f;
 
     /** 冰锥穿透达阈值后命中分裂几枚 */
     public static final int   ICE_SPLIT_PIERCE  = 5;
@@ -209,7 +267,7 @@ public final class Balance {
     public static final float WARCRY_KNOCKBACK    = 220f;
 
     public static final float BARRIER_INTERVAL = 20f;
-    public static final float BARRIER_SHIELD   = 15f;
+    public static final float BARRIER_SHIELD   = 50f;
     public static final float CHEST_INTERVAL   = 60f;
     public static final float REROLL_INTERVAL  = 20f;
 
@@ -221,9 +279,9 @@ public final class Balance {
     public static final float SPIKE_LIFE      = 20f;
 
     /** 绝境爆发 */
-    public static final float LAST_STAND_HP_RATIO  = 0.30f;
-    public static final float LAST_STAND_MOVE      = 0.20f;
-    public static final float LAST_STAND_DAMAGE    = 0.15f;
+    public static final float LAST_STAND_HP_RATIO  = 0.50f;
+    public static final float LAST_STAND_MOVE      = 0.40f;
+    public static final float LAST_STAND_DAMAGE    = 0.50f;
 
     /** 引爆（中毒+燃烧）：按剩余毒伤的多少比例立即结算 */
     public static final float DETONATE_RATIO = 1.0f;
@@ -250,12 +308,12 @@ public final class Balance {
 
     // ---- 敌人变体（D4）----
     /** 精英：体型 ×6、速度 ×1.1、伤害 ×1.5，带一层护盾 */
-    public static final float ELITE_HP_MUL    = 6f;
+    public static final float ELITE_HP_MUL    = 12f;  // 精英血翻倍（原 ×6）
     public static final float ELITE_SPEED_MUL = 1.1f;
     public static final float ELITE_DMG_MUL   = 1.5f;
     public static final float ELITE_SHIELD    = 120f;
     /** 小偷：偷地上的经验宝石，自身不攻击。击杀时掉落翻倍的宝石 */
-    public static final float THIEF_HP     = 40f;
+    public static final float THIEF_HP     = 80f;
     public static final float THIEF_SPEED  = 130f;
     public static final float THIEF_STEAL_RADIUS = 26f;   // 接触宝石即偷走的范围
     /** 分裂怪：死亡时裂成几只，子代 HP 按比例缩小 */
@@ -263,7 +321,7 @@ public final class Balance {
     public static final float SPLIT_HP_MUL  = 0.45f;
     public static final float SPLIT_RADIUS_MUL = 0.8f;
     /** 远程怪：保持距离并向玩家发射弹幕 */
-    public static final float RANGED_HP       = 34f;
+    public static final float RANGED_HP       = 68f;
     public static final float RANGED_SPEED    = 78f;
     public static final float RANGED_DMG      = 14f;
     public static final float RANGED_CD       = 2.2f;
@@ -279,9 +337,9 @@ public final class Balance {
      * 到等级但上一只还活着时不会叠加，会等它倒下再上（见 WaveDirector）。
      */
     public static final int[]   BOSS_LEVELS   = { 5, 10, 15, 20 };
-    public static final String[] BOSS_NAMES   = { "石心巨像", "熔岩领主", "霜寂君王", "终焉之影" };
+    public static final String[] BOSS_NAMES   = { "石心巨像", "熔岩飞龙", "霜寂飞龙", "终焉之影" };
     /** 每只 Boss 的血池。第一只别太肉，5 分钟时的 build 打得动 */
-    public static final float[] BOSS_HP_TIERS = { 2000f, 4200f, 7200f, 13000f };
+    public static final float[] BOSS_HP_TIERS = { 4000f, 8400f, 14400f, 26000f };   // 全部翻倍
     /** 每只 Boss 的接触伤害 */
     public static final float[] BOSS_DMG_TIERS = { 18f, 22f, 26f, 32f };
     /** Boss 在场时普通刷怪速率的倍率：把舞台让给 Boss 战 */
@@ -314,6 +372,60 @@ public final class Balance {
     public static final float DASH_DURATION = 0.22f;
     /** 冲刺速度（单位/秒），乘持续时间 ≈ 123 单位，属"短程" */
     public static final float DASH_SPEED = 560f;
+    // ---- 飞碟 Boss（tier 0）专属：追踪炮弹（低频率、慢速、有限追踪、命中或过期爆炸）----
+    /**
+     * 两轮齐射之间的间隔（秒）。刻意做慢：飞碟的主循环仍是预警圈 + 召唤，
+     * 追踪弹只是穿插的"小威胁"，不至于把战斗节奏拖进弹幕地狱。
+     */
+    public static final float BOSS_HOMING_CD          = 4.5f;
+    /** 单轮齐射数量（四向散布，绕 Boss 一圈） */
+    public static final int   BOSS_HOMING_COUNT       = 4;
+    /** 炮弹飞行速度（像素/秒）。比全部职业的基础移速都慢——刻意留下"可绕开"的窗口 */
+    public static final float BOSS_HOMING_SPD         = 130f;
+    /** 每帧最大转向弧度。值很小 ≈ 2.3°/帧：直瞄困难，纯靠甩尾糊玩家脸 */
+    public static final float BOSS_HOMING_TURN        = 0.04f;
+    /** 炮弹索敌半径（用来决定"锁谁"） */
+    public static final float BOSS_HOMING_SEEK        = 760f;
+    /** 炮弹寿命（秒）：玩家甩掉并超过这个时长则原地自爆（避免遗留在场上一辈子） */
+    public static final float BOSS_HOMING_LIFE        = 4.5f;
+    /** 命中或自爆时的直接伤害 */
+    public static final float BOSS_HOMING_DMG         = 22f;
+    /** 命中或自爆时的爆炸半径（AOE） */
+    public static final float BOSS_HOMING_BLAST_R     = 70f;
+    /** 命中或自爆时的击退 */
+    public static final float BOSS_HOMING_BLAST_KB    = 130f;
+    /** 炮弹的碰撞半径（命中判定用，比基础弹幕稍大以保证能擦到走位） */
+    public static final float BOSS_HOMING_RADIUS      = 9f;
+
+    // ---- 飞龙 Boss（tier 1 / tier 2）专属：定向直线飞行弹幕 + 灼烧带 ----
+    /**
+     * 飞龙的招牌动作：朝玩家所在方向吐出一颗/两颗慢速火球，沿弹道留下一条持续 5 秒的
+     * 灼烧地面。玩家走过灼烧区即持续扣血。
+     * 设计上比飞碟追踪弹更"好躲"——慢速直线，可以横向走出弹道；但灼烧带的"惩罚窗口"
+     * 长达 5 秒，逼玩家要么绕路，要么吃灼烧伤害。
+     */
+    /** 飞龙火球飞行速度（像素/秒）。比飞碟追踪弹还慢，玩家有充足反应时间横向脱离 */
+    public static final float DRAGON_BOLT_SPD         = 145f;
+    /** 飞龙火球的命中半径（稍大，保证擦边能命中） */
+    public static final float DRAGON_BOLT_RADIUS      = 11f;
+    /** 飞龙火球直接命中玩家的伤害 */
+    public static final float DRAGON_BOLT_DMG         = 26f;
+    /** 飞龙火球的飞行寿命（秒）。到期没碰到玩家就原地消散，不再留灼烧 */
+    public static final float DRAGON_BOLT_LIFE        = 3.0f;
+    /** 灼烧区半径（比火球本身大一圈，"中弹带"自然铺开） */
+    public static final float DRAGON_BURN_RADIUS      = 46f;
+    /** 灼烧区持续时长（秒）。5 秒是用户明确要求的"长时间惩罚窗口" */
+    public static final float DRAGON_BURN_DURATION    = 5.0f;
+    /** 灼烧区每秒伤害（持续 5 秒 → 累计 5 × DPS） */
+    public static final float DRAGON_BURN_DPS         = 18f;
+    /** 飞行过程中每隔多远播种一团灼烧。太小则连成线会卡视野，太大则稀疏给玩家空档 */
+    public static final float DRAGON_BURN_STEP        = 38f;
+    /** tier 1 飞龙（熔岩飞龙）：单发火球的齐射 CD（秒） */
+    public static final float DRAGON_BOLT_CD_TIER1    = 4.5f;
+    /** tier 2 飞龙（霜寂飞龙）：双发齐射的 CD（秒）——刻意比 tier 1 长一档，避免双发+短 CD 变成弹幕墙 */
+    public static final float DRAGON_BOLT_CD_TIER2    = 6.0f;
+    /** tier 2 双发的扇形展开角（弧度）。两发朝向玩家方向 ± 半角，给玩家"在两发之间溜过去"的窗口 */
+    public static final float DRAGON_BOLT_TIER2_HALF  = (float) Math.toRadians(15);
 
     // ---- 战斗事件（小任务） ----
     /** 三个事件的触发时间（秒）：2 分钟 / 5 分钟 / 8 分钟 */
@@ -348,7 +460,7 @@ public final class Balance {
     // ---- 5 关 Boss：奶蛙（玩家等级达到 25 级时从场地中央刷新，独立技能组）----
     /** 刷新条件：玩家等级达到该值 */
     public static final int   MILKY_LEVEL         = 25;
-    public static final float MILKY_HP            = 8000f;
+    public static final float MILKY_HP            = 30000f;
     public static final float MILKY_SPEED         = 220f;
     public static final float MILKY_RADIUS        = 48f;
     /** 接触伤害（技能伤害另算） */

@@ -1,13 +1,13 @@
 package com.arcanebrigade.core;
 
 /**
- * 职业注册表。四职业（巫师 / 战士 / 弓箭手 / 召唤师）的基础属性、起手武器、特性与专属技能池。
+ * 职业注册表。四职业（法师 / 战士 / 弓箭手 / 召唤师）的基础属性、起手武器、特性与专属技能池。
  *
  * 设计文档第 2 节：各职业共用同一套技能系统（独立冷却 + 强化路径 + 元素注入），
  * 差别在攻击形态、属性、专属技能池。这里把所有"职业相关"的常量集中，
  * World / Stats / Upgrades / 客户端都只查这张表，不在逻辑里散落魔法数字。
  *
- * 攻击形态差异是根本：巫师远程弹幕、战士近战扇形、弓箭手远程穿透箭——
+ * 攻击形态差异是根本：法师远程弹幕、战士近战扇形、弓箭手远程穿透箭——
  * 它直接决定你怎么站位，所以是职业的第一区分度。
  * 召唤师是第四个形态：本体输出平庸，靠周期性召唤宠物替他扛与打。
  */
@@ -28,7 +28,7 @@ public final class HeroClass {
     private static final float[] BASE_SPEED = new float[COUNT];
 
     static {
-        NAMES[WIZARD]  = "巫师";
+        NAMES[WIZARD]  = "法师";
         BASE_HP[WIZARD]  = Balance.WIZARD_HP;
         BASE_SPEED[WIZARD]  = Balance.WIZARD_SPEED;
 
@@ -92,7 +92,7 @@ public final class HeroClass {
         };
     }
 
-    /** 起手即拥有的被动（巫师带"重抽"，其余职业特性已并入 Stats 职业加成） */
+    /** 起手即拥有的被动（法师带"重抽"，其余职业特性已并入 Stats 职业加成） */
     public static int[] startPassives(int classKind) {
         if (classKind == WIZARD) {
             return new int[] { Passives.REROLL };
