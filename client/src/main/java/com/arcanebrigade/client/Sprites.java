@@ -31,7 +31,7 @@ public final class Sprites {
 
     /**
      * 按索引的形象。
-     * 0 = 国王（大厅初始操控对象）；1..4 = 巫师 / 战士 / 弓箭手 / 召唤师（HeroClass）。
+     * 0 = 国王（大厅初始操控对象）；1..4 = 法师 / 战士 / 弓箭手 / 召唤师（HeroClass）。
      * 职业形象统一走「裁透明边 + ×2 最近邻放大」，渲染时 1:1 绘制即是清晰像素风。
      */
     public static Image[] heroes = new Image[5];
@@ -50,7 +50,7 @@ public final class Sprites {
     public static Image titleScreen;
     /**
      * 各职业的细节立绘（选人大厅右侧滑出的大图）。
-     * 下标 = 职业 id（1..4 = 巫师 / 战士 / 弓箭手 / 召唤师）。
+     * 下标 = 职业 id（1..4 = 法师 / 战士 / 弓箭手 / 召唤师）。
      * 这是美术给的大尺寸全身立绘，与上方 32px 行走小立绘 heroes[] 相互独立。
      */
     public static Image[] heroPortraits = new Image[5];
@@ -67,7 +67,7 @@ public final class Sprites {
      * null 时渲染退回 bosses[] 的静态立绘。
      */
     public static GifDecoder.Animation[] bossAnim = new GifDecoder.Animation[4];
-    /** 巫师攻击特效：充能爆能法球（Charged_Blaster_Orb.gif） */
+    /** 法师攻击特效：充能爆能法球（Charged_Blaster_Orb.gif） */
     public static GifDecoder.Animation wizardBolt;
     /** 弓箭手攻击特效：飞刀（Throwing_Knife.png）。方向性投射物，预烘焙 32 个朝向 */
     public static Image[] archerBoltRot;
@@ -169,7 +169,7 @@ public final class Sprites {
         if (minionAnim != null) {
             minion = minionAnim.frames[0];
         }
-        // 巫师 / 弓箭手 / 战士的攻击与武器素材
+        // 法师 / 弓箭手 / 战士的攻击与武器素材
         wizardBolt  = loadArtAnim("Charged_Blaster_Orb.gif");
         warriorArc  = loadArtAnim("Terragrim_(projectile).gif");
         warriorWeapon = loadArt("Influx_Waver_Beam.png");
@@ -192,7 +192,7 @@ public final class Sprites {
         // 美术给的多是带纯色底（黑/白）的整幅图，叠到王座厅上会出现一块黑底/白底，
         // 这里把环绕角色、与图边相连的背景色抠成透明（见 knockoutBackground）。
         heroPortraits[HeroClass.WARRIOR] = knockoutBackground(loadArt("Edit_this_pixel_art_character__2026-09-09T01-59-50.png")); // 战士
-        heroPortraits[HeroClass.WIZARD]  = knockoutBackground(loadArt("Edit_this_pixel_art_character__2026-09-09T02-00-45.png")); // 巫师
+        heroPortraits[HeroClass.WIZARD]  = knockoutBackground(loadArt("Edit_this_pixel_art_character__2026-09-09T02-00-45.png")); // 法师
         heroPortraits[HeroClass.ARCHER]  = knockoutBackground(loadArt("弓箭手角色-尖角额甲版.jpg"));                                // 弓箭手
         heroPortraits[HeroClass.SUMMONER] = knockoutBackground(loadArt("summoner_transparent.png"));                               // 召唤师
 

@@ -3,7 +3,7 @@ package com.arcanebrigade.core;
 /**
  * 法术注册表。所有主动技能都写在这里。
  *
- * D2 范围：巫师 4 个（魔弹 / 火球 / 冰锥 / 连锁闪电），
+ * D2 范围：法师 4 个（魔弹 / 火球 / 冰锥 / 连锁闪电），
  * 外加战士挥砍与弓箭手箭矢各 1 个——后两个不是为了做职业，
  * 而是为了**现在就把 MELEE_ARC 这条攻击形态分支验证掉**，
  * 否则 D4 加战士时会发现抽象不对，返工成本高。
@@ -57,29 +57,29 @@ public final class Spells {
     private static final int[] CATALYST_OF = new int[32];
 
     static {
-        // 巫师：四种形态各一个——单体 / 范围 / 穿透 / 弹射
+        // 法师：四种形态各一个——单体 / 范围 / 穿透 / 弹射
         TABLE[MAGIC_MISSILE] = SpellDef.builder(MAGIC_MISSILE, "魔弹", SpellDef.Form.PROJECTILE)
-                .cooldown(0.30f).damage(14f).range(620f)
+                .cooldown(0.30f).damage(30f).range(620f)
                 .speed(470f).boltRadius(6f)
                 .element(Element.ARCANE)
                 .build();
 
         TABLE[FIREBALL] = SpellDef.builder(FIREBALL, "火球", SpellDef.Form.PROJECTILE)
-                .cooldown(1.10f).damage(22f).range(620f)
+                .cooldown(1.10f).damage(44f).range(620f)
                 .speed(380f).boltRadius(9f)
                 .aoeRadius(60f)
                 .element(Element.FIRE).elemPotency(6f).elemDuration(3f)
                 .build();
 
         TABLE[ICE_SHARD] = SpellDef.builder(ICE_SHARD, "冰锥", SpellDef.Form.PROJECTILE)
-                .cooldown(0.80f).damage(16f).range(700f)
+                .cooldown(0.80f).damage(32f).range(700f)
                 .speed(620f).boltRadius(7f)
                 .pierce(2)
                 .element(Element.FROST).elemPotency(0.35f).elemDuration(2f)
                 .build();
 
         TABLE[CHAIN_LIGHTNING] = SpellDef.builder(CHAIN_LIGHTNING, "连锁闪电", SpellDef.Form.PROJECTILE)
-                .cooldown(0.90f).damage(12f).range(560f)
+                .cooldown(0.90f).damage(24f).range(560f)
                 .speed(900f).boltRadius(7f)
                 .chain(3).chainRange(220f).chainFalloff(0.15f)
                 .element(Element.SHOCK).elemPotency(0.20f).elemDuration(3f)
@@ -87,68 +87,68 @@ public final class Spells {
 
         // 战士：近战扇形，命中范围内所有敌人（D4 正式接入职业，这里先验证形态）
         TABLE[WARRIOR_SLASH] = SpellDef.builder(WARRIOR_SLASH, "挥砍", SpellDef.Form.MELEE_ARC)
-                .cooldown(0.55f).damage(26f)
+                .cooldown(0.55f).damage(52f)
                 .arcRadius(90f).arcAngle((float) Math.toRadians(120))
                 .build();
 
         // 弓箭手：高速穿透箭（D4）
         TABLE[ARCHER_ARROW] = SpellDef.builder(ARCHER_ARROW, "箭矢", SpellDef.Form.PROJECTILE)
-                .cooldown(0.45f).damage(18f).range(760f)
+                .cooldown(0.45f).damage(50f).range(760f)
                 .speed(700f).boltRadius(5f)
                 .pierce(1)
                 .build();
 
         // ---- 战士技能池（近战弧形，往怪堆里扎）----
         TABLE[WHIRLWIND] = SpellDef.builder(WHIRLWIND, "回旋斩", SpellDef.Form.MELEE_ARC)
-                .cooldown(0.85f).damage(20f)
+                .cooldown(0.85f).damage(40f)
                 .arcRadius(105f).arcAngle((float) Math.toRadians(360))
                 .build();
 
         TABLE[GROUND_SLAM] = SpellDef.builder(GROUND_SLAM, "裂地", SpellDef.Form.MELEE_ARC)
-                .cooldown(1.30f).damage(30f).knockback(150f)
+                .cooldown(1.30f).damage(60f).knockback(150f)
                 .arcRadius(135f).arcAngle((float) Math.toRadians(360))
                 .build();
 
         TABLE[SHIELD_BASH] = SpellDef.builder(SHIELD_BASH, "盾击", SpellDef.Form.MELEE_ARC)
-                .cooldown(0.90f).damage(34f).knockback(230f)
+                .cooldown(0.90f).damage(68f).knockback(230f)
                 .arcRadius(82f).arcAngle((float) Math.toRadians(95))
                 .build();
 
         // ---- 弓箭手技能池（远程直线，天生穿透）----
         TABLE[ARCHER_MULTISHOT] = SpellDef.builder(ARCHER_MULTISHOT, "多重箭", SpellDef.Form.PROJECTILE)
-                .cooldown(0.70f).damage(16f).range(720f)
+                .cooldown(0.70f).damage(32f).range(720f)
                 .speed(680f).boltRadius(5f)
                 .count(4).spread((float) Math.toRadians(34)).pierce(1)
                 .build();
 
         TABLE[ARCHER_HOMING] = SpellDef.builder(ARCHER_HOMING, "追踪箭", SpellDef.Form.PROJECTILE)
-                .cooldown(0.80f).damage(24f).range(820f)
+                .cooldown(0.80f).damage(48f).range(820f)
                 .speed(760f).boltRadius(6f)
                 .pierce(2).homing()
                 .build();
 
         TABLE[ARCHER_RAIN] = SpellDef.builder(ARCHER_RAIN, "箭雨", SpellDef.Form.PROJECTILE)
-                .cooldown(1.40f).damage(12f).range(560f)
+                .cooldown(1.40f).damage(24f).range(560f)
                 .speed(620f).boltRadius(5f)
                 .count(10).spread((float) Math.toRadians(80)).pierce(1)
                 .build();
 
         // ---- 召唤师技能池（远程弹幕为主，靠宠物扛住近身）----
         TABLE[SUMMONER_BOLT] = SpellDef.builder(SUMMONER_BOLT, "秘能弹", SpellDef.Form.PROJECTILE)
-                .cooldown(0.42f).damage(17f).range(640f)
+                .cooldown(0.42f).damage(20f).range(640f)
                 .speed(500f).boltRadius(7f)
                 .element(Element.ARCANE)
                 .build();
 
         TABLE[SUMMONER_ORB] = SpellDef.builder(SUMMONER_ORB, "秘能球", SpellDef.Form.PROJECTILE)
-                .cooldown(1.20f).damage(20f).range(600f)
+                .cooldown(1.20f).damage(40f).range(600f)
                 .speed(300f).boltRadius(11f)
                 .aoeRadius(58f)
                 .element(Element.ARCANE)
                 .build();
 
         TABLE[SUMMONER_SPIRITS] = SpellDef.builder(SUMMONER_SPIRITS, "灵体箭幕", SpellDef.Form.PROJECTILE)
-                .cooldown(0.95f).damage(13f).range(680f)
+                .cooldown(0.95f).damage(26f).range(680f)
                 .speed(560f).boltRadius(6f)
                 .count(3).spread((float) Math.toRadians(30)).pierce(2)
                 .element(Element.ARCANE)
@@ -156,7 +156,7 @@ public final class Spells {
 
         // 秘法脉冲：奥术脉冲呈环形弹幕向四周迸射，契合召唤师远程定位（原近战扇形已改为远程）
         TABLE[SUMMONER_PULSE] = SpellDef.builder(SUMMONER_PULSE, "秘法脉冲", SpellDef.Form.PROJECTILE)
-                .cooldown(1.10f).damage(16f).range(520f)
+                .cooldown(1.10f).damage(32f).range(520f)
                 .speed(480f).boltRadius(7f)
                 .count(8).spread((float) Math.toRadians(360))
                 .element(Element.ARCANE)
@@ -165,7 +165,7 @@ public final class Spells {
         // ---- 进化形态 ----
         // 魔弹风暴：从"单体点射"变成"扇形弹幕"，且必定穿透——质变要看得见
         TABLE[MISSILE_STORM] = SpellDef.builder(MISSILE_STORM, "魔弹风暴", SpellDef.Form.PROJECTILE)
-                .cooldown(0.30f).damage(14f).range(620f)
+                .cooldown(0.30f).damage(30f).range(620f)
                 .speed(470f).boltRadius(6f)
                 .count(5).spread((float) Math.toRadians(36))
                 .pierce(1)
@@ -174,7 +174,7 @@ public final class Spells {
 
         // 烈焰新星：爆炸后留下持续燃烧区域，把一次性伤害变成持续控场
         TABLE[FLAME_NOVA] = SpellDef.builder(FLAME_NOVA, "烈焰新星", SpellDef.Form.PROJECTILE)
-                .cooldown(1.10f).damage(22f).range(620f)
+                .cooldown(1.10f).damage(44f).range(620f)
                 .speed(380f).boltRadius(10f)
                 .aoeRadius(72f)
                 .zone(90f, 4f, 10f, Element.FIRE)
@@ -183,7 +183,7 @@ public final class Spells {
 
         // 绝对零度：命中冻结，把冰霜从"减速"升级成"硬控"
         TABLE[ABSOLUTE_ZERO] = SpellDef.builder(ABSOLUTE_ZERO, "绝对零度", SpellDef.Form.PROJECTILE)
-                .cooldown(0.80f).damage(16f).range(700f)
+                .cooldown(0.80f).damage(32f).range(700f)
                 .speed(620f).boltRadius(7f)
                 .pierce(2).freeze(1f)
                 .element(Element.FROST).elemPotency(0.35f).elemDuration(2f)
@@ -191,7 +191,7 @@ public final class Spells {
 
         // 雷霆风暴：弹射不再衰减 + 范围 +30%，从"打三个"变成"清一片"
         TABLE[THUNDERSTORM] = SpellDef.builder(THUNDERSTORM, "雷霆风暴", SpellDef.Form.PROJECTILE)
-                .cooldown(0.90f).damage(12f).range(560f)
+                .cooldown(0.90f).damage(24f).range(560f)
                 .speed(900f).boltRadius(7f)
                 .chain(3).chainRange(286f).chainFalloff(0f)
                 .element(Element.SHOCK).elemPotency(0.20f).elemDuration(3f)
@@ -200,26 +200,26 @@ public final class Spells {
         // ---- 进化形态（战士 / 弓箭手）----
         // 巨力斩：挥砍伤害暴涨，配合近战站桩
         TABLE[WARRIOR_SLASH_EVO] = SpellDef.builder(WARRIOR_SLASH_EVO, "巨力斩", SpellDef.Form.MELEE_ARC)
-                .cooldown(0.55f).damage(42f)
+                .cooldown(0.55f).damage(84f)
                 .arcRadius(90f).arcAngle((float) Math.toRadians(120))
                 .build();
 
         // 龙卷斩：回旋斩冷却大幅压缩，转得更快
         TABLE[WHIRLWIND_EVO] = SpellDef.builder(WHIRLWIND_EVO, "龙卷斩", SpellDef.Form.MELEE_ARC)
-                .cooldown(0.50f).damage(20f)
+                .cooldown(0.50f).damage(40f)
                 .arcRadius(112f).arcAngle((float) Math.toRadians(360))
                 .build();
 
         // 穿心箭：箭矢伤害暴涨且穿透更深
         TABLE[ARCHER_ARROW_EVO] = SpellDef.builder(ARCHER_ARROW_EVO, "穿心箭", SpellDef.Form.PROJECTILE)
-                .cooldown(0.45f).damage(30f).range(760f)
+                .cooldown(0.45f).damage(60f).range(760f)
                 .speed(700f).boltRadius(5f)
                 .pierce(2)
                 .build();
 
         // 箭幕：多重箭齐射数量翻倍，铺满扇形
         TABLE[ARCHER_MULTI_EVO] = SpellDef.builder(ARCHER_MULTI_EVO, "箭幕", SpellDef.Form.PROJECTILE)
-                .cooldown(0.70f).damage(16f).range(720f)
+                .cooldown(0.70f).damage(32f).range(720f)
                 .speed(680f).boltRadius(5f)
                 .count(7).spread((float) Math.toRadians(46)).pierce(1)
                 .build();
@@ -265,7 +265,7 @@ public final class Spells {
         return TABLE.length;
     }
 
-    /** 巫师可用池，D3 三选一从这里抽 */
+    /** 法师可用池，D3 三选一从这里抽 */
     public static int[] wizardPool() {
         return new int[] { MAGIC_MISSILE, FIREBALL, ICE_SHARD, CHAIN_LIGHTNING };
     }

@@ -7,26 +7,26 @@ public final class Balance {
 
     private Balance() {}
 
-    // ---- 巫师 ----
-    public static final float WIZARD_SPEED   = 195f;
+    // ---- 法师 ----
+    public static final float WIZARD_SPEED   = 200f;
     public static final float WIZARD_RADIUS  = 14f;
-    public static final float WIZARD_HP      = 100f;
+    public static final float WIZARD_HP      = 200f;
     public static final float WIZARD_REGEN   = 0.6f;   // 每秒回血
     /** 受击无敌帧。没有这个，被几十只怪围住会在同一帧内被打光血，瞬间暴毙 */
     public static final float WIZARD_IFRAME  = 0.35f;
-    /** 弓箭手无敌帧：比巫师略短（脆但快，靠走位躲） */
+    /** 弓箭手无敌帧：比法师略短（脆但快，靠走位躲） */
     public static final float ARCHER_IFRAME  = 0.30f;
     /** 战士无敌帧：明显削弱。战士有 15% 减伤 + 击杀回血，无需长时间无敌保护 */
     public static final float WARRIOR_IFRAME = 0.12f;
 
     // ---- 战士 / 弓箭手 / 召唤师（职业基础属性，设计文档第 2 节）----
-    public static final float WARRIOR_HP    = 140f;
-    public static final float WARRIOR_SPEED = 180f;
-    public static final float ARCHER_HP     = 85f;
-    public static final float ARCHER_SPEED  = 205f;
+    public static final float WARRIOR_HP    = 280f;
+    public static final float WARRIOR_SPEED = 190f;
+    public static final float ARCHER_HP     = 160f;
+    public static final float ARCHER_SPEED  = 230f;
     /** 召唤师：本体偏脆——他有 4 只宠物替他挨打，本体再厚就没弱点了 */
-    public static final float SUMMONER_HP    = 90f;
-    public static final float SUMMONER_SPEED = 185f;
+    public static final float SUMMONER_HP    = 180f;
+    public static final float SUMMONER_SPEED = 180f;
     public static final float SUMMONER_IFRAME = 0.32f;
 
     // ---- 职业特性（集中在这里，不在逻辑里散落）----
@@ -36,7 +36,7 @@ public final class Balance {
     public static final float WARRIOR_LIFESTEAL = 2f;
     /** 弓箭手：暴击率 +10% */
     public static final float ARCHER_CRIT       = 0.10f;
-    /** 巫师：法术伤害 +10% */
+    /** 法师：法术伤害 +10% */
     public static final float WIZARD_SPELL_DMG  = 0.10f;
 
     // ---- 召唤物（召唤师的宠物）----
@@ -104,7 +104,7 @@ public final class Balance {
     public static final float ENEMY_SPEED    = 92f;
     /** 碰撞查询时的最大目标半径，投射物搜索范围要按它放宽，否则边缘擦过会漏判 */
     public static final float MAX_TARGET_RADIUS = 16f;
-    public static final float ENEMY_HP       = 26f;
+    public static final float ENEMY_HP       = 52f;   // 小怪血翻倍
     public static final float ENEMY_DAMAGE   = 9f;
     public static final float ENEMY_ATTACK_CD = 0.7f;
     /** 分离力强度，相对移动速度。太大会散开成稀粥，太小会叠成一支穿云箭 */
@@ -150,13 +150,17 @@ public final class Balance {
     public static final float HOMING_TURN  = 0.16f;   // 约 9°/帧
     public static final float MAX_CRIT_CHANCE      = 0.85f;
     /** 减伤硬上限。不封顶后期能堆到免疫，游戏就没了 */
-    public static final float MAX_DAMAGE_REDUCTION = 0.70f;
+    public static final float MAX_DAMAGE_REDUCTION = 0.60f;   // 减伤上限：达到后不再刷新减伤类被动
+    /** Boss 的被控抗性：眩晕 / 冰冻 / 减速 / 击退 的效果按此削弱（0.7 = 只吃 30% 控制） */
+    public static final float BOSS_CC_RESIST = 0.70f;
 
     // ---- 质变阈值（DESIGN.md "质变阈值"一节）----
     /** 元素共鸣：每装备一种元素，全伤害 +5% */
-    public static final float RESONANCE_PER_ELEMENT = 0.05f;
+    public static final float RESONANCE_PER_ELEMENT = 0.10f;
     /** 孤注一掷：只带 1 个主动时的伤害加成 */
-    public static final float ALL_IN_DAMAGE         = 0.80f;
+    public static final float ALL_IN_DAMAGE         = 1.50f;
+    /** 孤注一掷：冷却 −50%（换算成攻速倍率 1/(1-0.5)） */
+    public static final float ALL_IN_CD_REDUCTION   = 0.50f;
     /** 临界质量：穿透达到多少触发 */
     public static final int   CRITICAL_MASS_PIERCE  = 5;
     public static final float CRITICAL_MASS_DAMAGE  = 0.50f;
@@ -166,7 +170,7 @@ public final class Balance {
     /** 连锁反应：元素反应范围加成 */
     public static final float CHAIN_REACTION_RADIUS  = 0.50f;
     /** 元素过载：触发反应时的伤害加成 */
-    public static final float ELEM_OVERLOAD_DAMAGE   = 0.30f;
+    public static final float ELEM_OVERLOAD_DAMAGE   = 0.60f;
 
     /** 冰锥穿透达阈值后命中分裂几枚 */
     public static final int   ICE_SPLIT_PIERCE  = 5;
@@ -209,7 +213,7 @@ public final class Balance {
     public static final float WARCRY_KNOCKBACK    = 220f;
 
     public static final float BARRIER_INTERVAL = 20f;
-    public static final float BARRIER_SHIELD   = 15f;
+    public static final float BARRIER_SHIELD   = 50f;
     public static final float CHEST_INTERVAL   = 60f;
     public static final float REROLL_INTERVAL  = 20f;
 
@@ -221,9 +225,9 @@ public final class Balance {
     public static final float SPIKE_LIFE      = 20f;
 
     /** 绝境爆发 */
-    public static final float LAST_STAND_HP_RATIO  = 0.30f;
-    public static final float LAST_STAND_MOVE      = 0.20f;
-    public static final float LAST_STAND_DAMAGE    = 0.15f;
+    public static final float LAST_STAND_HP_RATIO  = 0.50f;
+    public static final float LAST_STAND_MOVE      = 0.40f;
+    public static final float LAST_STAND_DAMAGE    = 0.50f;
 
     /** 引爆（中毒+燃烧）：按剩余毒伤的多少比例立即结算 */
     public static final float DETONATE_RATIO = 1.0f;
@@ -250,12 +254,12 @@ public final class Balance {
 
     // ---- 敌人变体（D4）----
     /** 精英：体型 ×6、速度 ×1.1、伤害 ×1.5，带一层护盾 */
-    public static final float ELITE_HP_MUL    = 6f;
+    public static final float ELITE_HP_MUL    = 12f;  // 精英血翻倍（原 ×6）
     public static final float ELITE_SPEED_MUL = 1.1f;
     public static final float ELITE_DMG_MUL   = 1.5f;
     public static final float ELITE_SHIELD    = 120f;
     /** 小偷：偷地上的经验宝石，自身不攻击。击杀时掉落翻倍的宝石 */
-    public static final float THIEF_HP     = 40f;
+    public static final float THIEF_HP     = 80f;
     public static final float THIEF_SPEED  = 130f;
     public static final float THIEF_STEAL_RADIUS = 26f;   // 接触宝石即偷走的范围
     /** 分裂怪：死亡时裂成几只，子代 HP 按比例缩小 */
@@ -263,7 +267,7 @@ public final class Balance {
     public static final float SPLIT_HP_MUL  = 0.45f;
     public static final float SPLIT_RADIUS_MUL = 0.8f;
     /** 远程怪：保持距离并向玩家发射弹幕 */
-    public static final float RANGED_HP       = 34f;
+    public static final float RANGED_HP       = 68f;
     public static final float RANGED_SPEED    = 78f;
     public static final float RANGED_DMG      = 14f;
     public static final float RANGED_CD       = 2.2f;
@@ -281,7 +285,7 @@ public final class Balance {
     public static final int[]   BOSS_LEVELS   = { 5, 10, 15, 20 };
     public static final String[] BOSS_NAMES   = { "石心巨像", "熔岩领主", "霜寂君王", "终焉之影" };
     /** 每只 Boss 的血池。第一只别太肉，5 分钟时的 build 打得动 */
-    public static final float[] BOSS_HP_TIERS = { 2000f, 4200f, 7200f, 13000f };
+    public static final float[] BOSS_HP_TIERS = { 4000f, 8400f, 14400f, 26000f };   // 全部翻倍
     /** 每只 Boss 的接触伤害 */
     public static final float[] BOSS_DMG_TIERS = { 18f, 22f, 26f, 32f };
     /** Boss 在场时普通刷怪速率的倍率：把舞台让给 Boss 战 */
@@ -348,7 +352,7 @@ public final class Balance {
     // ---- 5 关 Boss：奶蛙（玩家等级达到 25 级时从场地中央刷新，独立技能组）----
     /** 刷新条件：玩家等级达到该值 */
     public static final int   MILKY_LEVEL         = 25;
-    public static final float MILKY_HP            = 8000f;
+    public static final float MILKY_HP            = 30000f;
     public static final float MILKY_SPEED         = 220f;
     public static final float MILKY_RADIUS        = 48f;
     /** 接触伤害（技能伤害另算） */

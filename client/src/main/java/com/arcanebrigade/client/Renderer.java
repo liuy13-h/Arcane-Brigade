@@ -1054,12 +1054,23 @@ public final class Renderer {
                         drawEnemySprite(w, i, sx, sy, rr);
                     }
                     drawEnemyStatus(w, i, sx, sy);
-                    if (i != w.milkyId() && i != w.kingId() && w.hp[i] < w.maxHp[i]) {
+                    // 血条：血量掉了或还有护盾就显示。
+                    // 精英/Boss 的伤害先扣护盾，之前护盾没破时血条压根不出现，
+                    // 看上去就像"打不动、几秒不掉血"——这里把护盾画成蓝色段给出反馈。
+                    // 奶蛙与国王走各自的大血条，这里不重复画。
+                    boolean hasShield = w.enemyShield[i] > 0f;
+                    if (i != w.milkyId() && i != w.kingId()
+                            && (w.hp[i] < w.maxHp[i] || hasShield)) {
                         float f = Math.max(0f, w.hp[i] / w.maxHp[i]);
                         gc.setFill(Color.rgb(30, 12, 16));
                         gc.fillRect(sx - 13, sy - rr - 10, 26, 4);
                         gc.setFill(Color.rgb(235, 70, 90));
                         gc.fillRect(sx - 12, sy - rr - 9, 24 * f, 2);
+                        if (hasShield) {
+                            float sf = Math.min(1f, w.enemyShield[i] / w.maxHp[i]);
+                            gc.setFill(Color.rgb(150, 200, 255));
+                            gc.fillRect(sx - 12, sy - rr - 9, 24 * sf, 2);
+                        }
                     }
                 }
                 case World.KIND_MINION -> {
@@ -1156,13 +1167,15 @@ public final class Renderer {
         if (img == null) {
             return;
         }
-        double h = rr * 2.6;
+        // 精英怪模型放大到原来的 2 倍（仅视觉；碰撞半径不变，Boss 不受影响）
+        double modelMul = (w.variant[i] == World.V_ELITE) ? 2.0 : 1.0;
+        double h = rr * 2.6 * modelMul;
         double dw = img.getWidth() * (h / img.getHeight());
-        gc.drawImage(img, sx - dw / 2, sy - h + rr * 0.35, dw, h);
+        gc.drawImage(img, sx - dw / 2, sy - h + rr * 0.35 * modelMul, dw, h);
     }
 
     /**
-     * 玩家弹体形象：按施法职业取专属素材——巫师=充能爆能法球、弓箭手=飞刀（按飞行方向取预烘焙朝向），
+     * 玩家弹体形象：按施法职业取专属素材——法师=充能爆能法球、弓箭手=飞刀（按飞行方向取预烘焙朝向），
      * 其余职业（召唤师等）沿用元素配色弹。职业从 owner 的 Loadout 读，拿不到就退回元素弹。
      */
     private Image playerBoltImage(World w, int i) {
@@ -3003,21 +3016,21 @@ public final class Renderer {
     private static final double LOBBY_STATION_RADIUS = 46.0;
 
     // ------------------------------------------------------------------
-    // 右侧角色细节卡：文案与数值。下标=职业 id（1..4 = 巫师/战士/弓箭手/召唤师）。
+    // 右侧角色细节卡：文案与数值。下标=职业 id（1..4 = 法师/战士/弓箭手/召唤师）。
     // ------------------------------------------------------------------
-    private static final String[] CARD_NAME = { "", "巫师", "战士", "弓箭手", "召唤师" };
+    private static final String[] CARD_NAME = { "", "法师", "战士", "弓箭手", "召唤师" };
     private static final String[] CARD_EN = { "", "WIZARD", "VANGUARD", "ARCHER", "SUMMONER" };
     private static final String[] CARD_ROLE = {
             "", "远程 · 法系爆发", "近战 · 范围挥砍", "远程 · 穿透点射", "辅助 · 召唤协战" };
     private static final String[][] CARD_FEATS = {
             {},
             { "法术伤害 +10%", "每 30 秒免费重抽", "远程弹幕 · 拉扯走位" },
-            { "生命 140 · 能扛能打", "受伤减免 15% · 击杀回血", "近战弧形 · 贴身压制" },
+            { "生命 280 · 能扛能打", "受伤减免 15% · 击杀回血", "近战弧形 · 贴身压制" },
             { "移速最快 · 游走风筝", "暴击 +10% · 箭箭穿心", "身板最脆 · 注意走位" },
-            { "生命 90 · 召唤协战", "每 10 秒召唤 4 只宠物", "宠物护主 · 鼠标指挥集火" } };
-    /** 数值条：0..1 的归一值（召唤师已开放，接 main 的真实属性） */
-    private static final double[] CARD_LIFE = { 0, 100 / 150.0, 140 / 150.0, 85 / 150.0, 90 / 150.0 };
-    private static final double[] CARD_SPEED = { 0, 195 / 235.0, 180 / 235.0, 205 / 235.0, 185 / 235.0 };
+            { "生命 180 · 召唤协战", "每 10 秒召唤 4 只宠物", "宠物护主 · 鼠标指挥集火" } };
+    /** 生命 / 移速条的满格标尺：直接读 HeroClass 实时值，调平衡时卡片自动跟随 */
+    private static final float CARD_LIFE_SCALE  = 300f;   // 最高 280（战士）
+    private static final float CARD_SPEED_SCALE = 240f;   // 最高 230（弓箭手）
     /**
      * 起手武器数值条的满格标尺：攻击力 30（最强起手挥砍 26）、攻击范围 800（最远箭矢 760）。
      * 这两个数值不落数组——直接读 HeroClass.startSpell 的实时值，调平衡时卡片自动跟随。
@@ -3056,13 +3069,13 @@ public final class Renderer {
                 minX, minY, maxX, maxY, altarC, altarR, gx, gy, gR, avatarR);
     }
 
-    /** 职业代表色：巫师 紫 / 战士 橙红 / 弓箭手 绿 / 召唤师 冰蓝 */
+    /** 职业代表色：法师 紫 / 战士 橙红 / 弓箭手 绿 / 召唤师 冰蓝 */
     private static Color classAccent(int cls) {
         return switch (cls) {
             case HeroClass.WARRIOR   -> Color.rgb(255, 140, 90);
             case HeroClass.ARCHER    -> Color.rgb(140, 230, 150);
             case LobbyClass.SUMMONER -> Color.rgb(150, 235, 255);
-            default                  -> Color.rgb(200, 140, 255);   // 巫师
+            default                  -> Color.rgb(200, 140, 255);   // 法师
         };
     }
 
@@ -3420,11 +3433,13 @@ public final class Renderer {
         // 数值条（宽度适配左栏；标签列统一按最宽标签「攻击范围」对齐）
         double barLabelW = measureWidth(Font.font("Microsoft YaHei", 12.5), "攻击范围");
         double barW = Math.max(56, leftW - barLabelW - 42);
-        drawCardBar(lx, iy, "生命", Math.round(CARD_LIFE[ck] * 150) + "",
-                CARD_LIFE[ck], ac, barW, barLabelW);
+        double lifeFrac = HeroClass.baseHp(ck) / CARD_LIFE_SCALE;
+        drawCardBar(lx, iy, "生命", Math.round(HeroClass.baseHp(ck)) + "",
+                lifeFrac, ac, barW, barLabelW);
         iy += 27;
-        drawCardBar(lx, iy, "移速", Math.round(CARD_SPEED[ck] * 235) + "",
-                CARD_SPEED[ck], Color.rgb(120, 220, 255), barW, barLabelW);
+        double speedFrac = HeroClass.baseSpeed(ck) / CARD_SPEED_SCALE;
+        drawCardBar(lx, iy, "移速", Math.round(HeroClass.baseSpeed(ck)) + "",
+                speedFrac, Color.rgb(120, 220, 255), barW, barLabelW);
         iy += 27;
         drawCardBar(lx, iy, "攻击力", Math.round(starterDamage(ck)) + "",
                 starterDamage(ck) / CARD_ATK_SCALE, Color.rgb(255, 140, 105), barW, barLabelW);

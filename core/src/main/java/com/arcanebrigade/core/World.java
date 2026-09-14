@@ -698,7 +698,7 @@ public final class World {
     }
 
     /**
-     * 按职业生成玩家。设置基础 HP / 移速、起手主动技能、起手被动（巫师带"重抽"），
+     * 按职业生成玩家。设置基础 HP / 移速、起手主动技能、起手被动（法师带"重抽"），
      * 并把职业记到 Loadout 上——Stats.recompute 据此套用职业特性（减伤 / 暴击 / 法伤）。
      */
     public int spawnWizard(float sx, float sy, int classKind) {
@@ -1536,8 +1536,7 @@ public final class World {
             }
             // 回血：基础 + 被动 + 绝境爆发
             float regen = Balance.WIZARD_REGEN
-                    + (st != null ? st.regenAdd : 0f)
-                    + (st != null && st.lastStandActive ? Balance.LAST_STAND_DAMAGE * 4f : 0f);
+                    + (st != null ? st.regenAdd : 0f);
             if (hp[id] < maxHp[id]) {
                 hp[id] = Math.min(maxHp[id], hp[id] + regen * dt);
             }
@@ -1592,7 +1591,7 @@ public final class World {
             }
             // 冰霜减速
             float slow = (elem[i] == Element.FROST)
-                    ? Math.min(elemP[i], Balance.ELEM_FROST_MAX_SLOW) : 0f;
+                    ? Math.min(elemP[i], Balance.ELEM_FROST_MAX_SLOW) * ccMul(i) : 0f;
             float moveSpeed = speed[i] * (1f - slow) * arenaMap.movementMultiplierAt(x[i], y[i]);
 
             float dx = x[target] - x[i];
@@ -3357,7 +3356,7 @@ public final class World {
             applyElement(e, def.element, elePot, eleDur, power);
         }
         if (def.freeze > 0f) {
-            stunT[e] = Math.max(stunT[e], def.freeze);
+            stunT[e] = Math.max(stunT[e], def.freeze * ccMul(e));
         }
         if (projAoe[p] > 0f) {
             float aoeDmg = power * 0.6f;
@@ -3583,7 +3582,7 @@ public final class World {
                         if (dx * dx + dy * dy <= Balance.SPIKE_RADIUS * Balance.SPIKE_RADIUS) {
                             damage(e, Balance.SPIKE_DAMAGE);
                             if (alive[e]) {
-                                stunT[e] = Math.max(stunT[e], Balance.SPIKE_STUN);
+                                stunT[e] = Math.max(stunT[e], Balance.SPIKE_STUN * ccMul(e));
                             }
                             iframe[i] = 1f;   // 标记已触发
                             break;
@@ -3691,8 +3690,9 @@ public final class World {
                         float dy = y[e] - y[id];
                         float d = (float) Math.sqrt(dx * dx + dy * dy);
                         if (d > 1e-3f && d <= Balance.WARCRY_RADIUS) {
-                            kx[e] += dx / d * Balance.WARCRY_KNOCKBACK;
-                            ky[e] += dy / d * Balance.WARCRY_KNOCKBACK;
+                            float kbw = Balance.WARCRY_KNOCKBACK * ccMul(e);
+                            kx[e] += dx / d * kbw;
+                            ky[e] += dy / d * kbw;
                         }
                     }
                     lo.warCryTimer = Balance.WARCRY_INTERVAL;
@@ -3806,7 +3806,7 @@ public final class World {
                 float dmg = Balance.REACTION_STEAM_DAMAGE * statsMulForReactionDmg(target);
                 explode(x[target], y[target], r, dmg, Element.FIRE, 0f);
                 if (alive[target]) {
-                    stunT[target] = Math.max(stunT[target], Balance.REACTION_STEAM_STUN);
+                    stunT[target] = Math.max(stunT[target], Balance.REACTION_STEAM_STUN * ccMul(target));
                 }
             }
             case Element.R_SUPERCONDUCT -> {
@@ -3814,7 +3814,7 @@ public final class World {
                         * statsMulForReactionDmg(target);
                 damage(target, incoming * ratio);
                 if (alive[target]) {
-                    stunT[target] = Math.max(stunT[target], Balance.REACTION_SUPERCONDUCT_STUN);
+                    stunT[target] = Math.max(stunT[target], Balance.REACTION_SUPERCONDUCT_STUN * ccMul(target));
                 }
             }
             case Element.R_OVERLOAD -> {
@@ -3882,11 +3882,12 @@ public final class World {
             //（三阶段的传送前摇同理由 kingTeleT 一并覆盖，用户要求）
             if (knockback > 0f && alive[e] && !(e == kingId && (kingTelegraphT > 0f || kingTeleT > 0f))) {
                 float d = (float) Math.sqrt(d2);
+                float kb = knockback * ccMul(e);   // Boss 抗性：击退被削弱
                 if (d > 1e-3f) {
-                    kx[e] += dx / d * knockback;
-                    ky[e] += dy / d * knockback;
+                    kx[e] += dx / d * kb;
+                    ky[e] += dy / d * kb;
                 } else {
-                    kx[e] += knockback;
+                    kx[e] += kb;
                 }
             }
         }
@@ -4028,7 +4029,7 @@ public final class World {
         return -1;
     }
 
-    /** 该玩家实体的职业（找不到返回巫师） */
+    /** 该玩家实体的职业（找不到返回法师） */
     private int classOf(int id) {
         Loadout lo = loadout[id];
         return (lo != null) ? lo.classKind : HeroClass.WIZARD;
@@ -4063,6 +4064,12 @@ public final class World {
      *
      * crit 已经在调用方（castOne）掷过了，这里只处理减伤。
      */
+    /** 被控抗性系数：Boss（含奶蛙）与骨蛇只吃 (1 - BOSS_CC_RESIST) 的眩晕/冰冻/减速/击退 */
+    private float ccMul(int id) {
+        return (variant[id] == V_BOSS || variant[id] == V_SERPENT)
+                ? 1f - Balance.BOSS_CC_RESIST : 1f;
+    }
+
     public void damage(int id, float amount) {
         if (id < 0 || !alive[id] || amount <= 0f) {
             return;

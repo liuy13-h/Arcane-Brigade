@@ -169,7 +169,7 @@ public final class Stats {
             resonance     |= d.resonance;
         }
 
-        // 职业特性：巫师法术+10% / 战士减伤15%+击杀回血 / 弓箭手暴击+10%
+        // 职业特性：法师法术+10% / 战士减伤15%+击杀回血 / 弓箭手暴击+10%
         // 放在被动累加之后、封顶之前，保证职业加成也受上限约束
         applyClassTraits(lo);
 
@@ -210,6 +210,8 @@ public final class Stats {
         if (loneWolf && actives == 1) {
             loneWolfActive = true;
             dmgMul *= 1f + Balance.ALL_IN_DAMAGE;
+            // 冷却 −50%：换算成攻速倍率（cdTime = cooldown / atkSpeed）
+            atkSpeed /= Math.max(0.05f, 1f - Balance.ALL_IN_CD_REDUCTION);
         }
         if (criticalMass && maxPierce >= Balance.CRITICAL_MASS_PIERCE) {
             criticalMassActive = true;

@@ -98,8 +98,26 @@ public final class Upgrades {
             if (lo.contains(sid)) {
                 continue;
             }
+            // 元素附魔门槛：没选到对应元素的亲和被动，就抽不到该元素的技能。
+            // 仅限制「抽卡」——已经拿到的技能不会被禁用（见 DESIGN 的构筑引导）。
+            SpellDef def = Spells.get(sid);
+            int need = (def != null) ? affinityFor(def.element) : Passives.NONE;
+            if (need != Passives.NONE && lo.passiveStacks(need) <= 0) {
+                continue;
+            }
             pool.add(new Cand(KIND_SPELL, sid, Spells.rarityOf(sid)));
         }
+    }
+
+    /** 技能元素 → 解锁它所需的元素附魔被动；无附魔/毒等不设门槛时返回 NONE */
+    private static int affinityFor(int element) {
+        return switch (element) {
+            case Element.FIRE   -> Passives.FIRE_AFFINITY;
+            case Element.FROST  -> Passives.FROST_AFFINITY;
+            case Element.SHOCK  -> Passives.SHOCK_AFFINITY;
+            case Element.ARCANE -> Passives.ARCANE_AFFINITY;
+            default             -> Passives.NONE;
+        };
     }
 
     private static void addPassiveCandidates(Loadout lo, List<Cand> pool) {
@@ -110,6 +128,10 @@ public final class Upgrades {
                 continue;
             }
             if (lo.passiveStacks(pid) >= d.maxStacks) {
+                continue;
+            }
+            // 减伤已到上限（60%）：不再刷新任何减伤类被动，避免给无效选项
+            if (d.dr > 0f && lo.stats.dr >= Balance.MAX_DAMAGE_REDUCTION - 1e-4f) {
                 continue;
             }
             // 战士纯近战：剔除一切依赖投射物/弹幕/穿透机制的被动（弹幕之王/穿透弹/跳弹/临界质量），
