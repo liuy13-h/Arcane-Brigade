@@ -360,6 +360,13 @@ public final class World {
     private boolean kingArena;
     /** 国王实体 id；-1 表示不在场 */
     private int kingId = -1;
+    /**
+     * 三阶段第二管血分裂出的分身实体 id；-1 表示未分裂/已收场。
+     * 分身与本体共享一个血池：伤害在 damage() 里统一记在本体上，分身每帧同步本体血量。
+     */
+    private int kingTwinId = -1;
+    /** 第二管血的分裂是否已触发（三阶段内一次性；防分身意外收场后重复分裂） */
+    private boolean kingSplit;
     /** 国王阶段：0=未开战，1/2/3=对应阶段 */
     private int kingPhase;
     /** 技能冷却（阶段一：每 8 秒一次） */
@@ -370,6 +377,12 @@ public final class World {
     private float kingAttritionT;
     /** 国王朝向（渲染选动画用） */
     private boolean kingFaceRight = true;
+    /** 三阶段分身的朝向（渲染用；本体朝向见 kingFaceRight） */
+    private boolean kingTwinFaceRight = true;
+    /** 三阶段分身传送：距下一轮的剩余时间（跟随本体节拍错开——本体瞬移后 KING3_TWIN_TELE_DELAY 秒起跳） */
+    private float kingTwinTeleCd;
+    /** 三阶段分身传送前摇剩余（>0 = 前摇中：落点预警 + 到期爆发） */
+    private float kingTwinTeleT;
     /** 前摇随机走位：距下次换方向的剩余时间 */
     private float kingDodgeT;
     /** 前摇随机走位方向（单位向量） */
@@ -547,6 +560,18 @@ public final class World {
             }
             return;
         }
+        if (id == kingTwinId) {
+            // 王座分身：血量并入本体血池（damage 已转发），正常流程不会独立死亡——
+            // 这里兜底走安静收尾：不计击杀、不掉落、不弹升级。
+            kingTwinId = -1;
+            enemiesAlive--;
+            kind[id] = KIND_FREE;
+            liveCount--;
+            if (freeTop < MAX) {
+                freeList[freeTop++] = id;
+            }
+            return;
+        }
         if (id == kingId) {
             int phaseFallen = kingPhase;
             kingId = -1;
@@ -561,7 +586,11 @@ public final class World {
                 freeList[freeTop++] = id;
             }
             if (phaseFallen >= 3) {
-                // 三阶段击破 = 真通关：王座本体轰然崩解
+                // 三阶段击破 = 真通关：王座本体轰然崩解（分裂出的分身随血池归零一起崩解）
+                if (kingTwinId >= 0) {
+                    despawn(kingTwinId);
+                    kingTwinId = -1;
+                }
                 victory = true;
                 summary = snapshot(true, false, firstWizard());
                 return;
@@ -1954,7 +1983,12 @@ public final class World {
             }
         } else if (kingPhase >= 3) {
             speed[k] = 0f;   // 三阶段不走路：位移全靠传送（updateKing3 手动路径）
+            // 两管血（12000×2）：第一管打空即分裂出分身（整场只触发一次）
+            if (!kingSplit && hp[k] <= Balance.KING3_HP_PER_BAR) {
+                spawnKingTwin();
+            }
             updateKing3(dt);
+            updateKingTwin(dt);
         } else if (kingPhase == 2) {
             speed[k] = 0f;   // 二阶段同样走手动路径：距离带走位在 updateKing2 里
             updateKing2(dt);
@@ -2112,6 +2146,14 @@ public final class World {
             despawn(kingId);
             kingId = -1;
         }
+        // 分裂状态复位：清掉可能残留的分身（调试直进/重开时防双子残留）
+        kingSplit = false;
+        if (kingTwinId >= 0) {
+            despawn(kingTwinId);
+            kingTwinId = -1;
+        }
+        kingTwinTeleT = 0f;
+        kingTwinTeleCd = 0f;
         int w = firstWizard();
         if (w >= 0) {
             // 把玩家拉回殿中入场位：对白结束时玩家可能贴在王座附近，拉开距离给三阶段开场
@@ -2155,6 +2197,125 @@ public final class World {
         kingSummonCd = Balance.KING3_SUMMON_CD; // 首只召唤 Boss：25 秒后
         kingTelegraphT = 0f;
         kingFaceRight = true;
+    }
+
+    /**
+     * 第二管血分裂：血池降到 KING3_HP_PER_BAR（第一管打空）时，
+     * 王座本体裂出一个分身——两尊共享同一个血池（见 damage 的伤害转发），
+     * 玩家把血池彻底打空才算真正击破。整场只触发一次（kingSplit 守卫）。
+     * 分身复刻三阶段本体的行为：常态不动、每 3 秒传送（落点 1 秒前摇后爆发），
+     * 但传送与本体错开——本体瞬移 KING3_TWIN_TELE_DELAY 秒后分身才起跳，两尊不同时瞬移。
+     */
+    private void spawnKingTwin() {
+        int k = kingId;
+        if (k < 0 || !alive[k]) {
+            return;
+        }
+        kingSplit = true;
+        // 从本体旁边 76px 随机方向裂出，钳回竞技场
+        float ang = rng.nextFloat() * (float) (Math.PI * 2);
+        int id = spawnEnemy(x[k] + (float) Math.cos(ang) * 76f,
+                y[k] + (float) Math.sin(ang) * 76f, 0, V_BOSS);
+        if (id < 0) {
+            return;
+        }
+        maxHp[id] = Balance.KING3_HP;
+        hp[id] = hp[k];                 // 出生即与共享血池同血
+        speed[id] = 0f;                 // 位移走 updateKingTwin 的手动追击路径
+        r[id] = Balance.KING3_RADIUS;
+        dmg[id] = Balance.KING3_CONTACT_DAMAGE;
+        enemyShield[id] = 0f;
+        clampKingArena(id);
+        kingTwinId = id;
+        // 首轮传送：与本体错开——本体下一次瞬移（max(CD, 前摇)）之后再等 KING3_TWIN_TELE_DELAY 秒才起跳
+        kingTwinTeleCd = Math.max(kingTeleCd, kingTeleT) + Balance.KING3_TWIN_TELE_DELAY;
+        kingTwinTeleT = 0f;
+        int w = firstWizard();
+        kingTwinFaceRight = (w < 0) || x[w] >= x[id];
+        spawnFx(FX_BLAST, x[k], y[k], 0f, 0f, 110f, 0.5f, Element.NONE);   // 分裂爆闪
+    }
+
+    /**
+     * 分身行为（三阶段设定与本体一致，但传送错开 KING3_TWIN_TELE_DELAY 秒）：不走路——
+     * 每 3 秒随机传送到玩家 50 以内，落位后 1 秒前摇，前摇到期以落点为中心爆发 30 伤害；
+     * 起跳节拍由本体的瞬移校正（startKingTele 里把这里的 CD 重设为延迟量），不与本体同时起跳。
+     * 血量每帧从共享血池同步（受到的伤害已在 damage() 里转发给本体）。
+     * 本体收场时由 kill() 的三阶段分支随杀随清，这里只做兜底清理。
+     */
+    private void updateKingTwin(float dt) {
+        int t = kingTwinId;
+        if (t < 0) {
+            return;
+        }
+        if (!alive[t]) {
+            kingTwinId = -1;
+            return;
+        }
+        int k = kingId;
+        if (k < 0 || !alive[k]) {
+            return;
+        }
+        hp[t] = hp[k];                  // 共享血池：分身的血条/受击反馈与本体一致
+        speed[t] = 0f;
+        // 传送节拍：与本体错开（本体瞬移后 2 秒起跳，1 秒前摇含在 3 秒周期内），前摇到期爆发后立刻抽下一个落点
+        if (kingTwinTeleT > 0f) {
+            kingTwinTeleT -= dt;
+            if (kingTwinTeleT <= 0f) {
+                explodeTwinTele();
+            }
+        }
+        kingTwinTeleCd -= dt;
+        if (kingTwinTeleCd <= 0f && kingTwinTeleT <= 0f) {
+            startTwinTele();
+            kingTwinTeleCd = Balance.KING3_TELE_CD;
+        }
+    }
+
+    /** 分身传送落位：与本体同款（玩家 KING3_TELE_RANGE 内随机抽一点，瞬移过去并起 1 秒前摇） */
+    private void startTwinTele() {
+        int t = kingTwinId;
+        int w = firstWizard();
+        if (t < 0 || !alive[t] || w < 0) {
+            return;
+        }
+        float ang = rng.nextFloat() * (float) (Math.PI * 2);
+        float dist = Balance.KING3_TELE_MIN
+                + rng.nextFloat() * (Balance.KING3_TELE_RANGE - Balance.KING3_TELE_MIN);
+        x[t] = x[w] + (float) Math.cos(ang) * dist;
+        y[t] = y[w] + (float) Math.sin(ang) * dist;
+        clampKingArena(t);      // 落点钳回竞技场（钳制只会让落点更靠近玩家，不破坏 50 的承诺）
+        kingTwinFaceRight = x[w] >= x[t];
+        kingTwinTeleT = Balance.KING3_TELE_TELEGRAPH;
+    }
+
+    /**
+     * 分身传送前摇到期：以落点为中心 100 范围爆发 30 伤害。
+     * 每次命中玩家同样从深渊汲取 200 生命（与本体同款的王座被动）。
+     */
+    private void explodeTwinTele() {
+        int t = kingTwinId;
+        if (t < 0 || !alive[t]) {
+            return;
+        }
+        spawnFx(FX_BLAST, x[t], y[t], 0f, 0f, Balance.KING3_TELE_RADIUS, 0.34f, Element.NONE);
+        int hits = 0;
+        for (int n = 0; n < wizards.size(); n++) {
+            int wz = wizards.get(n);
+            if (!alive[wz]) {
+                continue;
+            }
+            float dx = x[wz] - x[t];
+            float dy = y[wz] - y[t];
+            float rr = Balance.KING3_TELE_RADIUS + r[wz];
+            if (dx * dx + dy * dy <= rr * rr && iframe[wz] <= 0f) {
+                damage(wz, Balance.KING3_TELE_DAMAGE);
+                iframe[wz] = heroIframe(wz);
+                hits++;
+            }
+        }
+        if (hits > 0) {
+            kingDrain(hits);
+        }
     }
 
     /**
@@ -2236,6 +2397,10 @@ public final class World {
         clampKingArena(k);      // 落点钳回竞技场（钳制只会让落点更靠近玩家，不破坏 50 的承诺）
         kingFaceRight = x[w] >= x[k];
         kingTeleT = Balance.KING3_TELE_TELEGRAPH;
+        // 分身错开：本体起跳后 KING3_TWIN_TELE_DELAY 秒才轮到分身瞬移（用户要求：不要一起瞬移）
+        if (kingTwinId >= 0) {
+            kingTwinTeleCd = Balance.KING3_TWIN_TELE_DELAY;
+        }
     }
 
     /**
@@ -2378,12 +2543,20 @@ public final class World {
         }
     }
 
-    /**
-     * 二阶段走位：用户给定「会追玩家」——全程朝最近玩家直线追击，只按距离换档：
-     * > 400 → 175；250~400 → 155；< 250 → 140。
-     */
+    /** 二阶段走位：本体追击（细节见 chaseKing） */
     private void moveKing2(float dt) {
-        int k = kingId;
+        chaseKing(kingId, dt);
+    }
+
+    /**
+     * 国王系追击（二阶段本体专用。三阶段本体与分身都不走路，位移全走传送）：
+     * 用户给定「会追玩家」——全程朝最近玩家直线追击，只按距离换档：
+     * > 400 → 195；250~400 → 175；< 250 → 160。
+     */
+    private void chaseKing(int k, float dt) {
+        if (k < 0 || !alive[k]) {
+            return;
+        }
         int w = nearestWizard(x[k], y[k]);
         if (w < 0) {
             return;
@@ -3363,7 +3536,7 @@ public final class World {
                     // 预警圈到期：对玩家与敌人同时爆炸并击退。
                     // 伤害取创建时写入的 dmg——Boss 的 spawnWarning 与国王技能共用此通道，
                     // 两者半径与伤害不同，写死 WARNING_DAMAGE 会把国王技能打回 38。
-                    // skipKing：这是国王自己的技能，王座不吃自伤、也不被震走。
+                    // skipKing：这是国王自己的技能，王座系（本体与三阶段分身）不吃自伤、也不被震走。
                     float wd = (dmg[i] > 0f) ? dmg[i] : Balance.WARNING_DAMAGE;
                     explode(x[i], y[i], r[i], wd, Element.NONE, Balance.WARNING_KNOCKBACK, true);
                     int whits = damagePlayersInRadius(x[i], y[i], r[i], wd);
@@ -3428,9 +3601,9 @@ public final class World {
                 if (!alive[e] || kind[e] != KIND_ENEMY) {
                     continue;
                 }
-                // 预警圈只是前摇视觉，不该当持续伤害场：0.5 秒一跳会误伤王座本体
-                //（与到期 explode 的 skipKing 同语义——「王座不吃自己放的圈」）
-                if (sub == ZONE_WARNING && e == kingId) {
+                // 预警圈只是前摇视觉，不该当持续伤害场：0.5 秒一跳会误伤王座系
+                //（与到期 explode 的 skipKing 同语义——“王座（含分身）不吃自己放的圈”）
+                if (sub == ZONE_WARNING && isKingKind(e)) {
                     continue;
                 }
                 float dx = x[e] - x[i];
@@ -3670,13 +3843,26 @@ public final class World {
         return loadout[w].stats.reactionDmgMul;
     }
 
+    /** 国王系实体（本体 / 三阶段分身）：王座自己的技能不伤、不推它们 */
+    private boolean isKingKind(int e) {
+        return e == kingId || e == kingTwinId;
+    }
+
+    /** 国王系“生根”判定：本体 / 分身处于施法或传送前摇时不吃爆炸击退（用户要求站定蓄力） */
+    private boolean kingRooted(int e) {
+        if (e == kingId) {
+            return kingTelegraphT > 0f || kingTeleT > 0f;
+        }
+        return e == kingTwinId && kingTwinTeleT > 0f;
+    }
+
     /** 范围伤害 + 可选击退。用 scratch2，调用点都在 scratch 的遍历里 */
     private void explode(float ex, float ey, float radius, float damage, int element, float knockback) {
         explode(ex, ey, radius, damage, element, knockback, false);
     }
 
     /**
-     * 同上；skipKing=true 时王座本体不吃这次爆炸——国王自己的预警圈专用：
+     * 同上；skipKing=true 时王座系（本体与三阶段分身）都不吃这次爆炸——国王自己的预警圈专用：
      * 王座不该被自己放的圈震伤（也不该在传送前摇里被推走）。
      */
     private void explode(float ex, float ey, float radius, float damage, int element, float knockback, boolean skipKing) {
@@ -3684,7 +3870,7 @@ public final class World {
         enemyHash.query(ex, ey, radius + Balance.MAX_TARGET_RADIUS, scratch2);
         for (int n = 0; n < scratch2.size(); n++) {
             int e = scratch2.get(n);
-            if (!alive[e] || kind[e] != KIND_ENEMY || (skipKing && e == kingId)) {
+            if (!alive[e] || kind[e] != KIND_ENEMY || (skipKing && isKingKind(e))) {
                 continue;
             }
             float dx = x[e] - ex;
@@ -3695,9 +3881,9 @@ public final class World {
                 continue;
             }
             damage(e, damage);
-            // 国王施法前摇中脚下生根：不结算击退，保证"站定蓄力"不被爆炸余波推着走
-            //（三阶段的传送前摇同理由 kingTeleT 一并覆盖，用户要求）
-            if (knockback > 0f && alive[e] && !(e == kingId && (kingTelegraphT > 0f || kingTeleT > 0f))) {
+            // 国王系施法/传送前摇中脚下生根：不结算击退，保证“站定蓄力”不被爆炸余波推着走
+            //（一阶段技能 / 三阶段传送，本体与分身同规则，用户要求）
+            if (knockback > 0f && alive[e] && !kingRooted(e)) {
                 float d = (float) Math.sqrt(d2);
                 if (d > 1e-3f) {
                     kx[e] += dx / d * knockback;
@@ -3890,6 +4076,11 @@ public final class World {
             if (id < 0 || !alive[id]) {
                 return;
             }
+        }
+        // 三阶段分裂的王座分身：与本体共享一个血池，伤害统一记在本体上。
+        // （分身的 hp 每帧从本体同步，所以它永远不会在这里被打到 0。）
+        if (id == kingTwinId && kingId >= 0 && alive[kingId]) {
+            id = kingId;
         }
         // 附着雷电的目标更脆
         float amt = (elem[id] == Element.SHOCK)
@@ -4085,6 +4276,26 @@ public final class World {
     /** 国王实体 id；-1 表示不在场 */
     public int kingId() {
         return kingId;
+    }
+
+    /** 三阶段第二管血分裂出的分身实体 id；-1 表示未分裂 */
+    public int kingTwinId() {
+        return kingTwinId;
+    }
+
+    /** 分身是否朝向右侧（渲染选动画用；本体朝向见 kingFaceRight） */
+    public boolean kingTwinFaceRight() {
+        return kingTwinFaceRight;
+    }
+
+    /** 分身当前是否处于传送前摇（渲染蓄力提示用） */
+    public boolean kingTwinCasting() {
+        return kingTwinTeleT > 0f;
+    }
+
+    /** 分身传送前摇剩余秒数（冒烟验证用；本体见 kingTeleT） */
+    public float kingTwinTeleT() {
+        return kingTwinTeleT;
     }
 
     /** 国王阶段：0=未开战，1/2/3=对应阶段 */

@@ -610,7 +610,7 @@ public final class Renderer {
                     }
                 }
                 case World.KIND_ENEMY -> {
-                    if (i == w.kingId()) {
+                    if (i == w.kingId() || i == w.kingTwinId()) {
                         drawKingSprite(w, i, sx, sy);
                     } else if (i == w.milkyId()) {
                         drawMilky(w, i, sx, sy);
@@ -624,7 +624,7 @@ public final class Renderer {
                         drawEnemySprite(w, i, sx, sy, rr);
                     }
                     drawEnemyStatus(w, i, sx, sy);
-                    if (i != w.milkyId() && i != w.kingId() && w.hp[i] < w.maxHp[i]) {
+                    if (i != w.milkyId() && i != w.kingId() && i != w.kingTwinId() && w.hp[i] < w.maxHp[i]) {
                         float f = Math.max(0f, w.hp[i] / w.maxHp[i]);
                         gc.setFill(Color.rgb(30, 12, 16));
                         gc.fillRect(sx - 13, sy - rr - 10, 26, 4);
@@ -2161,58 +2161,114 @@ public final class Renderer {
         // 落地阴影
         gc.setFill(Color.rgb(0, 0, 0, 0.36));
         gc.fillOval(sx - dw * 0.30, sy - 6, dw * 0.60, Math.max(6, dh * 0.05));
-        // 前摇提示：脚下泛红光（预警圈同时出现在玩家脚下）
-        if (w.kingCasting()) {
+        // 前摇提示：脚下泛红光（预警圈同时出现在玩家脚下）；本体/分身各按自己的前摇状态
+        boolean casting = (i == w.kingTwinId()) ? w.kingTwinCasting() : w.kingCasting();
+        if (casting) {
             gc.setFill(Color.rgb(255, 110, 80, 0.20));
             gc.fillOval(sx - dw * 0.55, sy - dh * 0.10, dw * 1.1, dh * 0.20);
         }
-        drawSpriteFacing(img, sx, sy - dh, dw, dh, !w.kingFaceRight());
+        drawSpriteFacing(img, sx, sy - dh, dw, dh, !kingFaceRightOf(w, i));
     }
 
-    /** 决战国王的专属血条：顶部加高条 + 「国王 · 第 N 阶段」（参考奶蛙条样式，无头像） */
+    /** 国王系实体（本体/三阶段分身）各自的朝向：选中者不同用的朝向字段也不同 */
+    private static boolean kingFaceRightOf(World w, int i) {
+        return (i == w.kingTwinId()) ? w.kingTwinFaceRight() : w.kingFaceRight();
+    }
+
+    /** 决战国王的专属血条：顶部加高条 + 「国王 · 第 N 阶段」（参考奶蛙条样式，无头像）。
+     *  三阶段为两管血（12000×2）：上下两条各一管，第一管打空后第二管接替；
+     *  第二管即「分裂双子」阶段，名称追加 ×2。 */
     private void drawKingBar(World w, double vw) {
         int id = w.kingId();
         if (id < 0 || !w.alive[id]) {
             return;
         }
-        double bh = 26;
         double bw = Math.min(620, vw - 140);
         double bx = (vw - bw) / 2;
         double by = 20;
-        boolean p3 = w.kingPhase() >= 3;    // 三阶段：王座本体（紫系配色 + 专属名称）
+        if (w.kingPhase() >= 3) {
+            drawKingBar3(w, id, bx, by, bw);    // 三阶段：王座本体（紫系配色，两管血）
+            return;
+        }
+        double bh = 26;
         float f = Math.max(0f, w.hp[id] / Math.max(1f, w.maxHp[id]));
         gc.setFill(Color.rgb(8, 6, 12, 0.85));
         gc.fillRect(bx - 3, by - 3, bw + 6, bh + 6);
-        gc.setFill(p3 ? Color.rgb(46, 30, 74) : Color.rgb(58, 46, 22));
+        gc.setFill(Color.rgb(58, 46, 22));
         gc.fillRect(bx, by, bw, bh);
-        gc.setFill(p3 ? Color.rgb(198, 130, 255) : Color.rgb(255, 208, 110));
+        gc.setFill(Color.rgb(255, 208, 110));
         gc.fillRect(bx, by, bw * f, bh);
-        gc.setStroke(p3 ? Color.rgb(225, 185, 255, 0.6) : Color.rgb(255, 230, 170, 0.6));
+        gc.setStroke(Color.rgb(255, 230, 170, 0.6));
         gc.setLineWidth(1);
         gc.strokeRect(bx, by, bw, bh);
 
         gc.setFont(hudFont);
-        gc.setFill(p3 ? Color.rgb(228, 200, 255) : Color.rgb(255, 224, 170));
-        gc.fillText(p3 ? "国王 · 王座本体" : "国王 · 第 " + Math.max(1, w.kingPhase()) + " 阶段", bx, by - 6);
+        gc.setFill(Color.rgb(255, 224, 170));
+        gc.fillText("国王 · 第 " + Math.max(1, w.kingPhase()) + " 阶段", bx, by - 6);
         gc.setFill(Color.rgb(240, 228, 210));
         String hpText = String.format("%.0f / %.0f", w.hp[id], w.maxHp[id]);
         gc.fillText(hpText, bx + bw - measureWidth(hudFont, hpText), by - 6);
     }
 
-    /** 三阶段传送前摇：王座落点的暗紫预警圈（外圈=100 爆炸范围，内圈随前摇收束到心） */
+    /**
+     * 三阶段（王座本体）的两管血条：上条 = 第一管，下条 = 第二管（分裂阶段）。
+     * 第一管从满打到空后第二管接替；第二管未开启时以暗紫满格待命，
+     * 开启（王座分裂成两个）后转为亮紫消耗。血量文本显示共享血池的总值。
+     */
+    private void drawKingBar3(World w, int id, double bx, double by, double bw) {
+        double bhh = 12;                        // 单管高度
+        double gap = 3;
+        double y2 = by + bhh + gap;             // 第二管顶边
+        float per = Balance.KING3_HP_PER_BAR;   // 单管血量（两管等量）
+        float hpNow = w.hp[id];
+        float f1 = Math.max(0f, Math.min(1f, (hpNow - per) / per));   // 第一管剩余
+        boolean bar2 = hpNow <= per;            // 已进入第二管（分裂双子）
+        float f2 = bar2 ? Math.max(0f, Math.min(1f, hpNow / per)) : 1f;   // 第二管：待命满格
+        gc.setFill(Color.rgb(8, 6, 12, 0.85));
+        gc.fillRect(bx - 3, by - 3, bw + 6, bhh * 2 + gap + 6);
+        // 第一管（亮紫消耗）
+        gc.setFill(Color.rgb(46, 30, 74));
+        gc.fillRect(bx, by, bw, bhh);
+        gc.setFill(Color.rgb(198, 130, 255));
+        gc.fillRect(bx, by, bw * f1, bhh);
+        // 第二管（未开启：暗紫待命；开启后亮紫消耗）
+        gc.setFill(Color.rgb(34, 20, 52));
+        gc.fillRect(bx, y2, bw, bhh);
+        gc.setFill(bar2 ? Color.rgb(198, 130, 255) : Color.rgb(116, 82, 164));
+        gc.fillRect(bx, y2, bw * f2, bhh);
+        gc.setStroke(Color.rgb(225, 185, 255, 0.6));
+        gc.setLineWidth(1);
+        gc.strokeRect(bx, by, bw, bhh);
+        gc.strokeRect(bx, y2, bw, bhh);
+
+        gc.setFont(hudFont);
+        gc.setFill(Color.rgb(228, 200, 255));
+        boolean twin = w.kingTwinId() >= 0;
+        gc.fillText("国王 · 王座本体" + (twin ? " ×2" : ""), bx, by - 6);
+        gc.setFill(Color.rgb(240, 228, 210));
+        String hpText = String.format("%.0f / %.0f", hpNow, w.maxHp[id]);
+        gc.fillText(hpText, bx + bw - measureWidth(hudFont, hpText), by - 6);
+    }
+
+    /** 三阶段传送前摇：王座落点的暗紫预警圈（外圈=100 爆炸范围，内圈随前摇收束到心）；本体与分身各画一处 */
     private void drawKingTeleFx(World w, double vw, double vh) {
-        if (w.kingPhase() < 3 || w.kingTeleT() <= 0f) {
+        if (w.kingPhase() < 3) {
             return;
         }
-        int k = w.kingId();
-        if (k < 0 || !w.alive[k]) {
+        drawKingTeleRing(w, w.kingId(), w.kingTeleT(), vw, vh);
+        drawKingTeleRing(w, w.kingTwinId(), w.kingTwinTeleT(), vw, vh);
+    }
+
+    /** 单个王座的传送落点预警圈：id 无效或不在前摇中则跳过 */
+    private void drawKingTeleRing(World w, int id, float teleT, double vw, double vh) {
+        if (id < 0 || !w.alive[id] || teleT <= 0f) {
             return;
         }
         double left = camX - vw / 2;
         double top = camY - vh / 2;
-        double cx = w.x[k] - left;
-        double cy = w.y[k] - top;
-        float tr = Math.max(0f, Math.min(1f, w.kingTeleT() / Balance.KING3_TELE_TELEGRAPH));
+        double cx = w.x[id] - left;
+        double cy = w.y[id] - top;
+        float tr = Math.max(0f, Math.min(1f, teleT / Balance.KING3_TELE_TELEGRAPH));
         double rad = Balance.KING3_TELE_RADIUS;
         gc.setFill(Color.rgb(140, 40, 220, 0.12 + 0.20 * (1 - tr)));
         gc.fillOval(cx - rad, cy - rad, rad * 2, rad * 2);

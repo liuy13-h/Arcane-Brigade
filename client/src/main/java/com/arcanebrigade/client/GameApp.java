@@ -429,8 +429,13 @@ public final class GameApp extends Application {
                     int id = world.kingId();
                     float v = Float.parseFloat(khp);
                     if (id >= 0 && v > 0f) {
-                        world.maxHp[id] = v;
+                        // 三阶段是两管血共享血池（上限 24000）：只压血池、保留上限——
+                        // 压到 ≤ 单管(12000)时王座当帧分裂成双子，血条文本与回血上限仍是真实值；
+                        // 一/二阶段仍同时改上限（快速验证击破结算）。
                         world.hp[id] = v;
+                        if (world.kingPhase() < 3) {
+                            world.maxHp[id] = v;
+                        }
                     }
                 }
             }

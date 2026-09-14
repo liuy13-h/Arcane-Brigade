@@ -404,19 +404,19 @@ public final class Balance {
 
     // ---- 王宫最终决战：国王第二阶段 ----
     /**
-     * 第二阶段：血 6000（比一阶段厚一档）。
+     * 第二阶段：血 12000（用户给定，与三阶段的单管血量对齐）。
      * 移动为「按与最近玩家的距离分档」的压迫式走位（用户给定的三档速度），
      * 全程追击玩家，不再保持距离/绕行：
-     *   > 400      → 170 直线逼近
-     *   250 ~ 400  → 145 逼近
-     *   < 250      → 125 贴身追击
+     *   > 400      → 195 直线逼近
+     *   250 ~ 400  → 175 逼近
+     *   < 250      → 160 贴身追击
      * 位移由 updateKing2 手动驱动；贴身接触伤害 25（与一阶段不同：一阶段无接触伤害）。
      */
-    public static final float KING2_HP       = 6000f;
+    public static final float KING2_HP       = 12000f;
     public static final float KING2_RADIUS   = 50f;
-    public static final float KING2_SPEED_FAR  = 170f;
-    public static final float KING2_SPEED_MID  = 145f;
-    public static final float KING2_SPEED_NEAR = 125f;
+    public static final float KING2_SPEED_FAR  = 195f;
+    public static final float KING2_SPEED_MID  = 175f;
+    public static final float KING2_SPEED_NEAR = 160f;
     /** 距离分档阈值（用户给定的 400 / 250） */
     public static final float KING2_BAND_FAR  = 400f;
     public static final float KING2_BAND_MID  = 250f;
@@ -461,11 +461,14 @@ public final class Balance {
 
     // ---- 王宫最终决战：国王第三阶段（王座本体）----
     /**
-     * 第三阶段（王座本体）：血 12000（用户给定），坐在王座上不再走路，
-     * 靠「随机传送」位移——每 3 秒瞬移到玩家 50 以内，落位后 1 秒前摇、
-     * 100 范围爆发 30 伤害。前摇期间减伤从 80% 降为 20%（用户给定，即输出窗口）。
+     * 第三阶段（王座本体）：血 12000 × 2（用户给定，两管血、总池 24000），
+     * 坐在王座上不再走路，靠「随机传送」位移——每 3 秒瞬移到玩家 50 以内，
+     * 落位后 1 秒前摇、100 范围爆发 30 伤害。前摇期间减伤从 80% 降为 20%（用户给定，即输出窗口）。
+     * 第二管血开始时王座分裂成两个（见 World.spawnKingTwin）。
      */
-    public static final float KING3_HP         = 12000f;
+    /** 三阶段单管血量（用户给定 12000）：血池 = KING3_HP_PER_BAR × 2，第二管开始时分裂 */
+    public static final float KING3_HP_PER_BAR = 12000f;
+    public static final float KING3_HP         = KING3_HP_PER_BAR * 2f;
     public static final float KING3_RADIUS     = 50f;
     /** 贴身接触伤害 15（用户给定）：比二阶段的 25 更轻，走通用敌人接触通道 */
     public static final float KING3_CONTACT_DAMAGE = 15f;
@@ -475,6 +478,8 @@ public final class Balance {
     public static final float KING3_DR_CAST    = 0.20f;
     /** 传送：每 3 秒一轮（用户给定） */
     public static final float KING3_TELE_CD    = 3f;
+    /** 分裂后分身传送相对本体的延迟 2 秒（用户给定）：本体瞬移 2 秒后分身才起跳，两尊不同时瞬移 */
+    public static final float KING3_TWIN_TELE_DELAY = 2f;
     /** 落点距玩家的最大距离 50（用户给定）与最小距离（避免与玩家完全重叠） */
     public static final float KING3_TELE_RANGE = 50f;
     public static final float KING3_TELE_MIN   = 12f;
