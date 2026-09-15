@@ -1611,13 +1611,18 @@ public final class World {
             }
             // 主动位移冷却推进：战士单发 CD；弓箭手只缺弹药时计充能
             if (ck == HeroClass.ARCHER) {
-                // 弓箭手：满发就停表，绝不往后跑负数
+                // 弓箭手：满发就停表，绝不往后跑负数。
+                // 用 while 而不是 if —— 卡帧（dt 偏大）时若有整发冷却走完，
+                // 溢出时间要结转到下一发，不能吞掉（否则回充会凭空变慢）。
                 if (dashCharges[id] < Balance.ARCHER_DASH_MAX) {
                     dashCd[id] -= dt;
-                    if (dashCd[id] <= 0f) {
+                    while (dashCharges[id] < Balance.ARCHER_DASH_MAX && dashCd[id] <= 0f) {
                         dashCharges[id]++;
-                        dashCd[id] = (dashCharges[id] < Balance.ARCHER_DASH_MAX)
-                                ? Balance.ARCHER_DASH_CD : 0f;
+                        if (dashCharges[id] < Balance.ARCHER_DASH_MAX) {
+                            dashCd[id] += Balance.ARCHER_DASH_CD;
+                        } else {
+                            dashCd[id] = 0f;   // 满发，停表
+                        }
                     }
                 }
             } else if (ck == HeroClass.WARRIOR) {
@@ -1636,7 +1641,9 @@ public final class World {
 
     /**
      * 主动位移（冲刺）：空格按下且冷却就绪时，朝鼠标所指方向飞速位移一小段。
-     *   - 弓箭手：充能型，出生满 3 发；每用一发扣 1 颗，每 5s 补 1 颗
+     *   - 弓箭手：充能型，出生满 3 发；每用一发扣 1 颗，每 6.5s 回 1 颗。
+     *     充能是"单计时器顺序回充"：用掉一发就绪的冲刺不会打断 / 重置
+     *     正在跑的那一发充能（只有满发、计时器闲置时才重新起表）。
      *   - 战士：单发 CD，5 秒一次
      * 位移期间附带短暂无敌帧，使其能真正用来躲避弹幕与接触伤害。
      * 位移用 vx/vy 承载冲量（与渲染朝向共用，冲刺时人物会朝位移方向），结束时归零。
@@ -1692,8 +1699,13 @@ public final class World {
         // 扣弹药 vs 重置战士 CD
         if (ck == HeroClass.ARCHER) {
             dashCharges[id]--;
-            // dashCd 仍是下一发的充能倒计时：耗完一发后启动下一发的充能
-            this.dashCd[id] = dashCdReset;
+            // 充能计时器只在"此前满发、计时器闲置"时启动。
+            // 若已有充能在跑（还缺弹药），必须保留其进度：否则每用掉一发
+            // 就绪的冲刺，都在跑的充能都会从 6.5s 从头开始，玩家看到的就是
+            // "冲刺一发好了用掉，其他还没回满的次数又一起重新进冷却"。
+            if (this.dashCd[id] <= 0f) {
+                this.dashCd[id] = dashCdReset;
+            }
         } else { // WARRIOR
             this.dashCd[id] = dashCdReset;
         }
