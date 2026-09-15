@@ -2357,17 +2357,16 @@ public final class World {
             if (milkyCastT >= milkyCastDur()) {
                 // milkyHitActive：让 kill() 能识别「这次死亡是奶蛙造成的」
                 milkyHitActive = true;
-                // 二阶段（半血后）：技能伤害 ×2、范围 +25%
+                // 二阶段（半血后）：技能范围 +25%（伤害不再翻倍，已按需求回调）
                 boolean p2 = hp[m] <= maxHp[m] * Balance.MILKY_LAUGH_HP;
-                float dmgMul = p2 ? Balance.MILKY_PHASE2_DMG_MUL : 1f;
                 float rngMul = p2 ? Balance.MILKY_PHASE2_RANGE_MUL : 1f;
                 if (milkyCast == 2) {
                     damagePlayersInRadius(x[m], y[m], Balance.MILKY_LAUGH_RANGE * rngMul,
-                            Balance.MILKY_LAUGH_DMG * dmgMul);
+                            Balance.MILKY_LAUGH_DMG);
                     milkyLaughCd = Balance.MILKY_LAUGH_CD;
                 } else {
                     damagePlayersInRadius(x[m], y[m], Balance.MILKY_STOMP_RANGE * rngMul,
-                            Balance.MILKY_STOMP_DMG * dmgMul);
+                            Balance.MILKY_STOMP_DMG);
                     milkyStompCd = Balance.MILKY_STOMP_CD;
                 }
                 milkyHitActive = false;
