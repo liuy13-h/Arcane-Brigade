@@ -48,8 +48,10 @@ public final class World {
     public static final int ZONE_KING_SPIKE = 6;
     /**
      * 飞龙灼烧带：用 KIND_ZONE 但**不走通用 updateZones**——单独由 updateDragonBurns tick，
-     * 只对玩家/宠物生效（飞龙火球留下的"惩罚带"，不能用来烧怪）。
-     * 渲染按 ZONE_FIRE 的火焰地效处理，客户端判断 meta==ZONE_DRAGON_BURN 时用同款红橙色。
+     * 只对玩家/宠物生效（飞龙留下的"惩罚带"，不能用来烧怪）。
+     * 渲染按 ZONE_FIRE 的火焰地效处理；颜色由 elem 决定——
+     * tier 1/2 的飞龙是 Element.FIRE（橙红），tier 3 终焉之影是 Element.ARCANE（紫色）。
+     * 同一个子类型承载两种配色，机制完全共享（用户要求：第四只 Boss 用"同款弹幕，只是紫色"）。
      */
     public static final int ZONE_DRAGON_BURN = 7;
 
@@ -67,6 +69,18 @@ public final class World {
      * 与其它变体写在一起，读代码时不必去 enemy 包里查号。
      */
     public static final int V_SERPENT = com.arcanebrigade.core.enemy.EnemyStats.V_SERPENT;
+    /**
+     * 终焉之影（第四只 Boss，tier 3）的**幻影分身**：形象与本体同为终焉之影（渲染按 carry 取档位），
+     * 但血量更低、会追玩家造成接触伤害，且**不是** Boss——
+     * 不占 bossId 通道、不进 HUD 血条、不计 Boss 击杀、可以正常被冻被电被击退。
+     *
+     * 它存在的唯一理由是那个取舍：在击杀本体之前把它打散，会让本体立刻回复
+     * BOSS_CLONE_HEAL（5%）最大血量（陷阱机制）。详见 kill() 里的分身分支。
+     *
+     * 单独开一个变体而不是复用 V_BOSS：复用的话分身会白拿 Boss 的 70% 被控抗性、
+     * 免疫击退，明显比设计意图更强，而且"这是分身还是本体"在代码里也无从区分。
+     */
+    public static final int V_CLONE = 8;
 
     /** 拾取物 meta 子类型 */
     public static final int PICKUP_GEM      = 0;
@@ -371,6 +385,21 @@ public final class World {
     /** 飞龙火球飞行过程中已播种的距离（每凑够 DRAGON_BURN_STEP 就归零重铺一团） */
     private final float[] burnStep = new float[MAX];
 
+    // ---- 终焉之影（tier 3）专属：幻影分身 ----
+    /**
+     * 分身召唤倒计时。首次取 BOSS_CLONE_FIRST_CD（出场先给玩家一点喘息），
+     * 之后每 BOSS_CLONE_CD 秒到点：场上分身不足 BOSS_CLONE_COUNT 个才补。
+     * 只在 tier 3 存活时递减（其余档位该字段无意义）。
+     */
+    private float bossCloneTimer;
+    /**
+     * 每个幻影分身自己的弹幕齐射倒计时（**按实体 id 索引**，不是按分身序号）。
+     * 分身也吐同款紫弹，但不与本体共用 bossBoltTimer——否则分身一出生就和本体同帧齐射。
+     * 出生时给一个带抖动的初相位（见 spawnVoidClones），之后各自按 BOSS_CLONE_BOLT_CD 走。
+     * 只有 V_CLONE 槽位会读它，非分身槽位残留旧值无影响。
+     */
+    private final float[] cloneBoltTimer = new float[MAX];
+
     // ---- 战斗事件（小任务）状态 ----
     /** 下一个待触发事件的 EVENT_TIMES 下标 */
     private int eventIndex;
@@ -608,6 +637,27 @@ public final class World {
         if (id == bossId) {
             // 按等级刷的 Boss 现在只是中途精英：倒下只清阶段标记，不再结束对局
             bossId = -1;   // Boss 倒下：清掉阶段技能标记，下一帧 updateBossPhase 也会兜底
+            // 本体倒下：残留的幻影分身随之消散（**不回血**——回血只认"玩家先打散分身"）
+            clearBossClones();
+        }
+        if (variant[id] == V_CLONE) {
+            // 终焉之影的幻影分身被打散：本体若还活着，立刻回复 5% 最大血量（用户给定）。
+            // 安静收尾（与国王分身同款）：不计击杀、不掉宝石、不弹升级三选一——
+            // 否则玩家可以靠刷分身白嫖技能卡，也会让人误以为"Boss 已被击败"。
+            if (bossId >= 0 && alive[bossId]) {
+                float heal = maxHp[bossId] * Balance.BOSS_CLONE_HEAL;
+                hp[bossId] = Math.min(maxHp[bossId], hp[bossId] + heal);
+                // 回血反馈：本体脚下冒一圈紫色裂隙，玩家能明确看到"这一下是喂血"
+                spawnFx(FX_RIFT, x[bossId], y[bossId], 0f, 0f,
+                        Balance.BOSS_CLONE_FX_R, Balance.BOSS_CLONE_FX_TTL, Element.ARCANE);
+            }
+            enemiesAlive--;
+            kind[id] = KIND_FREE;
+            liveCount--;
+            if (freeTop < MAX) {
+                freeList[freeTop++] = id;
+            }
+            return;
         }
         if (id == milkyId) {
             milkyId = -1;  // 奶蛙血量归零：消失（客户端据此停掉专属 BGM）
@@ -1054,9 +1104,14 @@ public final class World {
         bossSummonTimer = Balance.BOSS_SUMMON_INTERVAL;
         // 飞碟（tier 0）：首轮追踪弹从第一个 CD 开始计时，让玩家一上来就被告知「会飞弹」的压迫感
         bossHomingTimer = (t == 0) ? Balance.BOSS_HOMING_CD : 0f;
-        // 飞龙（tier 1 / 2）：首轮火球按对应 CD 起步，让飞龙出场就能立刻吐火——节奏跟飞碟对齐
+        // 飞龙（tier 1 / 2）与终焉之影（tier 3）：首轮弹幕按对应 CD 起步，出场就能吐火——节奏跟飞碟对齐
         bossBoltTimer = (t == 1) ? Balance.DRAGON_BOLT_CD_TIER1
-                       : (t == 2) ? Balance.DRAGON_BOLT_CD_TIER2 : 0f;
+                       : (t == 2) ? Balance.DRAGON_BOLT_CD_TIER2
+                       : (t == 3) ? Balance.DRAGON_BOLT_CD_TIER3 : 0f;
+        // 终焉之影专属技能「幻影分身」：首轮同样从满 CD 起步，让玩家先看清本体再面对分身
+        bossCloneTimer = (t == 3) ? Balance.BOSS_CLONE_FIRST_CD : 0f;
+        // 保险：换 Boss 时清掉上一只留下的分身
+        clearBossClones();
     }
 
     /**
@@ -2006,17 +2061,30 @@ public final class World {
                 bossHomingTimer = Balance.BOSS_HOMING_CD;
             }
         }
-        // 飞龙 Boss（tier 1 熔岩飞龙 / tier 2 霜寂飞龙）专属：
-        // 定向直线慢速火球 + 飞行路径上撒 5 秒灼烧带。
-        // tier 1 单发、tier 2 双发（双发时 CD 稍长一档，避免弹幕墙）。
-        if (bossTier == 1 || bossTier == 2) {
+        // 飞龙 Boss（tier 1 熔岩飞龙 / tier 2 霜寂飞龙）/ 终焉之影（tier 3）专属：
+        // 定向直线慢速弹 + 飞行路径上撒 5 秒灼烧带。
+        // tier 1 单发、tier 2 / tier 3 双发（双发时 CD 稍长一档，避免弹幕墙）。
+        // tier 3 与 tier 2 机制完全相同，只是 elem = ARCANE（紫色）——用户要求"同款，只是紫色"。
+        if (bossTier == 1 || bossTier == 2 || bossTier == 3) {
             bossBoltTimer -= dt;
             if (bossBoltTimer <= 0f) {
                 spawnDragonBoltVolley(b);
-                bossBoltTimer = (bossTier == 1)
-                        ? Balance.DRAGON_BOLT_CD_TIER1
-                        : Balance.DRAGON_BOLT_CD_TIER2;
+                bossBoltTimer = (bossTier == 1) ? Balance.DRAGON_BOLT_CD_TIER1
+                              : (bossTier == 2) ? Balance.DRAGON_BOLT_CD_TIER2
+                              : Balance.DRAGON_BOLT_CD_TIER3;
             }
+        }
+        // 终焉之影（tier 3）专属技能 · 幻影分身：
+        // 定时补齐 2 个分身；打散分身会给本体回血（见 kill），所以这不是"白给"的增益，
+        // 而是逼玩家在"先清分身"和"直接干本体"之间做取舍。
+        if (bossTier == 3) {
+            bossCloneTimer -= dt;
+            if (bossCloneTimer <= 0f) {
+                spawnVoidClones(b);
+                bossCloneTimer = Balance.BOSS_CLONE_CD;
+            }
+            // 分身自己也会吐同款紫弹（用户要求）——各自独立计时，初相位已在出生时抖开
+            updateVoidCloneBolts(dt);
         }
     }
 
@@ -2058,14 +2126,18 @@ public final class World {
     }
 
     // ------------------------------------------------------------------
-    // 飞龙 Boss（tier 1 熔岩飞龙 / tier 2 霜寂飞龙）专属：定向飞行火球 + 灼烧带
+    // 飞龙 Boss（tier 1/2）与终焉之影（tier 3）共用：定向飞行弹幕 + 灼烧带
     // ------------------------------------------------------------------
 
     /**
-     * 朝玩家当前所在方向吐火球。tier 1 单发、tier 2 双发（扇形 ±半角展开）。
-     * 火球是"定向直线"——不追踪，只是朝着按下发射键那一刻的玩家方向直飞。
+     * 朝玩家当前所在方向吐出弹幕。tier 1 单发、tier 2 / tier 3 双发（扇形 ±半角展开）。
+     * 弹幕是"定向直线"——不追踪，只是朝着按下发射键那一刻的玩家方向直飞。
      * 飞行过程中按固定间距播种灼烧带（DRAGON_BURN_STEP 一团），
-     * 玩家即使躲开火球本体，也要花 5 秒绕开身后的灼烧带。
+     * 玩家即使躲开弹体本身，也要花 5 秒绕开身后的灼烧带。
+     *
+     * 颜色/元素分两套（需求："第四只 Boss 用和第三只相同、但颜色为紫色的弹幕"）：
+     *   tier 1 / 2 → FIRE + meta=-2（橙红火球）    tier 3 → ARCANE + meta=-3（紫色弹）
+     * 除配色外全部共用同一套常量，所以两边的飞行、伤害、灼烧完全一致。
      */
     private void spawnDragonBoltVolley(int boss) {
         if (!alive[boss]) {
@@ -2083,8 +2155,12 @@ public final class World {
             return;
         }
         float baseAngle = (float) Math.atan2(dy, dx);
-        int count = (bossTier == 2) ? 2 : 1;
+        // tier 1 单发；tier 2 / tier 3 双发（扇形半角两者相同——用户要求"同款弹幕"）
+        int count = (bossTier == 1) ? 1 : Balance.DRAGON_BOLT_COUNT_TIER3;
         float half = Balance.DRAGON_BOLT_TIER2_HALF;
+        // tier 3 终焉之影：紫弹（秘法色）+ 独立的弹体 id，渲染端据此换配色
+        boolean voidPurple = (bossTier == 3);
+        int boltElem = voidPurple ? Element.ARCANE : Element.FIRE;
         for (int i = 0; i < count; i++) {
             // i=0 用 -half、i=1 用 +half；count==1 时偏移为 0
             float a = baseAngle + (count == 1 ? 0f : (i == 0 ? -half : half));
@@ -2100,16 +2176,18 @@ public final class World {
             dmg[id] = Balance.DRAGON_BOLT_DMG;
             life[id] = Balance.DRAGON_BOLT_LIFE;
             owner[id] = boss;
-            // meta = -2：飞龙火球的"魔法"id（与飞碟追踪弹 -1 错开）
-            meta[id] = -2;
+            // meta = -2：飞龙火球；meta = -3：终焉之影紫弹（与 -1 / -2 错开）
+            meta[id] = voidPurple ? -3 : -2;
+            // 弹体元素同时决定"沿途播种的灼烧带"的配色（见 updateDragonBolts）
+            elem[id] = boltElem;
             pierce[id] = 0;
             lastHit[id] = -1;
             projAoe[id] = 0f;
             projChain[id] = 0;
             projBounce[id] = 0;
             projTarget[id] = -1;
-            // 起飞瞬间先铺第一团灼烧，免得火球刚出膛玩家就已经路过
-            spawnDragonBurn(x[id], y[id]);
+            // 起飞瞬间先铺第一团灼烧，免得弹体刚出膛玩家就已经路过
+            spawnDragonBurn(x[id], y[id], boltElem);
             // 飞行播种进度：从 0 开始累加，每走够 DRAGON_BURN_STEP 再铺一团
             burnStep[id] = 0f;
             dragonBolts.add(id);
@@ -2123,8 +2201,12 @@ public final class World {
      * 然后在 updateDragonBolts 里**单独维护一个飞龙灼烧带列表**，
      * 每帧对玩家/宠物做距离判定并按 tick 频率扣血，避免污染 updateZones 的通用逻辑。
      * （直接把伤害写进 dmg 数组 + 单独 tick，最小改动现有 zone 系统。）
+     *
+     * burnElem 是该灼烧带的元素，同时决定颜色：tier 1/2 的飞龙是 FIRE（橙红），
+     * tier 3 终焉之影是 ARCANE（紫色）。注意形参不能取名 elem——那会和字段数组重名，
+     * 函数体里的 `elem[id] = elem;` 会被解析成"用 int 去索引数组"。
      */
-    private void spawnDragonBurn(float sx, float sy) {
+    private void spawnDragonBurn(float sx, float sy, int burnElem) {
         int id = alloc(KIND_ZONE, sx, sy, Balance.DRAGON_BURN_RADIUS, TEAM_ENEMY);
         if (id < 0) {
             return;
@@ -2133,7 +2215,7 @@ public final class World {
         speed[id] = Balance.DRAGON_BURN_DURATION;
         // 把"持续 DPS"塞进 dmg（标准 zone 用法，updateZones 也是这么读的）
         dmg[id] = Balance.DRAGON_BURN_DPS;
-        elem[id] = Element.FIRE;
+        elem[id] = burnElem;
         // 用 iframe 当 tick 计时器（0 = 刚铺、0.5 = 已 tick 过一次）
         iframe[id] = 0f;
         cd[id] = 0f;
@@ -2177,11 +2259,11 @@ public final class World {
                 dragonBolts.removeAt(n);
                 continue;
             }
-            // 5) 飞行过程中按固定间距播种灼烧带
+            // 5) 飞行过程中按固定间距播种灼烧带（沿用弹体自身的元素 → tier 3 自然是紫带）
             burnStep[id] += Balance.DRAGON_BOLT_SPD * dt;
             if (burnStep[id] >= Balance.DRAGON_BURN_STEP) {
                 burnStep[id] = 0f;
-                spawnDragonBurn(x[id], y[id]);
+                spawnDragonBurn(x[id], y[id], elem[id]);
             }
             // 6) 撞障碍（用标准 pushOutOfObstacle 的"是否重叠"判定，简化版：圆 vs 圆）
             if (overlapsAnyObstacle(x[id], y[id], r[id])) {
@@ -2281,6 +2363,121 @@ public final class World {
                     damage(mn, halfTick);
                     iframe[mn] = Balance.MINION_IFRAME;
                 }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 终焉之影（tier 3）专属技能 · 幻影分身
+    //
+    // 设计：本体在场时首次 BOSS_CLONE_FIRST_CD、之后每 BOSS_CLONE_CD 秒补齐到 BOSS_CLONE_COUNT 个分身。
+    // 分身是货真价实的敌人（追人、贴身咬人、可被击杀、能被冻被电），
+    // **也会发射同款紫色弹幕**（各自独立计时，见 updateVoidCloneBolts），
+    // 但**不走 bossId 通道**：HUD 血条、Boss 击杀计数、通关判定都只认本体。
+    // 代价在于——打散分身会让本体回 BOSS_CLONE_HEAL（5%）的血，
+    // 于是"要不要顺手清掉分身"变成一个真实的取舍（见 kill 里的分身分支）：
+    // 放着不管 → 三份紫弹 + 双份灼烧带持续压场；动手清 → 等于给本体喂血。
+    // ------------------------------------------------------------------
+
+    /**
+     * 终焉之影专属技能「幻影分身」：在本体两侧召唤 V_CLONE 分身，补齐到 BOSS_CLONE_COUNT 个。
+     * 只补差额，所以不会越召越多；分身出生在本体周围一圈并错开角度。
+     *
+     * 分身形象与本体同为终焉之影（渲染按 carry 取档位），并且**也会发射同款紫色弹幕**：
+     * 出生时给一个带抖动的开火相位（见下方 cloneBoltTimer 赋值），之后由
+     * updateVoidCloneBolts 按 BOSS_CLONE_BOLT_CD 独立开火，与本体的 bossBoltTimer 互不干扰。
+     *
+     * 但它是**次级目标**：血量 = 本体血池 × BOSS_CLONE_HP_MUL，体积更小、接触伤害更低，
+     * 可以正常被冻被电被击退。之所以值得召唤，是因为打散它会给本体回血（见 kill）
+     * ——这是逼玩家做选择，不是送战力。
+     */
+    private void spawnVoidClones(int boss) {
+        if (!alive[boss]) {
+            return;
+        }
+        int missing = Balance.BOSS_CLONE_COUNT - bossCloneCount();
+        if (missing <= 0) {
+            return;       // 场上分身已满：等它们被打散之后再补
+        }
+        float baseA = rng.nextFloat() * (float) (Math.PI * 2);
+        for (int k = 0; k < missing; k++) {
+            float a = baseA + (float) (Math.PI * 2) * k / missing;
+            float dist = r[boss] + 60f;
+            // 走 spawnEnemy（而不是裸 alloc）：击杀/回收/分离力/刷怪计数全部沿用既有通道
+            int id = spawnEnemy(x[boss] + (float) Math.cos(a) * dist,
+                    y[boss] + (float) Math.sin(a) * dist, 1, V_CLONE);
+            if (id < 0) {
+                continue;
+            }
+            maxHp[id] = maxHp[boss] * Balance.BOSS_CLONE_HP_MUL;
+            hp[id] = maxHp[id];
+            r[id] = Balance.BOSS_RADIUS * Balance.BOSS_CLONE_RADIUS_MUL;
+            speed[id] = Balance.BOSS_SPEED * Balance.BOSS_CLONE_SPEED_MUL;
+            dmg[id] = Balance.BOSS_DMG_TIERS[3] * Balance.BOSS_CLONE_DMG_MUL;
+            cd[id] = 0f;
+            enemyShield[id] = 0f;
+            elem[id] = Element.NONE;   // 槽位复用可能残留冰霜/剧毒，不能让分身出生就带着减速
+            meta[id] = meta[boss];
+            carry[id] = bossTier;      // 渲染按 carry 取终焉之影的形象
+            // 分身的弹幕倒计时：基线 + 抖动。两具分身是同一次技能一起召出来的，
+            // 不给相位差就会永远同帧齐射（4 发糊脸 + 双份紫色灼烧带），这里把节奏抖开
+            cloneBoltTimer[id] = Balance.BOSS_CLONE_BOLT_FIRST
+                    + rng.nextFloat() * Balance.BOSS_CLONE_BOLT_JITTER;
+            // 出生特效：一圈紫色裂隙，提示"这是刚召出来的分身"
+            spawnFx(FX_RIFT, x[id], y[id], 0f, 0f,
+                    Balance.BOSS_CLONE_FX_R, Balance.BOSS_CLONE_FX_TTL, Element.ARCANE);
+        }
+    }
+
+    /**
+     * 推进每个幻影分身自己的弹幕倒计时，到点就用**本体那一套** spawnDragonBoltVolley 开火。
+     *
+     * 之所以能直接复用、不需要任何"分身版"分支：spawnDragonBoltVolley 只读发射者的
+     * x / y / r 和 bossTier 字段，**不依赖 bossId**。把分身 id 传进去，bossTier 仍是 3，
+     * 于是它自然打出 meta=-3 / elem=ARCANE 的紫色双发弹幕——与本体逐字节同款。
+     * updateDragonBolts 同样不读 owner，弹体推进与灼烧带播种对"谁发射的"完全无感。
+     *
+     * 遍历整个 id 空间而不是维护一张分身列表：场上分身最多 2 具，
+     * high 也只是活跃实体的水位线，这点开销远小于多加一个需要同步维护的列表。
+     */
+    private void updateVoidCloneBolts(float dt) {
+        for (int i = 0; i < high; i++) {
+            if (!alive[i] || variant[i] != V_CLONE || kind[i] != KIND_ENEMY) {
+                continue;
+            }
+            cloneBoltTimer[i] -= dt;
+            if (cloneBoltTimer[i] <= 0f) {
+                cloneBoltTimer[i] = Balance.BOSS_CLONE_BOLT_CD;
+                spawnDragonBoltVolley(i);
+            }
+        }
+    }
+
+    /** 场上存活的幻影分身数量（分身不占 bossId，只能这样数） */
+    public int bossCloneCount() {
+        int n = 0;
+        for (int i = 0; i < high; i++) {
+            if (alive[i] && variant[i] == V_CLONE && kind[i] == KIND_ENEMY) {
+                n++;
+            }
+        }
+        return n;
+    }
+
+    /** 该实体是否为终焉之影的幻影分身。客户端据此把它画成半透明紫色幻影 */
+    public boolean isBossClone(int id) {
+        return id >= 0 && id < MAX && variant[id] == V_CLONE;
+    }
+
+    /**
+     * 本体倒下 / 换 Boss 时把场上残留的分身一并消散。
+     * 走 despawn（不计击杀、不掉落、**不回血**）——"打散分身"的定义是玩家动手清掉它；
+     * 本体倒下导致分身消散不该反过来给谁回血。
+     */
+    private void clearBossClones() {
+        for (int i = 0; i < high; i++) {
+            if (alive[i] && variant[i] == V_CLONE) {
+                despawn(i);
             }
         }
     }
@@ -4788,6 +4985,11 @@ public final class World {
             }
             // 骨蛇的每一节都不回收：尾巴被判出局的话，蛇会自己掉尾巴
             if (variant[i] == V_SERPENT) {
+                continue;
+            }
+            // 幻影分身不回收：它被"回收"就等于凭空消失，玩家会以为是被自己打散的
+            // （那会连带触发本体回血），这是绝不能出现的误判来源。由本体存活期负责它。
+            if (variant[i] == V_CLONE) {
                 continue;
             }
             float dx = x[i] - wx;

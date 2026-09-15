@@ -1125,11 +1125,26 @@ public final class Renderer {
                     }
                 }
                 case World.KIND_ENEMY -> {
+                    // 终焉之影的幻影分身：先铺一层紫色幻影光环，半透明绘制本体。
+                    // 必须一眼可辨——打散它会给你正在打的那只 Boss 回 5% 血。
+                    boolean ghost = w.isBossClone(i);
+                    if (ghost) {
+                        double pulse = 0.5 + 0.5 * Math.sin(w.time() * 3.0);
+                        double rad = rr + 8.0 + 2.5 * pulse;
+                        gc.setFill(Color.rgb(150, 70, 235, 0.16 + 0.08 * pulse));
+                        gc.fillOval(sx - rad, sy - rad, rad * 2, rad * 2);
+                        gc.setStroke(Color.rgb(198, 140, 255, 0.60 + 0.25 * pulse));
+                        gc.setLineWidth(2.0);
+                        gc.strokeOval(sx - rad, sy - rad, rad * 2, rad * 2);
+                        gc.setGlobalAlpha(0.62);
+                    }
                     if (i == w.kingId() || i == w.kingTwinId()) {
                         drawKingSprite(w, i, sx, sy);
                     } else if (i == w.milkyId()) {
                         drawMilky(w, i, sx, sy);
-                    } else if (w.variant[i] == World.V_BOSS) {
+                    } else if (w.variant[i] == World.V_BOSS || w.variant[i] == World.V_CLONE) {
+                        // V_CLONE = 终焉之影的幻影分身：形象与本体同为终焉之影（按 carry 取档位），
+                        // 上面那层紫色幻影光环负责把它和本体区分开
                         drawBossSprite(w, i, sx, sy);
                     } else if (w.variant[i] == World.V_STATUE) {
                         drawStatue(sx, sy, rr);
@@ -1137,6 +1152,10 @@ public final class Renderer {
                         drawSerpentSegment(w, i, sx, sy);
                     } else {
                         drawEnemySprite(w, i, sx, sy, rr);
+                    }
+                    // 幻影只影响模型；血条与状态图标要按正常不透明度画，否则读不出还剩多少血
+                    if (ghost) {
+                        gc.setGlobalAlpha(1.0);
                     }
                     drawEnemyStatus(w, i, sx, sy);
                     // 血条：血量掉了或还有护盾就显示。
@@ -1192,28 +1211,18 @@ public final class Renderer {
                     gc.fillRect(sx - 11, sy - rr - 8, 22 * mf, 2);
                 }
                 case World.KIND_PROJECTILE -> {
-                    // 飞龙火球：橙红实心球 + 火焰拖尾；用方块旋转/位移做出"飞"的视觉
+                    // 飞龙火球（meta -2，橙红）与终焉之影紫弹（meta -3，紫色）：
+                    // 两套配色共用同一个画法，形状/拖尾完全一致——需求要求"同款，只是紫色"。
                     if (w.meta[i] == -2) {
-                        double pulse = 0.85 + 0.15 * Math.sin(System.nanoTime() * 2e-8);
-                        // 外焰（橙黄半透明）
-                        gc.setFill(Color.rgb(255, 200, 60, 0.55 * pulse));
-                        gc.fillOval(sx - 11, sy - 11, 22, 22);
-                        // 内焰（橙红实心）
-                        gc.setFill(Color.rgb(255, 110, 30, 0.95));
-                        gc.fillOval(sx - 6, sy - 6, 12, 12);
-                        // 飞行方向尾迹：往速度反方向画 3 个递弱的圆
-                        double vlen = Math.hypot(w.vx[i], w.vy[i]);
-                        if (vlen > 0.01) {
-                            double ux = -w.vx[i] / vlen;
-                            double uy = -w.vy[i] / vlen;
-                            for (int k = 1; k <= 3; k++) {
-                                double px = sx + ux * (8 + k * 4);
-                                double py = sy + uy * (8 + k * 4);
-                                gc.setFill(Color.rgb(255, 140, 40, 0.45 / k));
-                                gc.fillOval(px - (5 - k), py - (5 - k),
-                                        (5 - k) * 2, (5 - k) * 2);
-                            }
-                        }
+                        drawBossOrb(w, i, sx, sy,
+                                Color.rgb(255, 200, 60), Color.rgb(255, 110, 30),
+                                Color.rgb(255, 140, 40));
+                        break;
+                    }
+                    if (w.meta[i] == -3) {
+                        drawBossOrb(w, i, sx, sy,
+                                Color.rgb(206, 150, 255), Color.rgb(122, 40, 214),
+                                Color.rgb(170, 96, 255));
                         break;
                     }
                     // 敌人弹幕用统一的"敌意红"，玩家弹幕按元素上色——两者不能混成一种颜色，
@@ -1273,6 +1282,39 @@ public final class Renderer {
             gc.setFill(Color.rgb(150, 60, 70));
             gc.fillOval(sx - w.r[i], sy - w.r[i], w.r[i] * 2, w.r[i] * 2);
         }
+    }
+
+    /**
+     * Boss 弹幕球（飞龙火球 / 终焉之影紫弹）的共用画法：
+     * 外圈半透明 + 内核实心 + 沿飞行反方向的递弱尾迹。
+     * 两套配色只差三个颜色参数，形状与拖尾完全一致——需求是"和第三只 Boss 相同，只是紫色"。
+     */
+    private void drawBossOrb(World w, int i, double sx, double sy,
+                             Color outer, Color core, Color trail) {
+        double pulse = 0.85 + 0.15 * Math.sin(System.nanoTime() * 2e-8);
+        // 外层光晕（半透明）
+        gc.setFill(withAlpha(outer, 0.55 * pulse));
+        gc.fillOval(sx - 11, sy - 11, 22, 22);
+        // 内核（实心）
+        gc.setFill(withAlpha(core, 0.95));
+        gc.fillOval(sx - 6, sy - 6, 12, 12);
+        // 飞行方向尾迹：往速度反方向画 3 个递弱的圆
+        double vlen = Math.hypot(w.vx[i], w.vy[i]);
+        if (vlen > 0.01) {
+            double ux = -w.vx[i] / vlen;
+            double uy = -w.vy[i] / vlen;
+            for (int k = 1; k <= 3; k++) {
+                double px = sx + ux * (8 + k * 4);
+                double py = sy + uy * (8 + k * 4);
+                gc.setFill(withAlpha(trail, 0.45 / k));
+                gc.fillOval(px - (5 - k), py - (5 - k), (5 - k) * 2, (5 - k) * 2);
+            }
+        }
+    }
+
+    /** 给颜色套一个透明度。JavaFX 的 Color.rgb(...) 只能写常量，运行期算出 alpha 时用这个 */
+    private static Color withAlpha(Color c, double a) {
+        return Color.color(c.getRed(), c.getGreen(), c.getBlue(), a);
     }
 
     /**
@@ -1979,6 +2021,20 @@ public final class Renderer {
         gc.setFill(Color.rgb(240, 220, 230));
         String hpText = String.format("%.0f / %.0f", w.hp[bid], w.maxHp[bid]);
         gc.fillText(hpText, bx + bw - measureWidth(hudFont, hpText), by - 6);
+        // 终焉之影专属：把「幻影分身」的取舍写在血条下方。
+        // 不打这几行字，玩家只会看到两个紫色幻影、莫名其妙的 Boss 回血和一堆来路不明的紫弹，
+        // 根本读不出因果关系——尤其分身也会开火这件事，不写就完全无从推断。
+        if (tier == 3) {
+            int clones = w.bossCloneCount();
+            double healPct = Balance.BOSS_CLONE_HEAL * 100.0;
+            gc.setFont(Font.font("Microsoft YaHei", 12));
+            gc.setFill(Color.rgb(206, 150, 255, 0.95));
+            String tip = String.format("幻影分身 %d/%d · 打散将为主体回复 %.0f%% 生命",
+                    clones, Balance.BOSS_CLONE_COUNT, healPct);
+            gc.fillText(tip, bx, by + bh + 14);
+            gc.setFill(Color.rgb(206, 150, 255, 0.72));
+            gc.fillText("分身亦会发射同款紫色弹幕", bx, by + bh + 30);
+        }
     }
 
     /** 冲刺冷却剩余秒数文字（弓箭手充能格 / 战士冷却条上方共用）。剩余 0 秒时不画 */
@@ -2216,13 +2272,23 @@ public final class Renderer {
             return;
         }
         if (sub == World.ZONE_DRAGON_BURN) {
-            // 飞龙灼烧带：橙红实心 + 火焰描边；用 t 做淡入淡出
+            // 灼烧带：机制完全共享，配色分两套——
+            // 飞龙（tier 1/2）是橙红火焰，终焉之影（tier 3）是秘法紫（elem 区分，见 World）。
+            boolean voidPurple = (w.elem[i] == Element.ARCANE);
             double pulse = 0.85 + 0.15 * Math.sin(System.nanoTime() * 1.5e-8);
-            gc.setFill(Color.rgb(255, 110, 40, 0.42 * t));
-            gc.fillOval(sx - w.r[i], sy - w.r[i], w.r[i] * 2, w.r[i] * 2);
-            gc.setStroke(Color.rgb(255, 180, 60, 0.85 * t * pulse));
-            gc.setLineWidth(2);
-            gc.strokeOval(sx - w.r[i], sy - w.r[i], w.r[i] * 2, w.r[i] * 2);
+            if (voidPurple) {
+                gc.setFill(Color.rgb(150, 70, 235, 0.40 * t));
+                gc.fillOval(sx - w.r[i], sy - w.r[i], w.r[i] * 2, w.r[i] * 2);
+                gc.setStroke(Color.rgb(206, 150, 255, 0.85 * t * pulse));
+                gc.setLineWidth(2);
+                gc.strokeOval(sx - w.r[i], sy - w.r[i], w.r[i] * 2, w.r[i] * 2);
+            } else {
+                gc.setFill(Color.rgb(255, 110, 40, 0.42 * t));
+                gc.fillOval(sx - w.r[i], sy - w.r[i], w.r[i] * 2, w.r[i] * 2);
+                gc.setStroke(Color.rgb(255, 180, 60, 0.85 * t * pulse));
+                gc.setLineWidth(2);
+                gc.strokeOval(sx - w.r[i], sy - w.r[i], w.r[i] * 2, w.r[i] * 2);
+            }
             return;
         }
         // 其他区域：元素色的填充

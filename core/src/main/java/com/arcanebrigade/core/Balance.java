@@ -427,6 +427,63 @@ public final class Balance {
     /** tier 2 双发的扇形展开角（弧度）。两发朝向玩家方向 ± 半角，给玩家"在两发之间溜过去"的窗口 */
     public static final float DRAGON_BOLT_TIER2_HALF  = (float) Math.toRadians(15);
 
+    // ---- 第四只 Boss（tier 3 · 终焉之影）专属：紫色飞龙弹幕 + 幻影分身 ----
+
+    /**
+     * tier 3 的齐射 CD 与 tier 2 **完全一致**（用户要求："和第三个 Boss 相同，只是颜色为紫色"）。
+     * 数值上就是 DRAGON_BOLT_CD_TIER2（6.0s），单独起名只是为了日后能把终焉之影单独调快/调慢，
+     * 而不用去动霜寂飞龙的节奏。
+     */
+    public static final float DRAGON_BOLT_CD_TIER3    = DRAGON_BOLT_CD_TIER2;
+    /** tier 3 齐射发数：与 tier 2 同样双发（这才是"和第三只 Boss 相同"的手感） */
+    public static final int   DRAGON_BOLT_COUNT_TIER3 = 2;
+
+    /**
+     * 专属技能 · 幻影分身：首次召唤前摇 + 之后每 BOSS_CLONE_CD 秒补齐一次，
+     * 场上分身不足 BOSS_CLONE_COUNT 个时才补（不会越叠越多）。
+     */
+    public static final float BOSS_CLONE_FIRST_CD = 5f;
+    public static final float BOSS_CLONE_CD       = 18f;
+    public static final int   BOSS_CLONE_COUNT    = 2;
+    /** 分身血量 = 本体血池 × 该比例。明显低于本体，是可被打散的次级目标 */
+    public static final float BOSS_CLONE_HP_MUL     = 0.20f;
+    /** 分身半径 = 本体半径 × 该比例（比本体小一圈，一眼能看出是"分身"而非本体） */
+    public static final float BOSS_CLONE_RADIUS_MUL = 0.70f;
+    /** 分身移速 = 本体移速 × 该比例。比本体略快，作为贴脸威胁 */
+    public static final float BOSS_CLONE_SPEED_MUL  = 1.15f;
+    /** 分身接触伤害 = 本体接触伤害 × 该比例 */
+    public static final float BOSS_CLONE_DMG_MUL    = 0.45f;
+    /**
+     * **打散分身 → 本体回血比例（用户给定 5%）**：按本体血池上限计算。
+     * 这就是这个技能的全部张力——分身在旁边啃你，但清掉它等于给本体喂血，
+     * 于是玩家必须在"被分身追着打"和"给 Boss 回血"之间做选择。
+     */
+    public static final float BOSS_CLONE_HEAL       = 0.05f;
+    /**
+     * 回血/召唤特效（紫色裂隙，FX_RIFT）的存活时长与半径。
+     * 打散分身必须有明确反馈，否则玩家只会看到 Boss 血条莫名其妙涨了一截。
+     */
+    public static final float BOSS_CLONE_FX_TTL     = 0.9f;
+    public static final float BOSS_CLONE_FX_R       = 90f;
+
+    /**
+     * 幻影分身**也会发射同款紫色弹幕**（用户要求："让它的分身也可以发射一个和他一样的弹幕"）。
+     *
+     * 弹体本身与本体**完全同源**——分身走的就是本体那个 spawnDragonBoltVolley，
+     * 于是双发 ±15°、伤害、速度、寿命、沿途紫色灼烧带全部共用 DRAGON_BOLT_* 一套常量，
+     * 不存在"分身版弹幕"这种东西。下面三个常量只控制**分身的开火节奏**，不碰弹幕本身。
+     */
+    public static final float BOSS_CLONE_BOLT_CD     = DRAGON_BOLT_CD_TIER3;
+    /** 分身出生后首次开火的基线延迟（出场先给玩家一点应对时间，别一冒出来就糊脸） */
+    public static final float BOSS_CLONE_BOLT_FIRST  = 4.0f;
+    /**
+     * 首次开火的随机抖动上限。
+     * 两具分身是被同一次技能一起召出来的，若不给相位差就会永远同帧齐射
+     * （一瞬间 4 发 + 双份灼烧带同时糊上来）。抖一下之后各自按 BOSS_CLONE_BOLT_CD
+     * 独立走计时，节奏自然错开，压迫感是持续的而不是脉冲式的。
+     */
+    public static final float BOSS_CLONE_BOLT_JITTER = 2.5f;
+
     // ---- 战斗事件（小任务） ----
     /** 三个事件的触发时间（秒）：2 分钟 / 5 分钟 / 8 分钟 */
     public static final float[] EVENT_TIMES  = { 120f, 300f, 480f };
