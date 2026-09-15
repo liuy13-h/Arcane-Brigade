@@ -821,6 +821,8 @@ public final class HeadlessSmoke {
             w3.step(Balance.FIXED_STEP, run3);
         }
         float moved = w3.x[wid3] - mx0;
+        // 从 Balance 推导而非写死：数值平衡调整后这里不会失配
+        float expectMovePx = (Balance.WIZARD_SPEED - Balance.KING2_SPEED_PENALTY) * 30f * Balance.FIXED_STEP;
         run3.reset();
         w3.x[wid3] = Balance.ARENA_ENTER_X;   // 归位殿中：档位测试以 (0,220) 为圆心
         w3.y[wid3] = Balance.ARENA_ENTER_Y;

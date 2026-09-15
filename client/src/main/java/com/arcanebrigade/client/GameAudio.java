@@ -62,8 +62,34 @@ public final class GameAudio {
      * 等奶蛙走后按它恢复。
      */
     private static int battleTrack = TRACK_NONE;
+    /** 全局暂停态：暂停画面时同步压住所有在播音频，恢复时接续播放 */
+    private static boolean paused;
 
     private GameAudio() {}
+
+    /**
+     * 暂停 / 恢复全部音频（手动暂停、升级三选一等冻结画面的状态调用）。
+     * 恢复时只 play「槽位仍占用」的播放器——槽位为 null 表示已停止，不该被复活。
+     */
+    public static void setPaused(boolean p) {
+        if (p == paused) {
+            return;
+        }
+        paused = p;
+        if (p) {
+            pause(menu);
+            pause(lobby);
+            pause(boss);
+            pause(battle);
+            pause(laugh);
+        } else {
+            resume(menu);
+            resume(lobby);
+            resume(boss);
+            resume(battle);
+            resume(laugh);
+        }
+    }
 
     /** 启动主界面 BGM（若已在播则重来）。失败静默。 */
     public static void startMenuBgm() {
@@ -159,6 +185,9 @@ public final class GameAudio {
      * 音频缺失时静默跳过，不影响技能与动画。
      */
     public static void playLaugh() {
+        if (paused) {
+            return;   // 全局暂停期间不触发新音效，恢复后由下次释放重播
+        }
         if (laugh == null) {
             laugh = makeSfx(LAUGH_FILE);   // 首次释放时加载
         }
@@ -245,6 +274,9 @@ public final class GameAudio {
             p.setOnError(() ->
                     System.err.println("[GameAudio] 播放出错: " + fileName + " " + p.getError()));
             p.play();
+            if (paused) {
+                p.pause();   // 全局暂停期间新建的槽位同样保持静默
+            }
             return p;
         } catch (Throwable t) {
             System.err.println("[GameAudio] " + fileName + " 初始化失败（无音频设备等），忽略: "
@@ -259,6 +291,30 @@ public final class GameAudio {
         }
         try {
             p.setVolume(v);
+        } catch (Throwable ignored) {
+            // 播放器已失效则忽略
+        }
+    }
+
+    /** 全局暂停用：压住一个在播的播放器。失败静默 */
+    private static void pause(MediaPlayer p) {
+        if (p == null) {
+            return;
+        }
+        try {
+            p.pause();
+        } catch (Throwable ignored) {
+            // 播放器已失效则忽略
+        }
+    }
+
+    /** 全局恢复用：接续播放一个仍占用的槽位。失败静默 */
+    private static void resume(MediaPlayer p) {
+        if (p == null) {
+            return;
+        }
+        try {
+            p.play();
         } catch (Throwable ignored) {
             // 播放器已失效则忽略
         }
