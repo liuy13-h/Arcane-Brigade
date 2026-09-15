@@ -477,8 +477,22 @@ public final class Balance {
     public static final float MILKY_LAUGH_DMG     = 100f;
     public static final float MILKY_LAUGH_CD      = 6.0f;
     public static final float MILKY_LAUGH_CAST    = 2.0f;
-    /** 触发大笑的血量比例（低于此值才会大笑） */
+    /** 触发大笑的血量比例（低于此值即进入二阶段：不只是解锁大笑，还会整体强化） */
     public static final float MILKY_LAUGH_HP      = 0.5f;
+
+    // ---- 奶蛙 · 阶段强化 ----
+    /** 一阶段减伤：受到的伤害减少 50% */
+    public static final float MILKY_DR                 = 0.50f;
+    /** 一阶段移速加成（叠加在 MILKY_SPEED 之上） */
+    public static final float MILKY_SPEED_BONUS        = 100f;
+    /** 二阶段（血量 ≤ MILKY_LAUGH_HP）减伤：提升到 80% */
+    public static final float MILKY_PHASE2_DR          = 0.80f;
+    /** 二阶段技能伤害倍率（+100% → ×2） */
+    public static final float MILKY_PHASE2_DMG_MUL     = 2.0f;
+    /** 二阶段额外移速加成（在一阶段之上再加） */
+    public static final float MILKY_PHASE2_SPEED_BONUS = 50f;
+    /** 二阶段技能范围倍率（+25%） */
+    public static final float MILKY_PHASE2_RANGE_MUL   = 1.25f;
 
     // ---- 王宫最终决战：国王（第一阶段；第二/三阶段在后续版本接入）----
     /**

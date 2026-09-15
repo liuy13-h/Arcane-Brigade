@@ -1876,14 +1876,14 @@ public final class Renderer {
         float p = Math.min(1f, w.milkyCastT() / Math.max(0.001f, w.milkyCastDur()));
         if (cast == 1) {
             // 整圆范围（半径与技能二相同）：无死角，靠远离躲避
-            double rad = Balance.MILKY_STOMP_RANGE;
+            double rad = Balance.MILKY_STOMP_RANGE * w.milkyRangeMul();
             gc.setFill(Color.rgb(255, 90, 60, 0.16 + 0.16 * p));
             gc.fillOval(ex - rad, ey - rad, rad * 2, rad * 2);
             gc.setStroke(Color.rgb(255, 130, 90, 0.85));
             gc.setLineWidth(2.5);
             gc.strokeOval(ex - rad, ey - rad, rad * 2, rad * 2);
         } else {
-            double rad = Balance.MILKY_LAUGH_RANGE;
+            double rad = Balance.MILKY_LAUGH_RANGE * w.milkyRangeMul();
             gc.setFill(Color.rgb(255, 80, 90, 0.14 + 0.18 * p));
             gc.fillOval(ex - rad, ey - rad, rad * 2, rad * 2);
             gc.setStroke(Color.rgb(255, 120, 140, 0.9));
