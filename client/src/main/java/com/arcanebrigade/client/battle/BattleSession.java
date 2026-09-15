@@ -125,8 +125,17 @@ public final class BattleSession {
     }
 
     public void chooseUpgrade(int index) {
+        chooseUpgrade(index, -1);
+    }
+
+    /**
+     * 确认三选一。
+     *
+     * @param slot 三主动槽已满且选的是技能卡时，要替换掉的槽位（0..2）；其余情况传 -1。
+     */
+    public void chooseUpgrade(int index, int slot) {
         if (hasPendingUpgrade()) {
-            world.applyChoice(world.wizard(0), index);
+            world.applyChoice(world.wizard(0), index, slot);
         }
     }
 

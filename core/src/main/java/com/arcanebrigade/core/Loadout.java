@@ -71,12 +71,41 @@ public final class Loadout {
     // ------------------------------------------------------------------
 
     public void set(int slot, int spellId) {
+        // 槽位换人：先把旧技能从构筑里摘干净。evolvedMask 是按「技能 id」记的位图，
+        // 换走后还留着位就会让同名技能日后被重新捡到时"无催化剂也自动进化"。
+        // 清位后 refresh() 里的 checkEvolutions 会按当前槽位重新判定，自洽。
+        int old = spells[slot];
+        if (old != Spells.NONE && old != spellId) {
+            evolvedMask &= ~(1 << old);
+        }
         spells[slot] = spellId;
         cd[slot] = 0f;
         refresh();
     }
 
+    /**
+     * 用 spellId 顶掉指定槽位已有的技能（三主动满槽时的"替换"）。
+     *
+     * 与 add() 的区别：add 只在有空槽时成功，这里是明确指名替换，
+     * 所以永远落地——满槽时玩家选了技能卡就必须牺牲一个旧技能。
+     * 槽位号越界或目标技能非法时返回 false（调用方应已保证合法）。
+     */
+    public boolean replace(int slot, int spellId) {
+        if (slot < 0 || slot >= SLOTS) {
+            return false;
+        }
+        if (spellId == Spells.NONE) {
+            return false;
+        }
+        set(slot, spellId);
+        return true;
+    }
+
     public void clear(int slot) {
+        int old = spells[slot];
+        if (old != Spells.NONE) {
+            evolvedMask &= ~(1 << old);
+        }
         spells[slot] = Spells.NONE;
         cd[slot] = 0f;
         refresh();

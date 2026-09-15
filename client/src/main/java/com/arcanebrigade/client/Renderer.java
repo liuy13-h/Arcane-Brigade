@@ -4092,13 +4092,112 @@ public final class Renderer {
                 gc.fillText("⚡ " + c.synergy, bx + 14, y0 + 104);
             }
 
+            // 满槽替换提示：这张主动卡会顶掉一个已有技能
+            if (c.replace) {
+                gc.setFill(Color.rgb(255, 180, 120));
+                gc.setFont(Font.font("Microsoft YaHei", 12));
+                gc.fillText("主动槽已满 · 选择后挑一个顶掉", bx + 14, y0 + 130);
+            }
+
             // 选中提示（覆盖整张卡片的下半部）
             gc.setFill(Color.rgb(255, 255, 255, 0.10));
             gc.fillRect(bx + 10, y0 + cardH - 40, cardW - 20, 30);
             gc.setFill(Color.rgb(220, 220, 235));
             gc.setFont(Font.font("Consolas", 12));
-            gc.fillText("点击选择", bx + cardW / 2 - 24, y0 + cardH - 20);
+            String foot = c.replace ? "点击替换" : "点击选择";
+            gc.fillText(foot, bx + cardW / 2 - foot.length() * 6, y0 + cardH - 20);
         }
+    }
+
+    /**
+     * 替换槽位面板：满槽时选了技能卡后弹出，让玩家挑一个旧技能顶掉。
+     * 行矩形与 replaceRowRects 共用同一份几何，避免"画的框"和"点的框"错位。
+     */
+    public void drawReplacePanel(Loadout lo, Upgrades.Choice incoming, double vw, double vh) {
+        gc.setFill(Color.rgb(8, 6, 14, 0.86));
+        gc.fillRect(0, 0, vw, vh);
+
+        gc.setFont(Font.font("Microsoft YaHei", 22));
+        gc.setFill(Color.rgb(245, 245, 250));
+        gc.fillText("选择要替换的技能", vw / 2 - 88, vh * 0.18);
+
+        gc.setFont(Font.font("Consolas", 13));
+        gc.setFill(Color.rgb(180, 180, 200));
+        String sub = "新技能：「" + (incoming != null ? incoming.name : "?") + "」  被替换的技能将失去（含其进化形态）";
+        gc.fillText(sub, vw / 2 - sub.length() * 3.6, vh * 0.18 + 26);
+
+        Rect[] rows = replaceRowRects(vw, vh, Loadout.SLOTS);
+        gc.setFont(Font.font("Microsoft YaHei", 15));
+        for (int s = 0; s < rows.length && s < Loadout.SLOTS; s++) {
+            Rect r = rows[s];
+            int raw = lo.spells[s];
+            int resolved = lo.resolvedSpell(s);
+            SpellDef def = Spells.get(resolved);
+            boolean evolved = raw != Spells.NONE && resolved != raw;
+
+            gc.setFill(Color.rgb(30, 24, 26, 0.95));
+            gc.fillRoundRect(r.x(), r.y(), r.w(), r.h(), 10, 10);
+            gc.setStroke(evolved ? Color.rgb(255, 200, 110) : Color.rgb(120, 120, 145));
+            gc.setLineWidth(evolved ? 2.5 : 1.5);
+            gc.strokeRoundRect(r.x(), r.y(), r.w(), r.h(), 10, 10);
+
+            gc.setFill(Color.rgb(170, 170, 190));
+            gc.setFont(Font.font("Consolas", 13));
+            gc.fillText("槽 " + (s + 1), r.x() + 16, r.y() + 26);
+
+            gc.setFill(evolved ? Color.rgb(255, 220, 130) : Color.rgb(245, 245, 250));
+            gc.setFont(Font.font("Microsoft YaHei", 17));
+            gc.fillText(def != null ? def.name : "—", r.x() + 76, r.y() + 30);
+
+            gc.setFill(Color.rgb(190, 190, 210));
+            gc.setFont(Font.font("Microsoft YaHei", 12));
+            gc.fillText(def != null ? spellPanelDesc(def) : "空槽", r.x() + 76, r.y() + 58);
+            if (evolved) {
+                gc.setFill(Color.rgb(255, 200, 110));
+                gc.fillText("已进化", r.x() + 76 + (def != null ? def.name.length() * 17 : 0) + 12, r.y() + 30);
+            }
+
+            gc.setFill(Color.rgb(255, 180, 120));
+            gc.setFont(Font.font("Microsoft YaHei", 13));
+            gc.fillText("替换此槽 ▸", r.x() + r.w() - 96, r.y() + r.h() / 2 + 5);
+        }
+
+        Rect cancel = replaceCancelRect(vw, vh, Loadout.SLOTS);
+        gc.setFill(Color.rgb(46, 40, 60, 0.95));
+        gc.fillRoundRect(cancel.x(), cancel.y(), cancel.w(), cancel.h(), 8, 8);
+        gc.setStroke(Color.rgb(140, 140, 165));
+        gc.setLineWidth(1.5);
+        gc.strokeRoundRect(cancel.x(), cancel.y(), cancel.w(), cancel.h(), 8, 8);
+        gc.setFill(Color.rgb(220, 220, 235));
+        gc.setFont(Font.font("Microsoft YaHei", 15));
+        gc.fillText("取消（重新挑选项）", cancel.x() + 28, cancel.y() + 30);
+    }
+
+    /** 替换面板行矩形（与 drawReplacePanel 共用）；行高 84、间距 14、起点 vh*0.30 */
+    public static Rect[] replaceRowRects(double vw, double vh, int rows) {
+        double w = Math.min(640, vw - 160);
+        double x = (vw - w) / 2;
+        double y0 = vh * 0.30;
+        Rect[] out = new Rect[Math.max(0, rows)];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = new Rect(x, y0 + i * (84 + 14), w, 84);
+        }
+        return out;
+    }
+
+    /** 替换面板「取消」按钮矩形 */
+    public static Rect replaceCancelRect(double vw, double vh, int rows) {
+        double y0 = vh * 0.30;
+        return new Rect(vw / 2 - 110, y0 + rows * (84 + 14) + 12, 220, 46);
+    }
+
+    /** 替换面板里的技能行描述（伤害 / CD / 元素），与三选一卡片的描述风格一致 */
+    private static String spellPanelDesc(SpellDef d) {
+        String elem = Element.name(d.element);
+        if (elem.equals("无")) {
+            elem = "无附魔";
+        }
+        return String.format("%.0f 伤害 / %.2fs CD · %s", d.damage, d.cooldown, elem);
     }
 
     // ------------------------------------------------------------------

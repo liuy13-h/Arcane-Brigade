@@ -130,6 +130,13 @@ public final class GameApp extends Application {
     private int lastMilkyCast;
 
     /**
+     * 升级面板的「替换槽位」中间态：>=0 表示玩家点了一张满槽技能卡，
+     * 正在挑要被顶掉的槽位（此时面板换成挑槽界面）。-1 = 没在挑。
+     * 重抽、面板关闭、重开一局都要复位，否则会带着上一次的选择进新面板。
+     */
+    private int replaceIdx = -1;
+
+    /**
      * 前置剧情 CG 状态：0=无剧情；1=奶娃遗言（击败奶娃后强制触发）。
      * CG 期间锁操作、全程自动，World 不再推进（冻结战场），队伍与 Loadout 原样保留。
      */
@@ -251,6 +258,7 @@ public final class GameApp extends Application {
                     restart();
                     return;
                 }
+                replaceIdx = -1;   // 重抽后卡片全换，之前的挑槽中间态作废
                 battle.rerollUpgradeChoices();
             }
         });
@@ -873,13 +881,30 @@ public final class GameApp extends Application {
                 // 升级面板始终叠加在画面最上层
                 if (upgradePaused) {
                     Loadout lo = battle.playerLoadout();
-                    if (lo != null) {
-                        Upgrades.Choice[] cs = battle.pendingChoices();
-                        renderer.drawUpgradePanel(cs, lo.rerolls,
-                                canvas.getWidth(), canvas.getHeight());
+                    Upgrades.Choice[] cs = (lo != null) ? battle.pendingChoices() : null;
+                    if (cs != null && cs.length > 0) {
+                        int sel = (replaceIdx >= 0 && replaceIdx < cs.length) ? replaceIdx : -1;
+                        if (sel >= 0) {
+                            // 已点了一张满槽技能卡：换成挑槽界面
+                            renderer.drawReplacePanel(lo, cs[sel],
+                                    canvas.getWidth(), canvas.getHeight());
+                        } else {
+                            renderer.drawUpgradePanel(cs, lo.rerolls,
+                                    canvas.getWidth(), canvas.getHeight());
+                        }
+                    } else {
+                        // 帧内升级刚被应用（如点击事件先于本帧到达）：无卡可画，
+                        // 按无面板处理，别把 null 塞给渲染器
+                        replaceIdx = -1;
+                        if (battle.isManualPaused()) {
+                            renderer.drawPauseOverlay(canvas.getWidth(), canvas.getHeight());
+                        }
                     }
-                } else if (battle.isManualPaused()) {
-                    renderer.drawPauseOverlay(canvas.getWidth(), canvas.getHeight());
+                } else {
+                    replaceIdx = -1;   // 面板收起时清掉挑槽中间态
+                    if (battle.isManualPaused()) {
+                        renderer.drawPauseOverlay(canvas.getWidth(), canvas.getHeight());
+                    }
                 }
 
                 // 决战冒烟：第一次出现技能预警圈时截一帧（国王 + 预警圈 + 血条同框），只截一次
@@ -929,6 +954,7 @@ public final class GameApp extends Application {
         GameAudio.stopLaugh();          // 兜底：任何路径回大厅都收掉奶蛙笑声
         bossMusicOn = false;            // 复位奶蛙 BGM 状态，下一局它再次出场时能正常起播
         lastMilkyCast = 0;
+        replaceIdx = -1;                // 回大厅：升级面板已收起，挑槽中间态一并清掉
         audioPaused = false;            // 退出战斗时复位音频暂停态
         GameAudio.setPaused(false);
         pressed.clear();
@@ -1208,6 +1234,7 @@ public final class GameApp extends Application {
         victoryStoryDone = false;
         victoryStoryT = 0.0;
         lastMilkyCast = 0;        // 新一局：奶蛙施法记忆复位，别把上一局的笑声状态带进来
+        replaceIdx = -1;          // 新一局：清掉可能残留的"挑槽替换"中间态
         closeDetail();           // 进战斗前也清一次（防御性）
         GameAudio.stopMenuBgm();  // 出征 / 战斗冒烟都离开主界面
         GameAudio.stopLobbyBgm(); // 出大厅，交棒给战斗 BGM
@@ -1336,12 +1363,36 @@ public final class GameApp extends Application {
         }
         int wid = world.wizard(0);
         if (world.pendingChoices(wid) == 0) {
+            replaceIdx = -1;
             return;
         }
         Upgrades.Choice[] cs = world.peekChoices(wid);
         if (cs == null) {
             return;
         }
+
+        // 4a) 挑槽界面：点某一行 = 用它替换该槽；点「取消」= 回到三选一
+        Loadout plo = world.loadout(wid);
+        if (replaceIdx >= 0) {
+            if (replaceIdx >= cs.length) {
+                replaceIdx = -1;
+                return;
+            }
+            Renderer.Rect[] rows = Renderer.replaceRowRects(vw, vh, Loadout.SLOTS);
+            for (int s = 0; s < rows.length; s++) {
+                if (rows[s].hit(mx, my)) {
+                    int idx = replaceIdx;
+                    replaceIdx = -1;
+                    battle.chooseUpgrade(idx, s);
+                    return;
+                }
+            }
+            if (Renderer.replaceCancelRect(vw, vh, Loadout.SLOTS).hit(mx, my)) {
+                replaceIdx = -1;
+            }
+            return;   // 挑槽时忽略其它点击
+        }
+
         double cardW = Math.min(280, (vw - 80) / 3);
         double gap = 20;
         double total = cs.length * cardW + (cs.length - 1) * gap;
@@ -1351,7 +1402,13 @@ public final class GameApp extends Application {
         for (int i = 0; i < cs.length; i++) {
             double bx = x0 + i * (cardW + gap);
             if (mx >= bx && mx <= bx + cardW && my >= y0 && my <= y0 + cardH) {
-                battle.chooseUpgrade(i);
+                Upgrades.Choice c = cs[i];
+                // 三主动已满时的技能卡：先进挑槽界面，不直接落地
+                if (c != null && c.replace && plo != null && plo.firstEmpty() < 0) {
+                    replaceIdx = i;
+                } else {
+                    battle.chooseUpgrade(i);
+                }
                 return;
             }
         }

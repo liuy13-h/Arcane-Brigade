@@ -318,10 +318,76 @@ public final class HeadlessSmoke {
 
         // 关键断言：D3 的核心是 "Stats 影响实际伤害" 和 "升级能多次发生"
         boolean ok = lo.level > 1 && lo.passiveCount() > 0 && lo.stats.dmgMul > 1.0f;
-        System.out.println(ok ? "OK：升级链路工作正常" : "!! 失败：升级或被动未生效");
-        if (!ok) {
+        boolean replaceOk = verifySpellReplace();
+        System.out.println((ok && replaceOk) ? "OK：升级链路工作正常"
+                : "!! 失败：升级或被动未生效 / 满槽替换不正常");
+        if (!ok || !replaceOk) {
             System.exit(1);
         }
+    }
+
+    /**
+     * 满槽「替换」定向验证（D3 补充）：
+     *
+     *   1) 三主动满槽时，Boss 技能卡仍会出现，且标着 replace=true（UI 据此弹挑槽面板）；
+     *   2) 指名槽位确认后，只有那一槽被顶掉，另外两槽原样，槽位仍是 3 个；
+     *   3) 同一组选项里不出现重复项（技能卡池抽干后靠补给交替填充）。
+     *
+     * 以前满槽时技能卡直接被抽卡逻辑剔掉，玩家拿不到新技能，也没有回头路。
+     */
+    private static boolean verifySpellReplace() {
+        boolean ok = true;
+        World w = new World(999L);
+        int wid = w.spawnWizard(0f, 0f);
+        Loadout lo = w.loadout(wid);
+        lo.classKind = HeroClass.WIZARD;
+        lo.set(0, Spells.MAGIC_MISSILE);
+        lo.set(1, Spells.FIREBALL);
+        lo.set(2, Spells.ICE_SHARD);
+
+        w.grantBossCard(wid);
+        Upgrades.Choice[] cs = w.peekChoices(wid);
+        boolean hasSpell = false;
+        for (Upgrades.Choice c : cs) {
+            if (c != null && c.kind == Upgrades.KIND_SPELL) {
+                hasSpell = true;
+                if (!c.replace) {
+                    System.out.println("!! 失败：满槽技能卡未标记 replace（UI 无法弹挑槽面板）");
+                    ok = false;
+                }
+            }
+        }
+        if (!hasSpell) {
+            System.out.println("!! 失败：三主动满槽后 Boss 技能卡完全消失（应改为可替换）");
+            ok = false;
+        }
+        // 组内查重
+        for (int i = 0; i < cs.length && ok; i++) {
+            for (int j = i + 1; j < cs.length; j++) {
+                if (cs[i] != null && cs[j] != null
+                        && cs[i].kind == cs[j].kind && cs[i].id == cs[j].id) {
+                    System.out.printf("!! 失败：三选一出现重复选项（kind=%d id=%d）%n",
+                            cs[i].kind, cs[i].id);
+                    ok = false;
+                    break;
+                }
+            }
+        }
+
+        // 指名替换 1 号槽
+        int newSpell = cs[0].id;
+        int keep0 = lo.spells[0];
+        int keep2 = lo.spells[2];
+        w.applyChoice(wid, 0, 1);
+        boolean slotHit = lo.spells[1] == newSpell;
+        boolean othersKept = lo.spells[0] == keep0 && lo.spells[2] == keep2;
+        boolean stillThree = lo.activeCount() == 3;
+        boolean consumed = lo.pendingUps == 0 && lo.pendingChoices == null;
+        ok = ok && slotHit && othersKept && stillThree && consumed;
+        System.out.printf("满槽替换：一组 %d 个选项（含 %s 技能卡），指名替换槽1 → %s（另两槽原样=%s，仍满 3 槽=%s，本次升级已结算=%s）%n",
+                cs.length, hasSpell ? "满槽可替换的" : "无", slotHit ? "命中" : "未命中",
+                othersKept, stillThree, consumed);
+        return ok;
     }
 
     /**

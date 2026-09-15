@@ -1,6 +1,7 @@
 package com.arcanebrigade.core;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
 
@@ -8,11 +9,12 @@ import java.util.Random;
  * 三选一升级选项生成。
  *
  * 设计要求（DESIGN.md 第 4 节）：
- *   - 主动技能只在主动槽未满 3 时出现
+ *   - 主动技能一直可出；主动槽满 3 时，选中技能卡需挑一个旧技能替换（Choice.replace）
  *   - 被动为主来源（34 个池 + 8 槽）
  *   - 候选不足用通用填充（急救 / 强身）
  *   - 稀有度权重 60/30/10
  *   - 幸运 +1 选项
+ *   - **同一组选项内绝不重复**（填充项交替给出，池子抽干时宁可少给一张）
  *   - **协同提示** —— 选法术时若与已有法术形成反应要明示；
  *     选被动时若是某主动的催化剂，要提示"可进化：XX → XX"。
  *     这是 DESIGN.md 明确点名的"游戏灵魂"。
@@ -38,9 +40,14 @@ public final class Upgrades {
         public final String rarityName;
         public final String synergy;
         public final boolean evolution;
+        /**
+         * true = 这是一张主动技能卡，而三个主动槽已经满了，选中后必须再挑一个槽位替换。
+         * 由 makeChoice 在生成时按"当时还有没有空槽"算好，UI 据此弹二次面板。
+         */
+        public final boolean replace;
 
         Choice(int kind, int id, String name, String desc, String label,
-               int rarity, String synergy, boolean evolution) {
+               int rarity, String synergy, boolean evolution, boolean replace) {
             this.kind = kind;
             this.id = id;
             this.name = name;
@@ -50,6 +57,7 @@ public final class Upgrades {
             this.rarityName = rarityName(rarity);
             this.synergy = synergy;
             this.evolution = evolution;
+            this.replace = replace;
         }
 
         private static String rarityName(int r) {
@@ -82,17 +90,13 @@ public final class Upgrades {
             pool.remove(c);
             out[filled++] = makeChoice(c, lo);
         }
-        // 候选不足：补通用
-        while (filled < n) {
-            out[filled++] = makeFiller(filled, rng);
-        }
-        return out;
+        // 候选不足：补通用（并保证不会补出两张一模一样的卡）
+        return fillWithFillers(out, filled, n, rng);
     }
 
     private static void addSpellCandidates(Loadout lo, List<Cand> pool) {
-        if (lo.firstEmpty() < 0) {
-            return;
-        }
+        // 满槽也照常出主动卡：选中后走"挑一个旧技能顶掉"的替换流程
+        // （Choice.replace = true，客户端弹挑槽面板；World.applyChoice 负责落地）。
         // 只从该职业的专属技能池抽，保证三职业各玩各的构筑
         for (int sid : Spells.poolForClass(lo.classKind)) {
             if (lo.contains(sid)) {
@@ -177,17 +181,19 @@ public final class Upgrades {
     }
 
     private static Choice makeChoice(Cand c, Loadout lo) {
+        // 满槽时主动卡仍然会出，只是性质变成"替换"：客户端据此弹挑槽面板。
+        boolean needReplace = lo.firstEmpty() < 0;
         if (c.kind == KIND_SPELL) {
             SpellDef def = Spells.get(c.id);
             String syn = spellSynergy(c.id, lo);
             return new Choice(KIND_SPELL, c.id, def != null ? def.name : "?",
-                    spellDesc(def), "主动", c.rarity, syn, false);
+                    spellDesc(def), "主动", c.rarity, syn, false, needReplace);
         } else {
             PassiveDef d = Passives.get(c.id);
             String syn = passiveSynergy(c.id, lo);
             boolean evo = Spells.catalyzedBy(c.id) != 0 && lo.contains(Spells.catalyzedBy(c.id));
             return new Choice(KIND_PASSIVE, c.id, d != null ? d.name : "?",
-                    d != null ? d.desc : "", "被动", c.rarity, syn, evo);
+                    d != null ? d.desc : "", "被动", c.rarity, syn, evo, false);
         }
     }
 
@@ -228,13 +234,41 @@ public final class Upgrades {
         return "催化：「" + base.name + "」→「" + evolved.name + "」";
     }
 
-    private static Choice makeFiller(int seed, Random rng) {
-        if ((seed + rng.nextInt(2)) % 2 == 0) {
+    /** 通用填充项。heal=true 给「急救」，false 给「强身」 */
+    private static Choice makeFiller(boolean heal) {
+        if (heal) {
             return new Choice(KIND_FILLER, FILLER_HEAL, "急救",
-                    "恢复 40% 最大生命", "补给", PassiveDef.COMMON, "", false);
+                    "恢复 40% 最大生命", "补给", PassiveDef.COMMON, "", false, false);
         }
         return new Choice(KIND_FILLER, FILLER_VITALITY, "强身",
-                "最大生命 +10 并回满该部分", "补给", PassiveDef.RARE, "", false);
+                "最大生命 +10 并回满该部分", "补给", PassiveDef.RARE, "", false, false);
+    }
+
+    /**
+     * 用通用填充把选项补满到 n 个，且**保证同一组里不会出现两个完全相同的选项**。
+     *
+     * 填充项只有「急救」「强身」两种，所以交替给出；两个都用过还不够（候选池被抽干，
+     * 例如所有被动满层且三主动槽已满）时宁可提前收尾返回短数组——
+     * 少一张卡，好过给玩家两张点哪张都一样的卡。
+     */
+    private static Choice[] fillWithFillers(Choice[] out, int filled, int n, Random rng) {
+        boolean healNext = rng.nextBoolean();
+        while (filled < n) {
+            Choice f = makeFiller(healNext);
+            healNext = !healNext;
+            boolean dup = false;
+            for (int i = 0; i < filled; i++) {
+                if (out[i].kind == f.kind && out[i].id == f.id) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (dup) {
+                break;
+            }
+            out[filled++] = f;
+        }
+        return (filled == n) ? out : Arrays.copyOf(out, filled);
     }
 
     private static String spellDesc(SpellDef d) {
@@ -262,7 +296,10 @@ public final class Upgrades {
     /**
      * 仅从该职业的主动技池中抽 3 张不重复的技能卡（Boss 击杀奖励用）。
      * 与 roll() 的区别：不含被动 / 填充，保证"拿到的是一张技能卡"。
-     * 候选不足 3 个（池子已被抽空）时，用通用填充补齐。
+     * 候选不足 3 个（池子已被抽空）时用通用填充补齐。
+     *
+     * 主动槽已满 3 时同样出技能卡——玩家选了就顶掉一个旧技能
+     * （Choice.replace = true，客户端会先让玩家挑槽位）。
      */
     public static Choice[] rollSpell(Loadout lo, Random rng) {
         int[] pool = Spells.poolForClass(lo.classKind);
@@ -282,9 +319,6 @@ public final class Upgrades {
             }
             out[filled++] = makeChoice(new Cand(KIND_SPELL, sid, Spells.rarityOf(sid)), lo);
         }
-        while (filled < n) {
-            out[filled++] = makeFiller(filled, rng);
-        }
-        return out;
+        return fillWithFillers(out, filled, n, rng);
     }
 }

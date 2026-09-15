@@ -5441,15 +5441,35 @@ public final class World {
         return lo.pendingChoices;
     }
 
-    /** 玩家确认选择：应用升级，pendingUps--，若还有升级则生成下一组 */
+    /** 玩家确认选择：应用升级，pendingUps--，若还有升级则生成下一组。不带替换槽位。 */
     public void applyChoice(int wizardId, int index) {
+        applyChoice(wizardId, index, -1);
+    }
+
+    /**
+     * 玩家确认选择，并指定「三主动已满时拿新技能顶掉哪个槽」。
+     *
+     * @param slot 替换槽位（0..Loadout.SLOTS-1）；-1 = 不指定，用于该选项不需要替换的场合。
+     *
+     * 满槽时选了技能卡（Choice.replace）必须指名槽位才落地；未指名（无头脚本等自动调用）
+     * 时退化为替换 0 号槽——宁可被顶掉第一个技能，也不能把这次升级卡住不放。
+     */
+    public void applyChoice(int wizardId, int index, int slot) {
         Loadout lo = loadout(wizardId);
         if (lo == null || lo.pendingChoices == null) {
             return;
         }
+        if (index < 0 || index >= lo.pendingChoices.length) {
+            return;
+        }
         Upgrades.Choice c = lo.pendingChoices[index];
         if (c != null) {
-            applyUpgrade(wizardId, lo, c);
+            if (c.kind == Upgrades.KIND_SPELL && lo.firstEmpty() < 0) {
+                int target = (slot >= 0 && slot < Loadout.SLOTS) ? slot : 0;
+                lo.replace(target, c.id);
+            } else {
+                applyUpgrade(wizardId, lo, c);
+            }
         }
         lo.pendingUps--;
         lo.pendingChoices = (lo.pendingUps > 0) ? Upgrades.roll(lo, rng) : null;
