@@ -598,6 +598,10 @@ public final class World {
         }
         if (id == milkyId) {
             milkyId = -1;  // 奶蛙血量归零：消失（客户端据此停掉专属 BGM）
+            // 施法状态一并复位：若死在大笑/踩地施法途中，客户端的 stopLaugh
+            // 依赖「施法状态从 2 变回 0」触发，不复位它就永远收不掉笑声。
+            milkyCast = 0;
+            milkyCastT = 0f;
             // 前置剧情触发点：击败奶蛙不再直接通关。记录倒地位置并置 milkyFallen，
             // 客户端据此锁定操作、强制播放剧情 CG；胜利判定移交给后续的王宫决战。
             milkyFallen = true;

@@ -109,6 +109,8 @@ public final class GameApp extends Application {
 
     /** ESC 手动暂停（战斗阶段） */
     private boolean manualPause;
+    /** 音频是否处于暂停态：跟随战斗暂停（手动暂停 / 升级三选一），用于同步 BGM 与音效 */
+    private boolean audioPaused;
     /** 胜利流程状态机：是否已处理本局胜利（字幕只播一次） */
     private boolean victoryHandled;
     /** 通关剧情字幕是否已播完（之后才显示胜利结算） */
@@ -593,6 +595,11 @@ public final class GameApp extends Application {
                     hallT0 = 0.0;
                     GameAudio.stopBattleBgm();
                     GameAudio.stopBossBgm();
+                    // 奶蛙可能在大笑施法途中被击杀：笑声不再有「施法结束」的停止时机，
+                    // 必须在这里立即收掉，否则会一直播到音频文件自然结束。
+                    GameAudio.stopLaugh();
+                    bossMusicOn = false;    // 剧情分支不再经过逐帧 BGM 同步，手动复位
+                    lastMilkyCast = 0;      // World 已复位 milkyCast，这里保持一致
                     pressed.clear();
                     mouseDown = false;
                 }
@@ -775,6 +782,7 @@ public final class GameApp extends Application {
                         victoryStoryT = 0.0;
                         GameAudio.stopBattleBgm();   // 通关：不再循环战斗曲
                         GameAudio.stopBossBgm();     // 奶蛙专属 BGM 暂停
+                        GameAudio.stopLaugh();       // 兜底：笑声可能仍在大笑施法中播放
                     }
                     finishRun(world);
                     renderer.setFps(fps[0]);
@@ -809,6 +817,7 @@ public final class GameApp extends Application {
                 if (world.defeat() || world.abandoned()) {
                     finishRun(world);
                     GameAudio.stopBattleBgm();   // 结算：冻结模拟时不再放战斗曲
+                    GameAudio.stopLaugh();       // 玩家可能被大笑伤害击杀，同样收掉笑声
                     renderer.setFps(fps[0]);
                     renderer.draw(world, 0f);
                     renderer.drawDefeatOverlay(world, canvas.getWidth(), canvas.getHeight());
@@ -820,6 +829,7 @@ public final class GameApp extends Application {
                 }
 
                 boolean upgradePaused = battle.hasPendingUpgrade();
+                syncAudioPause(battle.isPaused());
                 readInput();
                 float alpha = battle.advance(dt, input);
                 syncTaskKills(world);
@@ -863,6 +873,14 @@ public final class GameApp extends Application {
         }.start();
     }
 
+    /** 战斗暂停状态变化时同步音频：画面冻结时 BGM / 音效一并停住，恢复时接续播放 */
+    private void syncAudioPause(boolean gamePaused) {
+        if (gamePaused != audioPaused) {
+            audioPaused = gamePaused;
+            GameAudio.setPaused(audioPaused);
+        }
+    }
+
     /** 从主界面「开始游戏」进入准备大厅。保留冒烟预设的 lobbyChoice 不动。 */
     private void enterLobby() {
         inTitle = false;
@@ -878,6 +896,12 @@ public final class GameApp extends Application {
         GameAudio.stopMenuBgm();        // 离开主界面
         GameAudio.startLobbyBgm();      // 大厅主音乐循环
         GameAudio.stopBattleBgm();      // 从战斗退回大厅（阵亡结算 / 重开）时收掉战斗曲
+        GameAudio.stopBossBgm();        // 奶蛙专属曲同样收掉（stopBattleBgm 已清 battleTrack，不会复活战斗曲）
+        GameAudio.stopLaugh();          // 兜底：任何路径回大厅都收掉奶蛙笑声
+        bossMusicOn = false;            // 复位奶蛙 BGM 状态，下一局它再次出场时能正常起播
+        lastMilkyCast = 0;
+        audioPaused = false;            // 退出战斗时复位音频暂停态
+        GameAudio.setPaused(false);
         pressed.clear();
     }
 
@@ -1158,6 +1182,8 @@ public final class GameApp extends Application {
         GameAudio.stopMenuBgm();  // 出征 / 战斗冒烟都离开主界面
         GameAudio.stopLobbyBgm(); // 出大厅，交棒给战斗 BGM
         GameAudio.setBattleMusic(-1);   // 开局先上普通战斗曲，Boss 登场时自动换它的曲
+        audioPaused = false;            // 新一局从非暂停态开始（音频侧同步复位）
+        GameAudio.setPaused(false);
         pressed.clear();
     }
 
