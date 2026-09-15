@@ -597,21 +597,21 @@ public final class HeadlessSmoke {
      *
      * 玩家全程站桩、无敌，只盯国王：
      *   1) 8 秒技能 CD 内常态站桩：一步不动；
-     *   2) 技能前摇 1.4 秒随机走位（躲弹幕）：速率 ≈ 175、中途会拐弯，
+     *   2) 技能前摇 1 秒随机走位（躲弹幕）：速率 ≈ 175、中途会拐弯，
      *      且位移方向不持续指向玩家（真追击会一直指向玩家）；
-     *   3) 唯一技能与默认属性：前摇起点生成 180/50/1.4s 预警圈，9.4 秒爆炸扣 50 血；
+     *   3) 唯一技能与默认属性：前摇起点生成 180/80/1s 预警圈，9.0 秒爆炸扣 80 血；
      *      第 15 秒按获得顺序失去一个被动并扣 10 血。
      * 为让爆炸伤害可确定判定，开战前把国王传送到场地右侧顶角：
-     * 1.4 秒随机走位也够不到玩家（不产生无敌帧），玩家必吃这一发 50。
+     * 1 秒随机走位也够不到玩家（不产生无敌帧），玩家必吃这一发 80。
      *
      * 场次 3（二阶段）：一阶段击破只发决裂信号（不结算）→ beginKingPhase2 王座重生
-     *   （6000 血 / 玩家移速 -20 / 开场裂隙）；随后 42 秒长跑观测：
-     *   纯追击走位三档（175 / 155 / 140，不再保持距离/绕行；AOE 前摇期间站定）、
-     *   魔弹（130 / 扇形 3 连发 / 10 秒一轮）、地面提示（10 秒 / 1.5 秒前摇 / 150）、
+     *   （60000 血 / 玩家移速 -20 / 开场裂隙）；随后 42 秒长跑观测：
+     *   纯追击走位三档（250 / 205 / 170，不再保持距离/绕行；AOE 前摇期间站定）、
+     *   魔弹（130 / 扇形 5 连发 / 5 秒一轮）、地面提示（6 秒 / 1.5 秒前摇 / 150 / 80）、
      *   裂隙刷怪（5 秒一道 / 每道 2 只 / 同屏封顶），
      *   最后击破二阶段 → 只发「王座本体」过渡信号（等对白播完进三阶段）。
      *
-     * 场次 4（三阶段 · 王座本体）：beginKingPhase3 觉醒（12000 血 / 常驻 80% 减伤 / 前摇窗口 20%），
+     * 场次 4（三阶段 · 王座本体）：beginKingPhase3 觉醒（60000 血 / 常驻 90% 减伤 / 前摇窗口 20%），
      *   随后 30 秒长跑观测：传送（3 秒周期 / 落点 ≤50 / 1 秒前摇 / 落点 100 范围 30 爆发）、
      *   地刺（5 秒 / 1 秒警示 / 30）、深渊牵引（5 秒 / 1.5 秒窗口 / 30 速拽向王座）、
      *   裂隙召唤 Boss（25 秒 / 非奶蛙档位）、造成伤害回 200，最后击破 → 真通关。
@@ -651,13 +651,13 @@ public final class HeadlessSmoke {
             path1 += dist(bx, by, w.x[k], w.y[k]);
             if (i == standFrames - 6) {
                 // 传送国王到右侧顶角，为下面这一发技能建立确定性的几何：距离 ~720，
-                // 1.4 秒随机走位也够不到玩家，爆炸伤害必落在玩家身上且国王不吃击退
+                // 1 秒随机走位也够不到玩家，爆炸伤害必落在玩家身上且国王不吃击退
                 w.x[k] = Balance.ARENA_HALF_X - 80f;
                 w.y[k] = Balance.ARENA_TOP;
             }
         }
 
-        // ---- 阶段 2：8s 起手 → 1.4s 前摇随机走位 → 回到站桩（跑到 ~10.4s）----
+        // ---- 阶段 2：8s 起手 → 1s 前摇随机走位 → 回到站桩（跑到 ~10.4s）----
         boolean castSeen = false;
         boolean castingEnded = false;
         boolean zoneSeen = false;
@@ -684,7 +684,7 @@ public final class HeadlessSmoke {
             float beforeHp = w.hp[wid];
             w.step(Balance.FIXED_STEP, in);
             float hpDelta = w.hp[wid] - beforeHp;
-            if (aoeT < 0f && hpDelta < -45f && hpDelta > -55f) {
+            if (aoeT < 0f && hpDelta < -75f && hpDelta > -85f) {
                 aoeT = w.time();
             }
             float dx = w.x[k] - bx;
@@ -727,7 +727,7 @@ public final class HeadlessSmoke {
                 tailPath += stp;
                 tailFrames++;
             }
-            // 预警圈扫描：验证技能真的落了 180 / 50 / 圈心在玩家身上
+            // 预警圈扫描：验证技能真的落了 180 / 80 / 圈心在玩家身上
             for (int e = 0; e < w.highWater(); e++) {
                 if (w.alive[e] && w.kind[e] == World.KIND_ZONE && w.life[e] > 0f) {
                     zoneSeen = true;
@@ -763,8 +763,8 @@ public final class HeadlessSmoke {
             System.out.println("!! 失败：技能起手时间不在 8 秒节拍上");
             ok = false;
         }
-        if (dodgeFrames < 78 || dodgeFrames > 90) {
-            System.out.println("!! 失败：前摇走位帧数不在 1.4 秒的预期内");
+        if (dodgeFrames < 54 || dodgeFrames > 66) {
+            System.out.println("!! 失败：前摇走位帧数不在 1 秒的预期内");
             ok = false;
         }
         if (dodgeSpeed <= 165f || dodgeSpeed >= 181f) {
@@ -784,13 +784,13 @@ public final class HeadlessSmoke {
             ok = false;
         }
         if (!zoneSeen || Math.abs(zoneR - 180f) > 1f
-                || Math.abs(zoneDmg - 50f) > 0.5f
+                || Math.abs(zoneDmg - 80f) > 0.5f
                 || Math.abs(zoneX) > 3f || Math.abs(zoneY - Balance.ARENA_ENTER_Y) > 3f) {
-            System.out.println("!! 失败：预警圈参数或圈心位置不对（应为 180/50，圈心在玩家身上）");
+            System.out.println("!! 失败：预警圈参数或圈心位置不对（应为 180/80，圈心在玩家身上）");
             ok = false;
         }
-        if (aoeT < 0f || Math.abs(aoeT - 9.4f) > 0.15f) {
-            System.out.println("!! 失败：预警圈没有在 1.4 秒前摇后对玩家爆炸（-50）");
+        if (aoeT < 0f || Math.abs(aoeT - 9.0f) > 0.15f) {
+            System.out.println("!! 失败：预警圈没有在 1 秒前摇后对玩家爆炸（-80）");
             ok = false;
         }
         if (faceViolations > 2) {
@@ -894,21 +894,21 @@ public final class HeadlessSmoke {
         w3.y[wid3] = Balance.ARENA_ENTER_Y;
 
         // ---- 3d 追击走位三档（玩家固定在 (0,220)）：全程追人，不再保距/绕行 ----
-        w3.x[k2] = 0f;   w3.y[k2] = -250f;    // 距离 470 → 175 直线追击
+        w3.x[k2] = 0f;   w3.y[k2] = -250f;    // 距离 470 → 250 直线追击
         float farStep = oneStep(w3, k2, run3);
-        w3.x[k2] = 0f;   w3.y[k2] = -50f;     // 距离 270 → 155 追击
+        w3.x[k2] = 0f;   w3.y[k2] = -50f;     // 距离 270 → 205 追击
         float midStep = oneStep(w3, k2, run3);
-        w3.x[k2] = 0f;   w3.y[k2] = 0f;       // 距离 220 → 140 贴身追击（距离应缩短）
+        w3.x[k2] = 0f;   w3.y[k2] = 0f;       // 距离 220 → 170 贴身追击（距离应缩短）
         float nearDist0 = dist(w3.x[wid3], w3.y[wid3], w3.x[k2], w3.y[k2]);
         float nearStep = oneStep(w3, k2, run3);
         float nearDy = w3.y[k2];
         float nearDist1 = dist(w3.x[wid3], w3.y[wid3], w3.x[k2], w3.y[k2]);
-        w3.x[k2] = 0f;   w3.y[k2] = 120f;     // 距离 100 → 仍按 140 追击（贴脸不后退）
+        w3.x[k2] = 0f;   w3.y[k2] = 120f;     // 距离 100 → 仍按 170 追击（贴脸不后退）
         float closeDist0 = dist(w3.x[wid3], w3.y[wid3], w3.x[k2], w3.y[k2]);
         float closeStep = oneStep(w3, k2, run3);
         float closeDist1 = dist(w3.x[wid3], w3.y[wid3], w3.x[k2], w3.y[k2]);
 
-        // ---- 3d+ 贴身接触伤害：国王压在玩家身上一帧，应掉血 25 ----
+        // ---- 3d+ 贴身接触伤害：国王压在玩家身上一帧，应掉血 40 ----
         w3.x[k2] = w3.x[wid3];
         w3.y[k2] = w3.y[wid3];
         w3.hp[wid3] = w3.maxHp[wid3];
@@ -983,14 +983,14 @@ public final class HeadlessSmoke {
                     firstZoneT = tRel;
                 }
             } else if (!zoneNow && hadZone) {
-                // 圈到期消失帧 = 爆炸帧：站桩玩家应吃到 -50（允许叠加魔物啃咬）
+                // 圈到期消失帧 = 爆炸帧：站桩玩家应吃到 -80（允许叠加魔物啃咬）
                 if (d3 <= -42f) {
                     zoneHits++;
                 }
             }
             hadZone = zoneNow;
 
-            // 魔弹：出现轮次 / 单轮颗数 / 速度恒 130 / 追踪锁定 / 生命周期（命中或 6 秒寿终）
+            // 魔弹：出现轮次 / 单轮颗数 / 速度恒 130 / 追踪锁定 / 生命周期（命中或 4 秒寿终）
             int boltIdx = -1;
             int boltsNow = 0;
             float boltDistNow = -1f;
@@ -1057,7 +1057,7 @@ public final class HeadlessSmoke {
                 && Math.abs(w3.kingDownY() - down2Y) < 0.5f;
         boolean noFallenAgain = !w3.kingFallen();
 
-        // ---- 3g 三阶段（王座本体）：80% 减伤 / 贴身 15 / 3 秒传送爆发 / 5 秒地刺 / 5 秒牵引 / 25 秒召唤 / 命中回 200 ----
+        // ---- 3g 三阶段（王座本体）：90% 减伤 / 贴身 30 / 3 秒传送爆发 / 5 秒地刺 / 5 秒牵引 / 25 秒召唤 / 命中回 200 ----
         float tPhase3 = w3.time();
         int enemiesBefore3 = countKind(w3, World.KIND_ENEMY);
         w3.beginKingPhase3();
@@ -1074,7 +1074,7 @@ public final class HeadlessSmoke {
         boolean playerBack3 = Math.abs(w3.x[wid3] - Balance.ARENA_ENTER_X) < 0.5f
                 && Math.abs(w3.y[wid3] - Balance.ARENA_ENTER_Y) < 0.5f;
 
-        // 常态减伤：直喂 1000 应只掉 200（80% 减伤）；前摇窗口 20% 减伤在首轮传送里补测
+        // 常态减伤：直喂 1000 应只掉 100（90% 减伤）；前摇窗口 20% 减伤在首轮传送里补测
         w3.hp[k3] = w3.maxHp[k3];
         float drBefore = w3.hp[k3];
         w3.damage(k3, 1000f);
@@ -1084,7 +1084,7 @@ public final class HeadlessSmoke {
 
         InputCommand stay3 = new InputCommand();   // 玩家全程站桩（不主动移动）
 
-        // ---- 3g+ 贴身接触伤害（三阶段定制 15）：王座压在玩家身上一帧，应掉血 15 ----
+        // ---- 3g+ 贴身接触伤害（三阶段定制 30）：王座压在玩家身上一帧，应掉血 30 ----
         clearNonBoss(w3);
         w3.x[k3] = w3.x[wid3];
         w3.y[k3] = w3.y[wid3];
@@ -1208,7 +1208,7 @@ public final class HeadlessSmoke {
             }
             if (teleExploded) {
                 if (deltaP <= -29f) {
-                    teleExplodeHit++;   // -30 命中；同帧贴身 -25 叠加也会到 -55，同样算爆发落地
+                    teleExplodeHit++;   // -30 命中（前摇窗口内接触伤害已豁免，不会叠出 -60）
                 }
                 if (Math.abs(deltaP + Balance.KING3_TELE_DAMAGE) < 1.5f) {
                     teleExplodeExact++;
@@ -1357,9 +1357,35 @@ public final class HeadlessSmoke {
             }
         }
 
-        // ---- 3h 第二管血分裂：血池跌破首管（12000）→ 王座裂出分身（共享血池 + 三阶段传送） ----
-        // 观测期血池始终 ≥18000（重铺线），不会提前触发；这里定向压到单管线边缘再补一发：
-        // 常态 -20 / 前摇 -80 都会跌破 12000，下一帧 updateKing 里触发分裂。
+        // ---- 3g2 前摇窗口贴身豁免（用户规则：释放技能时取消碰撞伤害）----
+        // 30 秒观测后静养：等下一次自然前摇（红光窗口）出现，清场（小怪 / 弹幕 / 区域）后
+        // 把王座压在玩家身上、接触 cd 清零——若未豁免，本帧必然咬出 -30；豁免则应纹丝不动。
+        for (int g = 0; g < 400 && w3.kingTeleT() <= 0f; g++) {
+            w3.hp[wid3] = w3.maxHp[wid3];
+            w3.step(Balance.FIXED_STEP, stay3);
+        }
+        boolean castFlagOn = w3.kingCasting();
+        clearNonBoss(w3);
+        for (int e = 0; e < w3.highWater(); e++) {
+            if (w3.alive[e] && (w3.kind[e] == World.KIND_PROJECTILE || w3.kind[e] == World.KIND_ZONE)) {
+                w3.despawn(e);   // 弹幕 / 地刺警示圈：隔离后本帧只剩接触通道可能伤到玩家
+            }
+        }
+        w3.x[k3] = w3.x[wid3];
+        w3.y[k3] = w3.y[wid3];
+        w3.cd[k3] = 0f;
+        w3.hp[wid3] = w3.maxHp[wid3];
+        w3.iframe[wid3] = 0f;
+        float castContactBefore = w3.hp[wid3];
+        w3.step(Balance.FIXED_STEP, stay3);
+        float castContactDelta = w3.hp[wid3] - castContactBefore;
+        boolean castHeld = w3.kingTeleT() > 0f;   // 步进一帧后仍应在前摇窗口内
+        w3.x[k3] = Balance.ARENA_KING_X;   // 归位王座，后续分裂测试按原位起跑
+        w3.y[k3] = Balance.ARENA_KING_Y;
+
+        // ---- 3h 第二管血分裂：血池跌破首管（60000）→ 王座裂出分身（共享血池 + 三阶段传送） ----
+        // 观测期血池始终 ≥114000（重铺线），不会提前触发；这里定向压到单管线边缘再补一发：
+        // 常态 -100 / 前摇 -800 都会跌破 60000，下一帧 updateKing 里触发分裂。
         w3.hp[wid3] = w3.maxHp[wid3];
         w3.iframe[wid3] = 0f;
         w3.hp[k3] = Balance.KING3_HP_PER_BAR + 10f;
@@ -1371,8 +1397,8 @@ public final class HeadlessSmoke {
         float twinHpBirth = twin >= 0 ? w3.hp[twin] : -1f;
         boolean twinPoolSynced = twinBorn && Math.abs(twinHpBirth - w3.hp[k3]) < 0.5f;
 
-        // 伤害转发：打分身 = 打共享血池（80% 减伤照常），分身自身血量不动。
-        // 先等出非前摇窗口（前摇期 20% 减伤会打出 800），保证读到常态 200 这一档。
+        // 伤害转发：打分身 = 打共享血池（90% 减伤照常），分身自身血量不动。
+        // 先等出非前摇窗口（前摇期 20% 减伤会打出 800），保证读到常态 100 这一档。
         for (int g = 0; g < 240 && w3.kingTeleT() > 0f; g++) {
             w3.hp[wid3] = w3.maxHp[wid3];
             w3.step(Balance.FIXED_STEP, stay3);
@@ -1432,7 +1458,7 @@ public final class HeadlessSmoke {
         // 清池收场：从分身这一侧把共享血池打空（打分身 = 打本体）——
         // 本体倒下的同一刻分身一并崩解，对局真通关（下面 3h 的 kill 对死实体是 no-op 保险）
         w3.hp[k3] = 900f;
-        w3.damage(twin, 5000f);
+        w3.damage(twin, 12000f);
         boolean twinGone = w3.kingTwinId() < 0 && !w3.alive[twin];
         boolean splitVictory = w3.victory();
 
@@ -1443,18 +1469,18 @@ public final class HeadlessSmoke {
         boolean noFallenAgain3 = !w3.kingFallen2();
         boolean phase0After = w3.kingPhase() == 0;
 
-        System.out.println("=== 王宫二阶段 · 转场 / 追击走位 / 3 连发魔弹验证 ===");
+        System.out.println("=== 王宫二阶段 · 转场 / 追击走位 / 5 连发魔弹验证 ===");
         System.out.printf("击破一阶段：决裂信号=%s 国王退场=%s 未结算=%s 倒地锚点=%s%n",
                 fallenSig, kingGone, notVictoryYet, downAnchor);
         System.out.printf("王座重生：位置(%.0f,%.0f) 血 %.0f 玩家回位=%s 开场裂隙魔物 %d；玩家 0.5 秒右移 %.1f px（期望 90）%n",
                 king2X, king2Y, hp2Val, playerBack, openerEnemies, moved);
-        System.out.printf("追击走位：远档 %.2f px/帧（期望 3.25）中档 %.2f（2.92）近档 %.2f（2.67，dy=%.2f）贴脸仍追击 %.2f px%n",
+        System.out.printf("追击走位：远档 %.2f px/帧（期望 4.17）中档 %.2f（3.42）近档 %.2f（2.83，dy=%.2f）贴脸仍追击 %.2f px%n",
                 farStep, midStep, nearStep, nearDy, closeDist0 - closeDist1);
-        System.out.printf("贴身碰撞：国王压身一帧掉血 %.1f（期望 -25）%n", contactDelta);
+        System.out.printf("贴身碰撞：国王压身一帧掉血 %.1f（期望 -40）%n", contactDelta);
         System.out.printf("魔弹：%d 轮齐射（首轮 t=%.2fs）单轮峰值 %d 颗 速度 %.0f~%.0f 追踪锁定 %d 帧；出生寿命 %.2fs，齐射最长飞行 %.2fs，命中 %d 次%n",
                 boltRounds, firstBoltT, maxBoltsAtOnce, boltSpeedMin, boltSpeedMax, boltTargetFrames,
                 boltLifeAtBirth, boltWorstFlight / 60f, boltImpacts);
-        System.out.printf("地面提示：%d 轮（首轮 t=%.2fs）r=%.0f life=%.2fs dmg=%.0f 圈心偏移 %.1f px；-50 爆炸命中 %d 次%n",
+        System.out.printf("地面提示：%d 轮（首轮 t=%.2fs）r=%.0f life=%.2fs dmg=%.0f 圈心偏移 %.1f px；-80 爆炸命中 %d 次%n",
                 zoneRounds, firstZoneT, zoneParamR, zoneParamLife, zoneParamDmg,
                 zoneParamOff, zoneHits);
         System.out.printf("裂隙：%d 道（首道 t=%.2fs）魔物峰值 %d（含国王；AOE 会波及清怪）%n",
@@ -1463,9 +1489,10 @@ public final class HeadlessSmoke {
         System.out.printf("击破二阶段：王座信号=%s 国王退场=%s 未结算=%s 倒地锚点=%s 无重复决裂=%s%n",
                 fallenSig2, kingGone2, notVictory2, downAnchor2, noFallenAgain);
         System.out.println("=== 王宫三阶段 · 王座本体（减伤 / 传送 / 地刺 / 牵引 / 召唤 / 回血）验证 ===");
-        System.out.printf("觉醒：阶段=%d 血 %.0f 出生位=%s 玩家回位=%s；常态 1000 → -%.0f（期望 -200）前摇 1000 → -%.0f（期望 -800）%n",
+        System.out.printf("觉醒：阶段=%d 血 %.0f 出生位=%s 玩家回位=%s；常态 1000 → -%.0f（期望 -100）前摇 1000 → -%.0f（期望 -800）%n",
                 phaseAt3, hp3Val, spawnPos3, playerBack3, drIdleLoss, drCastLoss);
-        System.out.printf("贴身碰撞（三阶段）：王座压身一帧掉血 %.1f（期望 -15）%n", contactDelta3);
+        System.out.printf("贴身碰撞（三阶段）：王座压身一帧掉血 %.1f（期望 -30）；前摇窗口压身一帧掉血 %.1f（期望 0，释放技能免碰撞）%n",
+                contactDelta3, castContactDelta);
         System.out.printf("传送：%d 次（首次 t=%.2fs）落点超距 %d 次 间隔 %.2f~%.2fs 前摇共 %d 帧；爆发命中 %d 次（干净 -30：%d）%n",
                 teleJumps, firstTeleT, teleLandingBad, minJumpGap, maxJumpGap, telegraphFrames,
                 teleExplodeHit, teleExplodeExact);
@@ -1480,7 +1507,7 @@ public final class HeadlessSmoke {
                 healEvents, healTotal, healExact200, healNotMultiple, kingStrayPath);
         System.out.printf("击破王座本体：通关=%s 国王退场=%s 无重复王座信号=%s 阶段复位=%s%n",
                 victory3, kingGone3, noFallenAgain3, phase0After);
-        System.out.printf("第二管血分裂：压到单管线 %.0f → 分身 #%d 出生（血 %.0f 与池同步 %s）；打分身 1000 → 池 -%.0f（期望 -200）自身 -%.0f（期望 0）下帧再同步 %s%n",
+        System.out.printf("第二管血分裂：压到单管线 %.0f → 分身 #%d 出生（血 %.0f 与池同步 %s）；打分身 1000 → 池 -%.0f（期望 -100）自身 -%.0f（期望 0）下帧再同步 %s%n",
                 Balance.KING3_HP_PER_BAR, twin, twinHpBirth,
                 twinPoolSynced ? "OK" : "!! 失败", poolLoss, twinSelfLoss,
                 twinResynced ? "OK" : "!! 失败");
@@ -1494,56 +1521,56 @@ public final class HeadlessSmoke {
         }
         if (k2 < 0 || !phase2Now || !respawnPos || !hp2 || !reflagged
                 || !playerBack || openerEnemies != Balance.KING2_RIFT_COUNT) {
-            System.out.println("!! 失败：二阶段重生（王座位 / 12000 血 / 玩家回位 / 开场裂隙）不正确");
+            System.out.println("!! 失败：二阶段重生（王座位 / 60000 血 / 玩家回位 / 开场裂隙）不正确");
             ok = false;
         }
         if (moved < 88.5f || moved > 91.5f) {
             System.out.println("!! 失败：二阶段玩家移速不是 200-20=180");
             ok = false;
         }
-        if (Math.abs(farStep - 3.25f) > 0.12f) {
-            System.out.println("!! 失败：>400 距离档没有按 195 直线追击");
+        if (Math.abs(farStep - 4.17f) > 0.12f) {
+            System.out.println("!! 失败：>400 距离档没有按 250 直线追击");
             ok = false;
         }
-        if (Math.abs(midStep - 2.92f) > 0.12f) {
-            System.out.println("!! 失败：250~400 距离档没有按 175 追击");
+        if (Math.abs(midStep - 3.42f) > 0.12f) {
+            System.out.println("!! 失败：250~400 距离档没有按 205 追击");
             ok = false;
         }
-        if (Math.abs(nearStep - 2.67f) > 0.12f || nearDist0 - nearDist1 < 2.0f) {
-            System.out.println("!! 失败：<250 距离档没有按 160 贴身追击");
+        if (Math.abs(nearStep - 2.83f) > 0.12f || nearDist0 - nearDist1 < 2.0f) {
+            System.out.println("!! 失败：<250 距离档没有按 170 贴身追击");
             ok = false;
         }
-        if (Math.abs(closeStep - 2.67f) > 0.12f || closeDist0 - closeDist1 < 2.0f) {
+        if (Math.abs(closeStep - 2.83f) > 0.12f || closeDist0 - closeDist1 < 2.0f) {
             System.out.println("!! 失败：贴脸时没有继续追击（不应后退拉开）");
             ok = false;
         }
         if (Math.abs(contactDelta + Balance.KING2_CONTACT_DAMAGE) > 0.5f) {
-            System.out.println("!! 失败：贴身接触伤害不是 25");
+            System.out.println("!! 失败：贴身接触伤害不是 40");
             ok = false;
         }
         if (maxBoltsAtOnce != Balance.KING2_BOLT_COUNT) {
-            System.out.println("!! 失败：魔弹没有按每轮 3 颗齐射");
+            System.out.println("!! 失败：魔弹没有按每轮 5 颗齐射");
             ok = false;
         }
-        if (boltRounds < 3 || firstBoltT < 0f || Math.abs(firstBoltT - 10f) > 0.3f) {
-            System.out.println("!! 失败：魔弹没有按 10 秒节拍齐射");
+        if (boltRounds < 3 || firstBoltT < 0f || Math.abs(firstBoltT - 5f) > 0.3f) {
+            System.out.println("!! 失败：魔弹没有按 5 秒节拍齐射");
             ok = false;
         }
-        if (boltLifeAtBirth < 5.9f || boltLifeAtBirth > 6.01f
+        if (boltLifeAtBirth < 3.9f || boltLifeAtBirth > 4.01f
                 || boltSpeedMin < 128f || boltSpeedMax > 132f) {
-            System.out.println("!! 失败：魔弹寿命（6 秒）或速度（130）不正确");
+            System.out.println("!! 失败：魔弹寿命（4 秒）或速度（130）不正确");
             ok = false;
         }
-        if (boltTargetFrames <= 0 || boltWorstFlight > 380) {
-            System.out.println("!! 失败：魔弹没有追踪锁定或单发寿命超过 6 秒");
+        if (boltTargetFrames <= 0 || boltWorstFlight > 250) {
+            System.out.println("!! 失败：魔弹没有追踪锁定或单发寿命超过 4 秒");
             ok = false;
         }
         if (boltImpacts < 2) {
             System.out.println("!! 失败：魔弹没有追到站桩的玩家（追踪形同虚设）");
             ok = false;
         }
-        if (zoneRounds < 3 || firstZoneT < 0f || Math.abs(firstZoneT - 10f) > 0.3f) {
-            System.out.println("!! 失败：地面提示没有按 10 秒节拍出现");
+        if (zoneRounds < 3 || firstZoneT < 0f || Math.abs(firstZoneT - 6f) > 0.3f) {
+            System.out.println("!! 失败：地面提示没有按 6 秒节拍出现");
             ok = false;
         }
         if (Math.abs(zoneParamR - Balance.KING2_AOE_RADIUS) > 0.5f
@@ -1554,7 +1581,7 @@ public final class HeadlessSmoke {
             ok = false;
         }
         if (zoneHits < 2) {
-            System.out.println("!! 失败：地面提示爆炸没有对玩家生效（-50）");
+            System.out.println("!! 失败：地面提示爆炸没有对玩家生效（-80）");
             ok = false;
         }
         if (riftCount < 7 || firstRiftT < 0f || Math.abs(firstRiftT - 5f) > 0.3f) {
@@ -1575,15 +1602,19 @@ public final class HeadlessSmoke {
             ok = false;
         }
         if (k3 < 0 || !phase3Now || !hp3 || !spawnPos3 || !playerBack3) {
-            System.out.println("!! 失败：三阶段觉醒（王座位 / 24000 血（12000×2）/ 玩家回位）不正确");
+            System.out.println("!! 失败：三阶段觉醒（王座位 / 120000 血（60000×2）/ 玩家回位）不正确");
             ok = false;
         }
-        if (Math.abs(drIdleLoss - 200f) > 1.5f || Math.abs(drCastLoss - 800f) > 1.5f) {
-            System.out.println("!! 失败：王座减伤不是常态 80% / 前摇窗口 20%");
+        if (Math.abs(drIdleLoss - 100f) > 1.5f || Math.abs(drCastLoss - 800f) > 1.5f) {
+            System.out.println("!! 失败：王座减伤不是常态 90% / 前摇窗口 20%");
             ok = false;
         }
         if (Math.abs(contactDelta3 + Balance.KING3_CONTACT_DAMAGE) > 0.5f) {
-            System.out.println("!! 失败：三阶段贴身接触伤害不是 15");
+            System.out.println("!! 失败：三阶段贴身接触伤害不是 30");
+            ok = false;
+        }
+        if (!castFlagOn || !castHeld || Math.abs(castContactDelta) > 0.5f) {
+            System.out.println("!! 失败：前摇窗口内贴身仍被咬（释放技能时应取消碰撞伤害）");
             ok = false;
         }
         if (teleJumps < 8 || firstTeleT < 0f || Math.abs(firstTeleT - Balance.KING3_TELE_CD) > 0.15f) {
@@ -1657,14 +1688,14 @@ public final class HeadlessSmoke {
             System.out.println("!! 失败：击破王座本体没有按真通关结算（或误发过渡信号）");
             ok = false;
         }
-        if (!twinBorn || !twinPoolSynced || Math.abs(poolLoss - 200f) > 2f
+        if (!twinBorn || !twinPoolSynced || Math.abs(poolLoss - 100f) > 2f
                 || twinSelfLoss > 0.5f || !twinResynced || !twinTeleOk
                 || !twinGone || !splitVictory) {
             System.out.println("!! 失败：第二管血分裂（出生 / 共享血池 / 伤害转发 / 错开 2 秒的三阶段传送 / 清场）不正确");
             ok = false;
         }
 
-        System.out.println(ok ? "OK：国王行为（一阶段站桩 / 走动 / 技能 + 二阶段重生 / 追击走位 / 贴身碰撞 / 前摇站定 / 3 连发魔弹 / AOE / 裂隙 + 三阶段减伤 / 贴身 15 / 传送爆发 / 地刺 / 牵引 / 召唤 / 回血 / 5 连发魔弹 / 每次 4 只裂隙魔物 / 第二管血分裂）全部符合预期"
+        System.out.println(ok ? "OK：国王行为（一阶段站桩 / 走动 / 技能 + 二阶段重生 / 追击走位 / 贴身碰撞 / 前摇站定 / 5 连发魔弹 / AOE / 裂隙 + 三阶段减伤 / 贴身 30（前摇免碰撞） / 传送爆发 / 地刺 / 牵引 / 召唤 / 回血 / 5 连发魔弹 / 每次 4 只裂隙魔物 / 第二管血分裂）全部符合预期"
                 : "!! 存在失败项，见上");
         if (!ok) {
             System.exit(1);

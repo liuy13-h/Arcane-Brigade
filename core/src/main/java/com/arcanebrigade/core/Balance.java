@@ -477,27 +477,39 @@ public final class Balance {
     public static final float MILKY_LAUGH_DMG     = 100f;
     public static final float MILKY_LAUGH_CD      = 6.0f;
     public static final float MILKY_LAUGH_CAST    = 2.0f;
-    /** 触发大笑的血量比例（低于此值才会大笑） */
+    /** 触发大笑的血量比例（低于此值即进入二阶段：不只是解锁大笑，还会整体强化） */
     public static final float MILKY_LAUGH_HP      = 0.5f;
+
+    // ---- 奶蛙 · 阶段强化 ----
+    /** 一阶段减伤：受到的伤害减少 50% */
+    public static final float MILKY_DR                 = 0.50f;
+    /** 一阶段移速加成（叠加在 MILKY_SPEED 之上） */
+    public static final float MILKY_SPEED_BONUS        = 100f;
+    /** 二阶段（血量 ≤ MILKY_LAUGH_HP）减伤：提升到 80% */
+    public static final float MILKY_PHASE2_DR          = 0.80f;
+    /** 二阶段额外移速加成（在一阶段之上再加） */
+    public static final float MILKY_PHASE2_SPEED_BONUS = 50f;
+    /** 二阶段技能范围倍率（+25%） */
+    public static final float MILKY_PHASE2_RANGE_MUL   = 1.25f;
 
     // ---- 王宫最终决战：国王（第一阶段；第二/三阶段在后续版本接入）----
     /**
-     * 第一阶段：血 5000 / 与 Boss 同尺寸。
+     * 第一阶段：血 30000 / 与 Boss 同尺寸。
      * 常态站桩不移动，只在技能前摇期间按 KING1_SPEED 随机走位躲弹幕。
      * 不造成接触伤害——用户设定「只有一个技能」，贴脸打王不会被啃。
      */
-    public static final float KING1_HP       = 5000f;
+    public static final float KING1_HP       = 30000f;
     public static final float KING1_SPEED    = 175f;
     public static final float KING1_RADIUS   = 46f;
     /**
-     * 唯一技能：每 8 秒释放一次，半径 180，1.4 秒前摇 + 地面预警圈
+     * 唯一技能：每 8 秒释放一次，半径 180，1 秒前摇 + 地面预警圈
      * （前摇与提示圈的机制与既有 Boss 的 spawnWarning 完全同款；前摇期间国王随机走位）。
-     * 伤害用户未指定，暂定 50，体感偏重时改这一个数即可。
+     * 伤害 80（用户给定）。
      */
     public static final float KING1_SKILL_CD        = 8f;
-    public static final float KING1_SKILL_TELEGRAPH = 1.4f;
+    public static final float KING1_SKILL_TELEGRAPH = 1f;
     public static final float KING1_SKILL_RADIUS    = 180f;
-    public static final float KING1_SKILL_DAMAGE    = 50f;
+    public static final float KING1_SKILL_DAMAGE    = 80f;
     /**
      * 默认属性（三阶段共用）：每 15 秒按被动获得顺序失去一个被动并损失 10 点生命。
      * 转阶段时计时重置（阶段二接入时生效）。
@@ -516,46 +528,48 @@ public final class Balance {
 
     // ---- 王宫最终决战：国王第二阶段 ----
     /**
-     * 第二阶段：血 12000（用户给定，与三阶段的单管血量对齐）。
+     * 第二阶段：血 60000（用户给定）+ 常驻 20% 减伤（用户给定）。
      * 移动为「按与最近玩家的距离分档」的压迫式走位（用户给定的三档速度），
      * 全程追击玩家，不再保持距离/绕行：
-     *   > 400      → 195 直线逼近
-     *   250 ~ 400  → 175 逼近
-     *   < 250      → 160 贴身追击
-     * 位移由 updateKing2 手动驱动；贴身接触伤害 25（与一阶段不同：一阶段无接触伤害）。
+     *   > 400      → 250 直线逼近
+     *   250 ~ 400  → 205 逼近
+     *   < 250      → 170 贴身追击
+     * 位移由 updateKing2 手动驱动；贴身接触伤害 40（与一阶段不同：一阶段无接触伤害）。
      */
-    public static final float KING2_HP       = 12000f;
+    public static final float KING2_HP       = 60000f;
     public static final float KING2_RADIUS   = 50f;
-    public static final float KING2_SPEED_FAR  = 195f;
-    public static final float KING2_SPEED_MID  = 175f;
-    public static final float KING2_SPEED_NEAR = 160f;
+    public static final float KING2_SPEED_FAR  = 250f;
+    public static final float KING2_SPEED_MID  = 205f;
+    public static final float KING2_SPEED_NEAR = 170f;
     /** 距离分档阈值（用户给定的 400 / 250） */
     public static final float KING2_BAND_FAR  = 400f;
     public static final float KING2_BAND_MID  = 250f;
     /** 贴身接触伤害（用户给定）：走通用敌人接触通道，0.7 秒一次、受受击方无敌帧门控 */
-    public static final float KING2_CONTACT_DAMAGE = 25f;
+    public static final float KING2_CONTACT_DAMAGE = 40f;
+    /** 常驻减伤 20%（用户给定）：二阶段国王受到的伤害先砍掉两成 */
+    public static final float KING2_DR = 0.20f;
     /**
-     * 魔弹：用户给定每轮齐射 3 颗（扇形 ±15°），移速 130，追踪所有玩家，
-     * 追踪 6 秒后消失，消失后 4 秒再释放（即每 10 秒一轮）；伤害 25。
+     * 魔弹：用户给定每轮齐射 5 颗（扇形 ±15°），移速 130，追踪所有玩家，
+     * 追踪 4 秒后消失，消失后 1 秒再释放（即每 5 秒一轮）；伤害 25。
      */
     public static final float KING2_BOLT_SPEED    = 130f;
-    public static final float KING2_BOLT_TRACK    = 6f;
-    public static final float KING2_BOLT_REST     = 4f;
+    public static final float KING2_BOLT_TRACK    = 4f;
+    public static final float KING2_BOLT_REST     = 1f;
     public static final float KING2_BOLT_DAMAGE   = 25f;
-    /** 每轮齐射的魔弹数量（用户给定 3 颗） */
-    public static final int   KING2_BOLT_COUNT    = 3;
+    /** 每轮齐射的魔弹数量（用户给定 5 颗） */
+    public static final int   KING2_BOLT_COUNT    = 5;
     /** 扇形齐射的相邻两发夹角（±15°） */
     public static final float KING2_BOLT_SPREAD   = (float) Math.toRadians(15);
     /** 追踪弹转向速率（弧度/秒）：低于玩家移速的回头速度，跑动可以甩开 */
     public static final float KING2_BOLT_TURN     = 1.6f;
     /**
-     * 地面攻击提示：每 10 秒一次，1.5 秒前摇，半径 150（用户给定）。
-     * 伤害未指定，沿用一阶段技能伤害 50。
+     * 地面攻击提示：每 6 秒一次（用户给定），1.5 秒前摇，半径 150（用户给定）。
+     * 伤害 80（用户给定）。
      */
-    public static final float KING2_AOE_CD        = 10f;
+    public static final float KING2_AOE_CD        = 6f;
     public static final float KING2_AOE_TELEGRAPH = 1.5f;
     public static final float KING2_AOE_RADIUS    = 150f;
-    public static final float KING2_AOE_DAMAGE    = 50f;
+    public static final float KING2_AOE_DAMAGE    = 80f;
     /**
      * 裂隙刷怪：每 5 秒在王宫中展开一道裂隙，每道爬出 2 只魔物；
      * 同屏魔物数量封顶 10（防卡顿），裂隙视觉存活 1.1 秒。
@@ -573,19 +587,20 @@ public final class Balance {
 
     // ---- 王宫最终决战：国王第三阶段（王座本体）----
     /**
-     * 第三阶段（王座本体）：血 12000 × 2（用户给定，两管血、总池 24000），
+     * 第三阶段（王座本体）：血 60000 × 2（用户给定，两管血、总池 120000），
      * 坐在王座上不再走路，靠「随机传送」位移——每 3 秒瞬移到玩家 50 以内，
-     * 落位后 1 秒前摇、100 范围爆发 30 伤害。前摇期间减伤从 80% 降为 20%（用户给定，即输出窗口）。
+     * 落位后 1 秒前摇、100 范围爆发 30 伤害。前摇期间减伤从 90% 降为 20%（用户给定，即输出窗口）。
      * 第二管血开始时王座分裂成两个（见 World.spawnKingTwin）。
      */
-    /** 三阶段单管血量（用户给定 12000）：血池 = KING3_HP_PER_BAR × 2，第二管开始时分裂 */
-    public static final float KING3_HP_PER_BAR = 12000f;
+    /** 三阶段单管血量（用户给定 60000）：血池 = KING3_HP_PER_BAR × 2，第二管开始时分裂 */
+    public static final float KING3_HP_PER_BAR = 60000f;
     public static final float KING3_HP         = KING3_HP_PER_BAR * 2f;
-    public static final float KING3_RADIUS     = 50f;
-    /** 贴身接触伤害 15（用户给定）：比二阶段的 25 更轻，走通用敌人接触通道 */
-    public static final float KING3_CONTACT_DAMAGE = 15f;
-    /** 常驻减伤 80%（用户给定）：王座受到的伤害先砍掉八成 */
-    public static final float KING3_DR         = 0.80f;
+    public static final float KING3_RADIUS     = 80f;
+    /** 贴身接触伤害 30（用户给定）：比二阶段的 40 更轻，走通用敌人接触通道；
+     *  技能前摇窗口（kingCasting / kingTwinCasting 红光期）内整段豁免——释放技能时不咬人（用户给定） */
+    public static final float KING3_CONTACT_DAMAGE = 30f;
+    /** 常驻减伤 90%（用户给定）：王座受到的伤害先砍掉九成 */
+    public static final float KING3_DR         = 0.90f;
     /** 传送前摇期间的减伤 20%（用户给定）：蓄力时露出破绽，给玩家输出窗口 */
     public static final float KING3_DR_CAST    = 0.20f;
     /** 传送：每 3 秒一轮（用户给定） */
@@ -621,7 +636,7 @@ public final class Balance {
     /** 裂隙召唤 Boss：每 25 秒一只（用户给定），从除奶蛙外的 Boss 池随机抽档 */
     public static final float KING3_SUMMON_CD   = 25f;
     public static final float KING3_SUMMON_FX_TTL = 1.4f;
-    /** 三阶段魔弹齐射数量（用户给定 5 颗；二阶段维持 3 颗） */
+    /** 三阶段魔弹齐射数量（用户给定 5 颗；二阶段同样 5 颗） */
     public static final int   KING3_BOLT_COUNT  = 5;
     /** 三阶段裂隙魔物数量（用户给定每次 4 只；二阶段维持每道 2 只） */
     public static final int   KING3_RIFT_COUNT  = 4;

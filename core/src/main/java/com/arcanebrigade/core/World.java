@@ -1611,13 +1611,18 @@ public final class World {
             }
             // 主动位移冷却推进：战士单发 CD；弓箭手只缺弹药时计充能
             if (ck == HeroClass.ARCHER) {
-                // 弓箭手：满发就停表，绝不往后跑负数
+                // 弓箭手：满发就停表，绝不往后跑负数。
+                // 用 while 而不是 if —— 卡帧（dt 偏大）时若有整发冷却走完，
+                // 溢出时间要结转到下一发，不能吞掉（否则回充会凭空变慢）。
                 if (dashCharges[id] < Balance.ARCHER_DASH_MAX) {
                     dashCd[id] -= dt;
-                    if (dashCd[id] <= 0f) {
+                    while (dashCharges[id] < Balance.ARCHER_DASH_MAX && dashCd[id] <= 0f) {
                         dashCharges[id]++;
-                        dashCd[id] = (dashCharges[id] < Balance.ARCHER_DASH_MAX)
-                                ? Balance.ARCHER_DASH_CD : 0f;
+                        if (dashCharges[id] < Balance.ARCHER_DASH_MAX) {
+                            dashCd[id] += Balance.ARCHER_DASH_CD;
+                        } else {
+                            dashCd[id] = 0f;   // 满发，停表
+                        }
                     }
                 }
             } else if (ck == HeroClass.WARRIOR) {
@@ -1636,7 +1641,9 @@ public final class World {
 
     /**
      * 主动位移（冲刺）：空格按下且冷却就绪时，朝鼠标所指方向飞速位移一小段。
-     *   - 弓箭手：充能型，出生满 3 发；每用一发扣 1 颗，每 5s 补 1 颗
+     *   - 弓箭手：充能型，出生满 3 发；每用一发扣 1 颗，每 6.5s 回 1 颗。
+     *     充能是"单计时器顺序回充"：用掉一发就绪的冲刺不会打断 / 重置
+     *     正在跑的那一发充能（只有满发、计时器闲置时才重新起表）。
      *   - 战士：单发 CD，5 秒一次
      * 位移期间附带短暂无敌帧，使其能真正用来躲避弹幕与接触伤害。
      * 位移用 vx/vy 承载冲量（与渲染朝向共用，冲刺时人物会朝位移方向），结束时归零。
@@ -1692,8 +1699,13 @@ public final class World {
         // 扣弹药 vs 重置战士 CD
         if (ck == HeroClass.ARCHER) {
             dashCharges[id]--;
-            // dashCd 仍是下一发的充能倒计时：耗完一发后启动下一发的充能
-            this.dashCd[id] = dashCdReset;
+            // 充能计时器只在"此前满发、计时器闲置"时启动。
+            // 若已有充能在跑（还缺弹药），必须保留其进度：否则每用掉一发
+            // 就绪的冲刺，都在跑的充能都会从 6.5s 从头开始，玩家看到的就是
+            // "冲刺一发好了用掉，其他还没回满的次数又一起重新进冷却"。
+            if (this.dashCd[id] <= 0f) {
+                this.dashCd[id] = dashCdReset;
+            }
         } else { // WARRIOR
             this.dashCd[id] = dashCdReset;
         }
@@ -1797,12 +1809,16 @@ public final class World {
             }
 
             // 接触伤害
+            // 三阶段：王座本体 / 分身在技能前摇窗口（红光 = kingCasting / kingTwinCasting）内不咬人——
+            // 传送落位后的 1 秒是官方给的贴脸输出窗口，窗口里再叠碰撞伤害会自相矛盾（用户要求：释放技能时取消）
+            boolean king3Casting = kingPhase == 3
+                    && ((i == kingId && kingCasting()) || (i == kingTwinId && kingTwinCasting()));
             float ndx = x[target] - x[i];
             float ndy = y[target] - y[i];
             float nlen = (float) Math.sqrt(ndx * ndx + ndy * ndy);
             if (nlen < r[i] + r[target]) {
                 cd[i] -= dt;
-                if (cd[i] <= 0f) {
+                if (cd[i] <= 0f && !king3Casting) {
                     if (iframe[target] <= 0f) {
                         damage(target, dmg[i]);
                         // 三阶段被动：王座贴身咬中英雄也汲取生命（宠物挨打不回，否则四只宠物能白喂血）
@@ -2353,12 +2369,15 @@ public final class World {
             if (milkyCastT >= milkyCastDur()) {
                 // milkyHitActive：让 kill() 能识别「这次死亡是奶蛙造成的」
                 milkyHitActive = true;
+                // 二阶段（半血后）：技能范围 +25%（伤害不再翻倍，已按需求回调）
+                boolean p2 = hp[m] <= maxHp[m] * Balance.MILKY_LAUGH_HP;
+                float rngMul = p2 ? Balance.MILKY_PHASE2_RANGE_MUL : 1f;
                 if (milkyCast == 2) {
-                    damagePlayersInRadius(x[m], y[m], Balance.MILKY_LAUGH_RANGE,
+                    damagePlayersInRadius(x[m], y[m], Balance.MILKY_LAUGH_RANGE * rngMul,
                             Balance.MILKY_LAUGH_DMG);
                     milkyLaughCd = Balance.MILKY_LAUGH_CD;
                 } else {
-                    damagePlayersInRadius(x[m], y[m], Balance.MILKY_STOMP_RANGE,
+                    damagePlayersInRadius(x[m], y[m], Balance.MILKY_STOMP_RANGE * rngMul,
                             Balance.MILKY_STOMP_DMG);
                     milkyStompCd = Balance.MILKY_STOMP_CD;
                 }
@@ -2369,7 +2388,10 @@ public final class World {
             return;
         }
 
-        speed[m] = Balance.MILKY_SPEED;
+        // 移速：基础 +100；半血后额外再 +50
+        speed[m] = Balance.MILKY_SPEED + Balance.MILKY_SPEED_BONUS
+                + (hp[m] <= maxHp[m] * Balance.MILKY_LAUGH_HP
+                        ? Balance.MILKY_PHASE2_SPEED_BONUS : 0f);
         // dmg[m] 恒为 0：奶蛙不造成碰撞伤害（技能伤害另算）
 
         boolean near = dx * dx + dy * dy
@@ -2401,7 +2423,7 @@ public final class World {
 
     /**
      * 进入王宫决战：清空战场（小怪 / 投射物 / 掉落 / 障碍 / 骨蛇），
-     * 玩家归位殿中，国王在王座前刷新（阶段一：5000 血 / 常态站桩，技能前摇期间随机走位躲弹幕）。
+     * 玩家归位殿中，国王在王座前刷新（阶段一：30000 血 / 常态站桩，技能前摇期间随机走位躲弹幕）。
      * 由客户端在王宫大殿按空格时调用，之后走正常战斗循环。
      *
      * TODO（设计需求，单机先记录不实现）：与国王战斗时，玩家自动索敌应把队友视为敌人并造成 10% 伤害。
@@ -2448,7 +2470,7 @@ public final class World {
         obstacleHash.beginFrame();
     }
 
-    /** 阶段一的国王：5000 血 / 无接触伤害（唯一攻击手段是 8 秒一圈的 AOE）；站桩出生，位移全部走手动路径 */
+    /** 阶段一的国王：30000 血 / 无接触伤害（唯一攻击手段是 8 秒一圈的 AOE）；站桩出生，位移全部走手动路径 */
     private void spawnKing1() {
         int id = spawnEnemy(Balance.ARENA_KING_X, Balance.ARENA_KING_Y, 0, V_BOSS);
         if (id < 0) {
@@ -2501,7 +2523,7 @@ public final class World {
             }
         } else if (kingPhase >= 3) {
             speed[k] = 0f;   // 三阶段不走路：位移全靠传送（updateKing3 手动路径）
-            // 两管血（12000×2）：第一管打空即分裂出分身（整场只触发一次）
+            // 两管血（60000×2）：第一管打空即分裂出分身（整场只触发一次）
             if (!kingSplit && hp[k] <= Balance.KING3_HP_PER_BAR) {
                 spawnKingTwin();
             }
@@ -2564,7 +2586,7 @@ public final class World {
         }
     }
 
-    /** 阶段一技能：以玩家当前位置为中心，生成半径 180 的预警圈（1.4 秒前摇后爆炸） */
+    /** 阶段一技能：以玩家当前位置为中心，生成半径 180 的预警圈（1 秒前摇后爆炸） */
     private void fireKingSkill1() {
         int w = firstWizard();
         if (w < 0) {
@@ -2624,7 +2646,7 @@ public final class World {
         openKingRift();                 // 开场先来一道裂隙，魔物开始源源不断
     }
 
-    /** 二阶段的国王：6000 血，位移全走 updateKing2 手动路径；贴身接触伤害 25 */
+    /** 二阶段的国王：60000 血（常驻 20% 减伤），位移全走 updateKing2 手动路径；贴身接触伤害 40 */
     private void spawnKing2() {
         int id = spawnEnemy(Balance.ARENA_KING_X, Balance.ARENA_KING_Y, 0, V_BOSS);
         if (id < 0) {
@@ -2638,7 +2660,7 @@ public final class World {
         dmg[id] = Balance.KING2_CONTACT_DAMAGE;
         enemyShield[id] = 0f;
         kingId = id;
-        kingBoltCd = Balance.KING2_BOLT_TRACK + Balance.KING2_BOLT_REST;   // 首轮魔弹：入场 10 秒后
+        kingBoltCd = Balance.KING2_BOLT_TRACK + Balance.KING2_BOLT_REST;   // 首轮魔弹：入场 5 秒后
         kingAoeCd = Balance.KING2_AOE_CD;
         kingRiftCd = Balance.KING2_RIFT_CD;
         kingTelegraphT = 0f;
@@ -2651,7 +2673,7 @@ public final class World {
 
     /**
      * 二阶段被击破 → 对白播完后的转场：
-     * 王座本体觉醒，以三阶段登场（12000 血 / 常驻 80% 减伤 / 传送位移）。
+     * 王座本体觉醒，以三阶段登场（120000 血 / 常驻 90% 减伤 / 传送位移）。
      * 保留二阶段全部机制（魔弹 / 地面预警圈 / 裂隙刷怪），叠加深渊新招：
      * 传送落点爆发、地刺、深渊牵引（「王座视为深渊」）、裂隙召唤 Boss、造成伤害回血。
      */
@@ -2688,8 +2710,8 @@ public final class World {
     }
 
     /**
-     * 三阶段的王座本体：12000 血 / 常驻 80% 减伤，位移全靠传送（updateKing3 驱动）；
-     * 贴身接触伤害 15（用户给定，比二阶段的 25 更轻）。二阶段的魔弹 / 预警圈 / 裂隙节拍全部保留
+     * 三阶段的王座本体：血池 60000×2 / 常驻 90% 减伤，位移全靠传送（updateKing3 驱动）；
+     * 贴身接触伤害 30（用户给定，比二阶段的 40 更轻）。二阶段的魔弹 / 预警圈 / 裂隙节拍全部保留
      * （三阶段魔弹 5 颗、裂隙每次 4 只）。
      */
     private void spawnKing3() {
@@ -2704,7 +2726,7 @@ public final class World {
         dmg[id] = Balance.KING3_CONTACT_DAMAGE;
         enemyShield[id] = 0f;
         kingId = id;
-        kingBoltCd = Balance.KING2_BOLT_TRACK + Balance.KING2_BOLT_REST;   // 首轮魔弹：入场 10 秒后
+        kingBoltCd = Balance.KING2_BOLT_TRACK + Balance.KING2_BOLT_REST;   // 首轮魔弹：入场 5 秒后
         kingAoeCd = Balance.KING2_AOE_CD;
         kingRiftCd = Balance.KING2_RIFT_CD;
         kingTeleCd = Balance.KING3_TELE_CD;     // 首轮传送：3 秒后
@@ -2839,8 +2861,8 @@ public final class World {
     /**
      * 三阶段行为（王座本体）：
      *   移动：不走路——每 3 秒随机传送到玩家 50 以内，落位后 1 秒前摇
-     *         （减伤 80% → 20% 的输出窗口），前摇到期以落点为中心 100 范围爆发 30 伤害；
-     *   保留：魔弹（二阶段 3 连发 / 三阶段 5 连发）/ 地面预警圈 / 裂隙刷怪（三阶段每次 4 只）；
+     *         （减伤 90% → 20% 的输出窗口），前摇到期以落点为中心 100 范围爆发 30 伤害；
+     *   保留：魔弹（每轮 5 连发）/ 地面预警圈 / 裂隙刷怪（三阶段每次 4 只）；
      *   新增：地刺（5 秒一批）、深渊牵引（5 秒一次，玩家被按 30 速拽向王座）、
      *         裂隙召唤 Boss（25 秒一只）；
      *   被动：每次对玩家造成伤害都从深渊汲取 200 生命（见 kingDrain 的各调用点）。
@@ -2858,13 +2880,13 @@ public final class World {
             startKingTele();
             kingTeleCd = Balance.KING3_TELE_CD;
         }
-        // 保留：魔弹每轮（追踪 6s + 间隔 4s）对玩家扇形齐射（三阶段 5 颗 / 二阶段 3 颗）
+        // 保留：魔弹每轮（追踪 4s + 间隔 1s）对玩家扇形齐射（每轮 5 颗）
         kingBoltCd -= dt;
         if (kingBoltCd <= 0f) {
             fireKingBolts2();
             kingBoltCd = Balance.KING2_BOLT_TRACK + Balance.KING2_BOLT_REST;
         }
-        // 保留：地面攻击提示每 10 秒（玩家脚下 150 圈、1.5 秒前摇）
+        // 保留：地面攻击提示每 6 秒（玩家脚下 150 圈、1.5 秒前摇）
         kingAoeCd -= dt;
         if (kingAoeCd <= 0f) {
             fireKingAoe2();
@@ -3041,7 +3063,7 @@ public final class World {
             moveKing2(dt);
         }
 
-        // 魔弹：每轮（追踪 6s + 间隔 4s）对每个玩家扇形齐射 3 颗
+        // 魔弹：每轮（追踪 4s + 间隔 1s）对每个玩家扇形齐射 5 颗
         kingBoltCd -= dt;
         if (kingBoltCd <= 0f) {
             fireKingBolts2();
@@ -3069,7 +3091,7 @@ public final class World {
     /**
      * 国王系追击（二阶段本体专用。三阶段本体与分身都不走路，位移全走传送）：
      * 用户给定「会追玩家」——全程朝最近玩家直线追击，只按距离换档：
-     * > 400 → 195；250~400 → 175；< 250 → 160。
+     * > 400 → 250；250~400 → 205；< 250 → 170。
      */
     private void chaseKing(int k, float dt) {
         if (k < 0 || !alive[k]) {
@@ -3100,16 +3122,16 @@ public final class World {
     }
 
     /**
-     * 二阶段魔弹：对每个存活玩家扇形齐射 3 颗追踪弹
-     * （相邻两发 ±15°，移速 130，追踪 6 秒后消失）。
-     * 「消失后 4 秒再释放」由 kingBoltCd = 6 + 4 保证。
+     * 二阶段魔弹：对每个存活玩家扇形齐射 5 颗追踪弹
+     * （相邻两发 ±15°，移速 130，追踪 4 秒后消失）。
+     * 「消失后 1 秒再释放」由 kingBoltCd = 4 + 1 保证。
      */
     private void fireKingBolts2() {
         int k = kingId;
         if (k < 0) {
             return;
         }
-        // 三阶段（王座本体）齐射数量加码（用户给定 5 颗）；二阶段维持 3 颗
+        // 二阶段与三阶段均为每轮 5 颗（用户给定）
         int boltCount = kingPhase >= 3 ? Balance.KING3_BOLT_COUNT : Balance.KING2_BOLT_COUNT;
         for (int n = 0; n < wizards.size(); n++) {
             int w = wizards.get(n);
@@ -3151,7 +3173,7 @@ public final class World {
         vx[id] = bx * Balance.KING2_BOLT_SPEED;
         vy[id] = by * Balance.KING2_BOLT_SPEED;
         dmg[id] = Balance.KING2_BOLT_DAMAGE;
-        life[id] = Balance.KING2_BOLT_TRACK;    // 追踪 6 秒后自然消失
+        life[id] = Balance.KING2_BOLT_TRACK;    // 追踪 4 秒后自然消失
         owner[id] = casterId;
         meta[id] = 0;
         pierce[id] = 0;
@@ -4909,9 +4931,12 @@ public final class World {
         float amt = (elem[id] == Element.SHOCK)
                 ? amount * (1f + Balance.ELEM_SHOCK_DMG_AMP) : amount;
 
-        // 三阶段王座本体：常驻 80% 减伤；传送前摇期间降到 20%（玩家的输出窗口）
+        // 三阶段王座本体：常驻 90% 减伤；传送前摇期间降到 20%（玩家的输出窗口）
         if (id == kingId && kingPhase >= 3) {
             amt *= 1f - (kingTeleT > 0f ? Balance.KING3_DR_CAST : Balance.KING3_DR);
+        } else if (id == kingId && kingPhase == 2) {
+            // 二阶段国王：常驻 20% 减伤（用户给定）
+            amt *= 1f - Balance.KING2_DR;
         }
 
         if (kind[id] == KIND_WIZARD) {
@@ -4931,6 +4956,12 @@ public final class World {
             float absorbed = Math.min(enemyShield[id], amt);
             enemyShield[id] -= absorbed;
             amt -= absorbed;
+        }
+        if (kind[id] == KIND_ENEMY && id == milkyId) {
+            // 奶蛙减伤：一阶段 50%，半血进入二阶段后 80%
+            float dr = (hp[id] <= maxHp[id] * Balance.MILKY_LAUGH_HP)
+                    ? Balance.MILKY_PHASE2_DR : Balance.MILKY_DR;
+            amt *= 1f - dr;
         }
         hp[id] -= amt;
         if (hp[id] <= 0f) {
@@ -5086,6 +5117,16 @@ public final class World {
         if (!milkySpawned) {
             spawnMilky();
         }
+    }
+
+    /** 奶蛙是否已进入二阶段（血量 ≤ 50%）：技能伤害/范围/移速/减伤都会强化 */
+    public boolean milkyPhase2() {
+        return milkyId >= 0 && hp[milkyId] <= maxHp[milkyId] * Balance.MILKY_LAUGH_HP;
+    }
+
+    /** 二阶段技能范围倍率：预警圈绘制要用它，保证画面与判定同源 */
+    public float milkyRangeMul() {
+        return milkyPhase2() ? Balance.MILKY_PHASE2_RANGE_MUL : 1f;
     }
 
     /** 本局角色是否被奶蛙技能击败（阵亡画面据此显示专属图 + 「压力！」） */
