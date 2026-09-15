@@ -1868,7 +1868,11 @@ public final class World {
         }
     }
 
-    /** 远程怪：保持距离并向玩家发射弹幕 */
+    /**
+     * 远程怪：保持距离并向玩家发射弹幕。
+     * 开火有个前提——不当逃兵：站定驻守（move == 0）或朝玩家逼近（move > 0）时才开枪，
+     * 后退拉开距离（move < 0）时收枪，避免"边退边射"这种不合理的手感。
+     */
     private void updateRanged(int id, float dt) {
         if (stunT[id] > 0f) {
             stunT[id] -= dt;
@@ -1905,10 +1909,14 @@ public final class World {
             ky[id] *= (float) Math.exp(-Balance.KNOCKBACK_DECAY * dt);
             resolveObstacles(id);
             clampToWorld(id);   // 远程怪同样被边界挡住
-            cd[id] -= dt;
-            if (cd[id] <= 0f && len <= Balance.RANGED_RANGE) {
-                spawnProjectileEnemy(id, x[target], y[target]);
-                cd[id] = Balance.RANGED_CD;
+            // 开火条件：不在后退 + 玩家在射程内。
+            // 后退期间连冷却一起冻结——否则退了几秒的怪一停步就能白送一发蓄好的弹幕。
+            if (move >= 0f) {
+                cd[id] -= dt;
+                if (cd[id] <= 0f && len <= Balance.RANGED_RANGE) {
+                    spawnProjectileEnemy(id, x[target], y[target]);
+                    cd[id] = Balance.RANGED_CD;
+                }
             }
         }
     }
