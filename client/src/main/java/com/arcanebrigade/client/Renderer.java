@@ -1130,7 +1130,8 @@ public final class Renderer {
                     drawEnemyStatus(w, i, sx, sy);
                     // 血条：血量掉了或还有护盾就显示。
                     // 精英/Boss 的伤害先扣护盾，之前护盾没破时血条压根不出现，
-                    // 看上去就像"打不动、几秒不掉血"——这里把护盾画成蓝色段给出反馈。
+                    // 看上去就像"打不动、几秒不掉血"——现在把护盾画成血条上方
+                    // 独立的一行浅蓝护盾条，并在带盾小怪身上套一层呼吸光环。
                     // 奶蛙、国王与分身走各自的大血条，这里不重复画。
                     boolean hasShield = w.enemyShield[i] > 0f;
                     if (i != w.milkyId() && i != w.kingId() && i != w.kingTwinId()
@@ -1140,11 +1141,24 @@ public final class Renderer {
                         gc.fillRect(sx - 13, sy - rr - 10, 26, 4);
                         gc.setFill(Color.rgb(235, 70, 90));
                         gc.fillRect(sx - 12, sy - rr - 9, 24 * f, 2);
+                        // 护盾条：血条上方独立一行，与血量条分开，蓝色越短说明盾越薄
                         if (hasShield) {
-                            float sf = Math.min(1f, w.enemyShield[i] / w.maxHp[i]);
-                            gc.setFill(Color.rgb(150, 200, 255));
-                            gc.fillRect(sx - 12, sy - rr - 9, 24 * sf, 2);
+                            float sf = Math.max(0f, Math.min(1f, w.enemyShield[i] / w.maxHp[i]));
+                            gc.setFill(Color.rgb(30, 12, 16, 0.9));
+                            gc.fillRect(sx - 13, sy - rr - 15, 26, 4);
+                            gc.setFill(Color.rgb(120, 200, 255));
+                            gc.fillRect(sx - 12, sy - rr - 14, 24 * sf, 2);
                         }
+                    }
+                    // 护盾光环：带盾小怪身上一层淡蓝圆罩，缓慢呼吸提示"先破盾"
+                    if (hasShield && i != w.milkyId() && i != w.kingId() && i != w.kingTwinId()) {
+                        double pulse = 0.5 + 0.5 * Math.sin(w.time() * 4.0);
+                        double srad = w.r[i] + 5.0 + 1.5 * pulse;
+                        gc.setFill(Color.rgb(120, 200, 255, 0.10 + 0.06 * pulse));
+                        gc.fillOval(sx - srad, sy - srad, srad * 2, srad * 2);
+                        gc.setStroke(Color.rgb(160, 215, 255, 0.55 + 0.25 * pulse));
+                        gc.setLineWidth(1.8);
+                        gc.strokeOval(sx - srad, sy - srad, srad * 2, srad * 2);
                     }
                 }
                 case World.KIND_MINION -> {
