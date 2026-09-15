@@ -1058,6 +1058,7 @@ public final class Renderer {
                     // 弓箭手冲刺充能 HUD：角色头顶三个小格，每格一颗。
                     //   - 就绪：实心绿色
                     //   - 缺弹药：空心，按"下一发的充能进度"从底部填蓝
+                    //   - 充能中：格子上方显示剩余冷却秒数（用户要求把具体冷却时间展现出来）
                     if (ck == HeroClass.ARCHER) {
                         int charges = w.dashChargesOf(i);
                         int max = Balance.ARCHER_DASH_MAX;
@@ -1091,10 +1092,29 @@ public final class Renderer {
                                 gc.fillRect(ox, oy + (box - fill), box, fill);
                             }
                         }
+                        drawDashCdText(w, i, sx, sy - rr - 24);
+                    }
+                    // 战士冲刺冷却 HUD：头顶一条横向冷却条 + 剩余秒数。
+                    // 战士此前完全没有冲刺 HUD（充能格只给弓箭手画），冷却中像技能凭空消失。
+                    if (ck == HeroClass.WARRIOR && w.dashCdRemain(i) > 0f) {
+                        double bw = 36, bh = 5;
+                        double bx0 = sx - bw / 2;
+                        double by0 = sy - rr - 18;
+                        float total = w.dashCdTotal(i);
+                        float remain = w.dashCdRemain(i);
+                        double ready = total > 0f ? (1.0 - remain / total) : 1.0;   // 0=刚冲，1=就绪
+                        gc.setFill(Color.rgb(28, 28, 36, 0.85));
+                        gc.fillRect(bx0, by0, bw, bh);
+                        gc.setFill(Color.rgb(110, 200, 255, 0.9));
+                        gc.fillRect(bx0, by0, bw * Math.max(0.0, Math.min(1.0, ready)), bh);
+                        gc.setStroke(Color.rgb(70, 90, 110, 0.9));
+                        gc.setLineWidth(1.2);
+                        gc.strokeRect(bx0, by0, bw, bh);
+                        drawDashCdText(w, i, sx, sy - rr - 24);
                     }
                 }
                 case World.KIND_ENEMY -> {
-                    if (i == w.kingId()) {
+                    if (i == w.kingId() || i == w.kingTwinId()) {
                         drawKingSprite(w, i, sx, sy);
                     } else if (i == w.milkyId()) {
                         drawMilky(w, i, sx, sy);
@@ -1110,21 +1130,35 @@ public final class Renderer {
                     drawEnemyStatus(w, i, sx, sy);
                     // 血条：血量掉了或还有护盾就显示。
                     // 精英/Boss 的伤害先扣护盾，之前护盾没破时血条压根不出现，
-                    // 看上去就像"打不动、几秒不掉血"——这里把护盾画成蓝色段给出反馈。
-                    // 奶蛙与国王走各自的大血条，这里不重复画。
+                    // 看上去就像"打不动、几秒不掉血"——现在把护盾画成血条上方
+                    // 独立的一行浅蓝护盾条，并在带盾小怪身上套一层呼吸光环。
+                    // 奶蛙、国王与分身走各自的大血条，这里不重复画。
                     boolean hasShield = w.enemyShield[i] > 0f;
-                    if (i != w.milkyId() && i != w.kingId()
+                    if (i != w.milkyId() && i != w.kingId() && i != w.kingTwinId()
                             && (w.hp[i] < w.maxHp[i] || hasShield)) {
                         float f = Math.max(0f, w.hp[i] / w.maxHp[i]);
                         gc.setFill(Color.rgb(30, 12, 16));
                         gc.fillRect(sx - 13, sy - rr - 10, 26, 4);
                         gc.setFill(Color.rgb(235, 70, 90));
                         gc.fillRect(sx - 12, sy - rr - 9, 24 * f, 2);
+                        // 护盾条：血条上方独立一行，与血量条分开，蓝色越短说明盾越薄
                         if (hasShield) {
-                            float sf = Math.min(1f, w.enemyShield[i] / w.maxHp[i]);
-                            gc.setFill(Color.rgb(150, 200, 255));
-                            gc.fillRect(sx - 12, sy - rr - 9, 24 * sf, 2);
+                            float sf = Math.max(0f, Math.min(1f, w.enemyShield[i] / w.maxHp[i]));
+                            gc.setFill(Color.rgb(30, 12, 16, 0.9));
+                            gc.fillRect(sx - 13, sy - rr - 15, 26, 4);
+                            gc.setFill(Color.rgb(120, 200, 255));
+                            gc.fillRect(sx - 12, sy - rr - 14, 24 * sf, 2);
                         }
+                    }
+                    // 护盾光环：带盾小怪身上一层淡蓝圆罩，缓慢呼吸提示"先破盾"
+                    if (hasShield && i != w.milkyId() && i != w.kingId() && i != w.kingTwinId()) {
+                        double pulse = 0.5 + 0.5 * Math.sin(w.time() * 4.0);
+                        double srad = w.r[i] + 5.0 + 1.5 * pulse;
+                        gc.setFill(Color.rgb(120, 200, 255, 0.10 + 0.06 * pulse));
+                        gc.fillOval(sx - srad, sy - srad, srad * 2, srad * 2);
+                        gc.setStroke(Color.rgb(160, 215, 255, 0.55 + 0.25 * pulse));
+                        gc.setLineWidth(1.8);
+                        gc.strokeOval(sx - srad, sy - srad, srad * 2, srad * 2);
                     }
                 }
                 case World.KIND_MINION -> {
@@ -1936,7 +1970,23 @@ public final class Renderer {
         gc.fillText(hpText, bx + bw - measureWidth(hudFont, hpText), by - 6);
     }
 
-    /** 主动技能条：名字 + 冷却遮罩。3 个槽，见 Loadout.SLOTS */
+    /** 冲刺冷却剩余秒数文字（弓箭手充能格 / 战士冷却条上方共用）。剩余 0 秒时不画 */
+    private void drawDashCdText(World w, int i, double cx, double cy) {
+        float remain = w.dashCdRemain(i);
+        if (remain <= 0f) {
+            return;
+        }
+        String txt = String.format("%.1fs", remain);
+        gc.setFont(Font.font("Consolas", 11));
+        gc.setFill(Color.rgb(200, 235, 255, 0.95));
+        gc.setStroke(Color.rgb(10, 12, 20, 0.8));
+        gc.setLineWidth(2.0);
+        double tw = txt.length() * 6.5;
+        gc.strokeText(txt, cx - tw / 2, cy);
+        gc.fillText(txt, cx - tw / 2, cy);
+    }
+
+    /** 主动技能条：名字 + 冷却遮罩。3 个槽，见 Loadout.SLOTS；战士/弓箭手会在末尾追加常驻"冲刺"槽 */
     private void drawSpellBar(World w, double vw, double vh) {
         Loadout lo = w.loadout(w.wizard(0));
         if (lo == null) {
@@ -1945,7 +1995,13 @@ public final class Renderer {
         double sw = 104;
         double sh = 34;
         double gap = 8;
+        // 冲刺职业（战士/弓箭手）在技能条末尾追加一个等高冲刺槽：常驻显示冷却状态
+        boolean hasDash = lo.classKind == HeroClass.WARRIOR || lo.classKind == HeroClass.ARCHER;
+        double dashW = 104;
         double total = Loadout.SLOTS * sw + (Loadout.SLOTS - 1) * gap;
+        if (hasDash) {
+            total += gap + dashW;
+        }
         double x0 = (vw - total) / 2;
         double y0 = vh - 84;
 
@@ -1974,6 +2030,39 @@ public final class Renderer {
 
             gc.setFill(def != null ? Color.rgb(232, 232, 244) : Color.rgb(110, 110, 130));
             gc.fillText(def != null ? def.name : "空槽", bx + 10, y0 + 22);
+        }
+
+        // 常驻冲刺槽：就绪时亮青色边框，冷却时底部蓝色遮罩 + 剩余秒数
+        if (hasDash) {
+            int wid = w.wizard(0);
+            float remain = w.dashCdRemain(wid);
+            float cdTotal = w.dashCdTotal(wid);
+            double bx = x0 + Loadout.SLOTS * (sw + gap);
+
+            gc.setFill(Color.rgb(12, 10, 18, 0.82));
+            gc.fillRect(bx, y0, dashW, sh);
+
+            boolean cooling = remain > 0f && cdTotal > 0f;
+            if (cooling) {
+                float f = Math.min(1f, remain / cdTotal);
+                gc.setFill(Color.rgb(90, 140, 220, 0.55));
+                gc.fillRect(bx, y0 + sh * (1 - f), dashW, sh * f);
+            }
+
+            gc.setStroke(cooling ? Color.rgb(70, 90, 130) : Color.rgb(110, 220, 235));
+            gc.setLineWidth(cooling ? 1.5 : 2.2);
+            gc.strokeRect(bx, y0, dashW, sh);
+
+            gc.setFill(Color.rgb(232, 232, 244));
+            gc.fillText("冲刺", bx + 10, y0 + 22);
+
+            // 右侧：冷却中显示剩余秒数（琥珀色），就绪显示按键提示（暗青色）
+            String right = cooling ? String.format("%.1fs", remain) : "空格";
+            gc.setFont(Font.font("Consolas", 13));
+            gc.setFill(cooling ? Color.rgb(255, 200, 120, 0.95) : Color.rgb(110, 180, 195, 0.9));
+            double rw = measureWidth(gc.getFont(), right);
+            gc.fillText(right, bx + dashW - rw - 10, y0 + 22);
+            gc.setFont(spellFont);
         }
     }
 
@@ -2692,58 +2781,114 @@ public final class Renderer {
         // 落地阴影
         gc.setFill(Color.rgb(0, 0, 0, 0.36));
         gc.fillOval(sx - dw * 0.30, sy - 6, dw * 0.60, Math.max(6, dh * 0.05));
-        // 前摇提示：脚下泛红光（预警圈同时出现在玩家脚下）
-        if (w.kingCasting()) {
+        // 前摇提示：脚下泛红光（预警圈同时出现在玩家脚下）；本体/分身各按自己的前摇状态
+        boolean casting = (i == w.kingTwinId()) ? w.kingTwinCasting() : w.kingCasting();
+        if (casting) {
             gc.setFill(Color.rgb(255, 110, 80, 0.20));
             gc.fillOval(sx - dw * 0.55, sy - dh * 0.10, dw * 1.1, dh * 0.20);
         }
-        drawSpriteFacing(img, sx, sy - dh, dw, dh, !w.kingFaceRight());
+        drawSpriteFacing(img, sx, sy - dh, dw, dh, !kingFaceRightOf(w, i));
     }
 
-    /** 决战国王的专属血条：顶部加高条 + 「国王 · 第 N 阶段」（参考奶蛙条样式，无头像） */
+    /** 国王系实体（本体/三阶段分身）各自的朝向：选中者不同用的朝向字段也不同 */
+    private static boolean kingFaceRightOf(World w, int i) {
+        return (i == w.kingTwinId()) ? w.kingTwinFaceRight() : w.kingFaceRight();
+    }
+
+    /** 决战国王的专属血条：顶部加高条 + 「国王 · 第 N 阶段」（参考奶蛙条样式，无头像）。
+     *  三阶段为两管血（12000×2）：上下两条各一管，第一管打空后第二管接替；
+     *  第二管即「分裂双子」阶段，名称追加 ×2。 */
     private void drawKingBar(World w, double vw) {
         int id = w.kingId();
         if (id < 0 || !w.alive[id]) {
             return;
         }
-        double bh = 26;
         double bw = Math.min(620, vw - 140);
         double bx = (vw - bw) / 2;
         double by = 20;
-        boolean p3 = w.kingPhase() >= 3;    // 三阶段：王座本体（紫系配色 + 专属名称）
+        if (w.kingPhase() >= 3) {
+            drawKingBar3(w, id, bx, by, bw);    // 三阶段：王座本体（紫系配色，两管血）
+            return;
+        }
+        double bh = 26;
         float f = Math.max(0f, w.hp[id] / Math.max(1f, w.maxHp[id]));
         gc.setFill(Color.rgb(8, 6, 12, 0.85));
         gc.fillRect(bx - 3, by - 3, bw + 6, bh + 6);
-        gc.setFill(p3 ? Color.rgb(46, 30, 74) : Color.rgb(58, 46, 22));
+        gc.setFill(Color.rgb(58, 46, 22));
         gc.fillRect(bx, by, bw, bh);
-        gc.setFill(p3 ? Color.rgb(198, 130, 255) : Color.rgb(255, 208, 110));
+        gc.setFill(Color.rgb(255, 208, 110));
         gc.fillRect(bx, by, bw * f, bh);
-        gc.setStroke(p3 ? Color.rgb(225, 185, 255, 0.6) : Color.rgb(255, 230, 170, 0.6));
+        gc.setStroke(Color.rgb(255, 230, 170, 0.6));
         gc.setLineWidth(1);
         gc.strokeRect(bx, by, bw, bh);
 
         gc.setFont(hudFont);
-        gc.setFill(p3 ? Color.rgb(228, 200, 255) : Color.rgb(255, 224, 170));
-        gc.fillText(p3 ? "国王 · 王座本体" : "国王 · 第 " + Math.max(1, w.kingPhase()) + " 阶段", bx, by - 6);
+        gc.setFill(Color.rgb(255, 224, 170));
+        gc.fillText("国王 · 第 " + Math.max(1, w.kingPhase()) + " 阶段", bx, by - 6);
         gc.setFill(Color.rgb(240, 228, 210));
         String hpText = String.format("%.0f / %.0f", w.hp[id], w.maxHp[id]);
         gc.fillText(hpText, bx + bw - measureWidth(hudFont, hpText), by - 6);
     }
 
-    /** 三阶段传送前摇：王座落点的暗紫预警圈（外圈=100 爆炸范围，内圈随前摇收束到心） */
+    /**
+     * 三阶段（王座本体）的两管血条：上条 = 第一管，下条 = 第二管（分裂阶段）。
+     * 第一管从满打到空后第二管接替；第二管未开启时以暗紫满格待命，
+     * 开启（王座分裂成两个）后转为亮紫消耗。血量文本显示共享血池的总值。
+     */
+    private void drawKingBar3(World w, int id, double bx, double by, double bw) {
+        double bhh = 12;                        // 单管高度
+        double gap = 3;
+        double y2 = by + bhh + gap;             // 第二管顶边
+        float per = Balance.KING3_HP_PER_BAR;   // 单管血量（两管等量）
+        float hpNow = w.hp[id];
+        float f1 = Math.max(0f, Math.min(1f, (hpNow - per) / per));   // 第一管剩余
+        boolean bar2 = hpNow <= per;            // 已进入第二管（分裂双子）
+        float f2 = bar2 ? Math.max(0f, Math.min(1f, hpNow / per)) : 1f;   // 第二管：待命满格
+        gc.setFill(Color.rgb(8, 6, 12, 0.85));
+        gc.fillRect(bx - 3, by - 3, bw + 6, bhh * 2 + gap + 6);
+        // 第一管（亮紫消耗）
+        gc.setFill(Color.rgb(46, 30, 74));
+        gc.fillRect(bx, by, bw, bhh);
+        gc.setFill(Color.rgb(198, 130, 255));
+        gc.fillRect(bx, by, bw * f1, bhh);
+        // 第二管（未开启：暗紫待命；开启后亮紫消耗）
+        gc.setFill(Color.rgb(34, 20, 52));
+        gc.fillRect(bx, y2, bw, bhh);
+        gc.setFill(bar2 ? Color.rgb(198, 130, 255) : Color.rgb(116, 82, 164));
+        gc.fillRect(bx, y2, bw * f2, bhh);
+        gc.setStroke(Color.rgb(225, 185, 255, 0.6));
+        gc.setLineWidth(1);
+        gc.strokeRect(bx, by, bw, bhh);
+        gc.strokeRect(bx, y2, bw, bhh);
+
+        gc.setFont(hudFont);
+        gc.setFill(Color.rgb(228, 200, 255));
+        boolean twin = w.kingTwinId() >= 0;
+        gc.fillText("国王 · 王座本体" + (twin ? " ×2" : ""), bx, by - 6);
+        gc.setFill(Color.rgb(240, 228, 210));
+        String hpText = String.format("%.0f / %.0f", hpNow, w.maxHp[id]);
+        gc.fillText(hpText, bx + bw - measureWidth(hudFont, hpText), by - 6);
+    }
+
+    /** 三阶段传送前摇：王座落点的暗紫预警圈（外圈=100 爆炸范围，内圈随前摇收束到心）；本体与分身各画一处 */
     private void drawKingTeleFx(World w, double vw, double vh) {
-        if (w.kingPhase() < 3 || w.kingTeleT() <= 0f) {
+        if (w.kingPhase() < 3) {
             return;
         }
-        int k = w.kingId();
-        if (k < 0 || !w.alive[k]) {
+        drawKingTeleRing(w, w.kingId(), w.kingTeleT(), vw, vh);
+        drawKingTeleRing(w, w.kingTwinId(), w.kingTwinTeleT(), vw, vh);
+    }
+
+    /** 单个王座的传送落点预警圈：id 无效或不在前摇中则跳过 */
+    private void drawKingTeleRing(World w, int id, float teleT, double vw, double vh) {
+        if (id < 0 || !w.alive[id] || teleT <= 0f) {
             return;
         }
         double left = camX - vw / 2;
         double top = camY - vh / 2;
-        double cx = w.x[k] - left;
-        double cy = w.y[k] - top;
-        float tr = Math.max(0f, Math.min(1f, w.kingTeleT() / Balance.KING3_TELE_TELEGRAPH));
+        double cx = w.x[id] - left;
+        double cy = w.y[id] - top;
+        float tr = Math.max(0f, Math.min(1f, teleT / Balance.KING3_TELE_TELEGRAPH));
         double rad = Balance.KING3_TELE_RADIUS;
         gc.setFill(Color.rgb(140, 40, 220, 0.12 + 0.20 * (1 - tr)));
         gc.fillOval(cx - rad, cy - rad, rad * 2, rad * 2);
