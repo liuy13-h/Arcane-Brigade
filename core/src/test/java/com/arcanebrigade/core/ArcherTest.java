@@ -7,7 +7,8 @@ package com.arcanebrigade.core;
  *   1. 基础属性：HP / 移速最快 / 暴击率 +10% / 起手武器为穿透箭
  *   2. 自动开火：范围内有目标才开火，箭矢造成伤害；无目标不出手
  *   3. 穿透：单支箭命中直线上两个目标造成相同伤害，第三个目标不受影响
- *   4. 冲刺：3 发充能、每发消耗 1 颗、耗尽后空按无效、按 6.5s/发 回充
+ *   4. 冲刺：3 发充能、每发消耗 1 颗、耗尽后空按无效、按 6.5s/发 顺序回充
+ *   4b. 冲刺充能不被打断：用掉已就绪的一发，正在跑的充能进度必须保留
  *   5. 冲刺位移：朝瞄准方向位移约 160px，位移期间带无敌帧
  *   6. 职业边界：法师 / 召唤师没有冲刺
  *
@@ -21,6 +22,7 @@ public final class ArcherTest {
         testAutoFire();
         testArrowPierce();
         testDashChargesAndCooldown();
+        testReadyDashKeepsRechargeProgress();
         testDashMovementAndIframe();
         testNoDashForOtherClasses();
         System.out.println("OK: ArcherTest");
@@ -167,6 +169,31 @@ public final class ArcherTest {
         stepFrames(w, 60);
         check(w.dashCdRemain(hero) < remainNow - 0.5f,
                 "充能剩余秒数必须随时间下降（" + remainNow + " → " + w.dashCdRemain(hero) + "）");
+    }
+
+    // ------------------------------------------------------------------
+    // 4b. 回归：用掉"已就绪"的一发冲刺，不得重置正在跑的充能进度
+    // ------------------------------------------------------------------
+    private static void testReadyDashKeepsRechargeProgress() {
+        World w = newWorld();
+        int hero = w.spawnWizard(0f, 0f, HeroClass.ARCHER);
+
+        dashNorth(w);                       // 3 → 2 发，开始为第 3 发充能
+        stepFrames(w, 12);
+        stepFrames(w, (int) Math.floor(2.0f / Balance.FIXED_STEP));   // 充能走约 2s
+        float before = w.dashCdRemain(hero);
+        check(before > 0f && before < Balance.ARCHER_DASH_CD - 1.5f,
+                "充能 2s 后剩余秒数应明显小于 " + Balance.ARCHER_DASH_CD + "，实际 " + before);
+
+        dashNorth(w);                       // 2 → 1 发：消耗的是"就绪"的那一发
+        float after = w.dashCdRemain(hero);
+        check(w.dashChargesOf(hero) == Balance.ARCHER_DASH_MAX - 2,
+                "用掉一发就绪冲刺后应剩 " + (Balance.ARCHER_DASH_MAX - 2)
+                        + " 发，实际 " + w.dashChargesOf(hero));
+        check(after <= before + 1e-3f && before - after < 0.2f,
+                "用掉就绪冲刺不得重置充能进度（" + before + " → " + after + "）");
+        check(after < Balance.ARCHER_DASH_CD - 1.5f,
+                "若进度被重置，剩余秒数会跳回 " + Balance.ARCHER_DASH_CD + "，实际 " + after);
     }
 
     // ------------------------------------------------------------------

@@ -49,6 +49,14 @@ public final class Renderer {
     /** 复用同一个 Text 量宽度，避免每帧新建节点 */
     private static final Text measurer = new Text();
 
+    /**
+     * 玩家头顶冲刺 HUD（弓箭手三格充能 / 战士冷却条）距角色中心的高度。
+     * 角色绘制范围：行走 GIF 帧顶边在 sy-44（64px 高，底边贴地），
+     * 站姿 32×32 立绘顶边在 sy-28 —— 取 58 让 HUD 稳定浮在模型上方，
+     * 不再压住人物头部（旧值 sy - rr - 18 直接盖在脸上）。
+     */
+    private static final double DASH_HUD_Y = 58.0;
+
     private final Canvas canvas;
     private final GraphicsContext gc;
     private final Font hudFont = Font.font("Consolas", 14);
@@ -1055,9 +1063,10 @@ public final class Renderer {
                             gc.strokeOval(sx - pr - 3, cy2 - pr - 3, (pr + 3) * 2, (pr + 3) * 2);
                         }
                     }
-                    // 弓箭手冲刺充能 HUD：角色头顶三个小格，每格一颗。
+                    // 弓箭手冲刺充能 HUD：角色模型上方三个小格，每格一颗。
                     //   - 就绪：实心绿色
-                    //   - 缺弹药：空心，按"下一发的充能进度"从底部填蓝
+                    //   - 缺弹药：空心，只有"正在充能的下一发"那一格从底部填蓝
+                    //     （充能是顺序回充，不能每格都填，否则看起来像三发同时在跑）
                     //   - 充能中：格子上方显示剩余冷却秒数（用户要求把具体冷却时间展现出来）
                     if (ck == HeroClass.ARCHER) {
                         int charges = w.dashChargesOf(i);
@@ -1066,8 +1075,8 @@ public final class Renderer {
                         double gap = 3.0;
                         double totalW = max * box + (max - 1) * gap;
                         double ox0 = sx - totalW / 2;
-                        double oy0 = sy - rr - 18;    // 头顶上方
-                        float fillFrac = w.dashCdFraction(i);   // 0..1（充能中）
+                        double oy0 = sy - DASH_HUD_Y;   // 头顶上方，避开角色模型
+                        float fillFrac = w.dashCdFraction(i);   // 0..1（正在充能的那一发）
                         for (int n = 0; n < max; n++) {
                             double ox = ox0 + n * (box + gap);
                             double oy = oy0;
@@ -1086,20 +1095,22 @@ public final class Renderer {
                                 gc.setStroke(Color.rgb(70, 90, 80, 0.9));
                                 gc.setLineWidth(1.2);
                                 gc.strokeRect(ox, oy, box, box);
-                                // 从底部向上填蓝（用 fillFrac 表示该格对应的充能进度）
-                                double fill = box * fillFrac;
-                                gc.setFill(Color.rgb(110, 200, 255, 0.85));
-                                gc.fillRect(ox, oy + (box - fill), box, fill);
+                                // 只有紧邻就绪格的那一格在充能：从底部向上填蓝
+                                if (n == charges) {
+                                    double fill = box * fillFrac;
+                                    gc.setFill(Color.rgb(110, 200, 255, 0.85));
+                                    gc.fillRect(ox, oy + (box - fill), box, fill);
+                                }
                             }
                         }
-                        drawDashCdText(w, i, sx, sy - rr - 24);
+                        drawDashCdText(w, i, sx, sy - DASH_HUD_Y - 4);
                     }
-                    // 战士冲刺冷却 HUD：头顶一条横向冷却条 + 剩余秒数。
+                    // 战士冲刺冷却 HUD：模型上方一条横向冷却条 + 剩余秒数。
                     // 战士此前完全没有冲刺 HUD（充能格只给弓箭手画），冷却中像技能凭空消失。
                     if (ck == HeroClass.WARRIOR && w.dashCdRemain(i) > 0f) {
                         double bw = 36, bh = 5;
                         double bx0 = sx - bw / 2;
-                        double by0 = sy - rr - 18;
+                        double by0 = sy - DASH_HUD_Y;
                         float total = w.dashCdTotal(i);
                         float remain = w.dashCdRemain(i);
                         double ready = total > 0f ? (1.0 - remain / total) : 1.0;   // 0=刚冲，1=就绪
@@ -1110,7 +1121,7 @@ public final class Renderer {
                         gc.setStroke(Color.rgb(70, 90, 110, 0.9));
                         gc.setLineWidth(1.2);
                         gc.strokeRect(bx0, by0, bw, bh);
-                        drawDashCdText(w, i, sx, sy - rr - 24);
+                        drawDashCdText(w, i, sx, sy - DASH_HUD_Y - 4);
                     }
                 }
                 case World.KIND_ENEMY -> {

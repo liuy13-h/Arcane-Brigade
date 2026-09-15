@@ -487,8 +487,6 @@ public final class Balance {
     public static final float MILKY_SPEED_BONUS        = 100f;
     /** 二阶段（血量 ≤ MILKY_LAUGH_HP）减伤：提升到 80% */
     public static final float MILKY_PHASE2_DR          = 0.80f;
-    /** 二阶段技能伤害倍率（+100% → ×2） */
-    public static final float MILKY_PHASE2_DMG_MUL     = 2.0f;
     /** 二阶段额外移速加成（在一阶段之上再加） */
     public static final float MILKY_PHASE2_SPEED_BONUS = 50f;
     /** 二阶段技能范围倍率（+25%） */
