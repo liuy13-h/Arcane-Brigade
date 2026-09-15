@@ -2345,13 +2345,17 @@ public final class World {
             if (milkyCastT >= milkyCastDur()) {
                 // milkyHitActive：让 kill() 能识别「这次死亡是奶蛙造成的」
                 milkyHitActive = true;
+                // 二阶段（半血后）：技能伤害 ×2、范围 +25%
+                boolean p2 = hp[m] <= maxHp[m] * Balance.MILKY_LAUGH_HP;
+                float dmgMul = p2 ? Balance.MILKY_PHASE2_DMG_MUL : 1f;
+                float rngMul = p2 ? Balance.MILKY_PHASE2_RANGE_MUL : 1f;
                 if (milkyCast == 2) {
-                    damagePlayersInRadius(x[m], y[m], Balance.MILKY_LAUGH_RANGE,
-                            Balance.MILKY_LAUGH_DMG);
+                    damagePlayersInRadius(x[m], y[m], Balance.MILKY_LAUGH_RANGE * rngMul,
+                            Balance.MILKY_LAUGH_DMG * dmgMul);
                     milkyLaughCd = Balance.MILKY_LAUGH_CD;
                 } else {
-                    damagePlayersInRadius(x[m], y[m], Balance.MILKY_STOMP_RANGE,
-                            Balance.MILKY_STOMP_DMG);
+                    damagePlayersInRadius(x[m], y[m], Balance.MILKY_STOMP_RANGE * rngMul,
+                            Balance.MILKY_STOMP_DMG * dmgMul);
                     milkyStompCd = Balance.MILKY_STOMP_CD;
                 }
                 milkyHitActive = false;
@@ -2361,7 +2365,10 @@ public final class World {
             return;
         }
 
-        speed[m] = Balance.MILKY_SPEED;
+        // 移速：基础 +100；半血后额外再 +50
+        speed[m] = Balance.MILKY_SPEED + Balance.MILKY_SPEED_BONUS
+                + (hp[m] <= maxHp[m] * Balance.MILKY_LAUGH_HP
+                        ? Balance.MILKY_PHASE2_SPEED_BONUS : 0f);
         // dmg[m] 恒为 0：奶蛙不造成碰撞伤害（技能伤害另算）
 
         boolean near = dx * dx + dy * dy
@@ -4924,6 +4931,12 @@ public final class World {
             enemyShield[id] -= absorbed;
             amt -= absorbed;
         }
+        if (kind[id] == KIND_ENEMY && id == milkyId) {
+            // 奶蛙减伤：一阶段 50%，半血进入二阶段后 80%
+            float dr = (hp[id] <= maxHp[id] * Balance.MILKY_LAUGH_HP)
+                    ? Balance.MILKY_PHASE2_DR : Balance.MILKY_DR;
+            amt *= 1f - dr;
+        }
         hp[id] -= amt;
         if (hp[id] <= 0f) {
             kill(id);
@@ -5078,6 +5091,16 @@ public final class World {
         if (!milkySpawned) {
             spawnMilky();
         }
+    }
+
+    /** 奶蛙是否已进入二阶段（血量 ≤ 50%）：技能伤害/范围/移速/减伤都会强化 */
+    public boolean milkyPhase2() {
+        return milkyId >= 0 && hp[milkyId] <= maxHp[milkyId] * Balance.MILKY_LAUGH_HP;
+    }
+
+    /** 二阶段技能范围倍率：预警圈绘制要用它，保证画面与判定同源 */
+    public float milkyRangeMul() {
+        return milkyPhase2() ? Balance.MILKY_PHASE2_RANGE_MUL : 1f;
     }
 
     /** 本局角色是否被奶蛙技能击败（阵亡画面据此显示专属图 + 「压力！」） */
