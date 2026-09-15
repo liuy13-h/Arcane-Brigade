@@ -1797,12 +1797,16 @@ public final class World {
             }
 
             // 接触伤害
+            // 三阶段：王座本体 / 分身在技能前摇窗口（红光 = kingCasting / kingTwinCasting）内不咬人——
+            // 传送落位后的 1 秒是官方给的贴脸输出窗口，窗口里再叠碰撞伤害会自相矛盾（用户要求：释放技能时取消）
+            boolean king3Casting = kingPhase == 3
+                    && ((i == kingId && kingCasting()) || (i == kingTwinId && kingTwinCasting()));
             float ndx = x[target] - x[i];
             float ndy = y[target] - y[i];
             float nlen = (float) Math.sqrt(ndx * ndx + ndy * ndy);
             if (nlen < r[i] + r[target]) {
                 cd[i] -= dt;
-                if (cd[i] <= 0f) {
+                if (cd[i] <= 0f && !king3Casting) {
                     if (iframe[target] <= 0f) {
                         damage(target, dmg[i]);
                         // 三阶段被动：王座贴身咬中英雄也汲取生命（宠物挨打不回，否则四只宠物能白喂血）
@@ -3061,7 +3065,7 @@ public final class World {
     /**
      * 国王系追击（二阶段本体专用。三阶段本体与分身都不走路，位移全走传送）：
      * 用户给定「会追玩家」——全程朝最近玩家直线追击，只按距离换档：
-     * > 400 → 195；250~400 → 175；< 250 → 160。
+     * > 400 → 250；250~400 → 205；< 250 → 170。
      */
     private void chaseKing(int k, float dt) {
         if (k < 0 || !alive[k]) {

@@ -540,7 +540,7 @@ public final class HeadlessSmoke {
      *
      * 场次 3（二阶段）：一阶段击破只发决裂信号（不结算）→ beginKingPhase2 王座重生
      *   （60000 血 / 玩家移速 -20 / 开场裂隙）；随后 42 秒长跑观测：
-     *   纯追击走位三档（280 / 250 / 200，不再保持距离/绕行；AOE 前摇期间站定）、
+     *   纯追击走位三档（250 / 205 / 170，不再保持距离/绕行；AOE 前摇期间站定）、
      *   魔弹（130 / 扇形 5 连发 / 5 秒一轮）、地面提示（6 秒 / 1.5 秒前摇 / 150 / 80）、
      *   裂隙刷怪（5 秒一道 / 每道 2 只 / 同屏封顶），
      *   最后击破二阶段 → 只发「王座本体」过渡信号（等对白播完进三阶段）。
@@ -828,16 +828,16 @@ public final class HeadlessSmoke {
         w3.y[wid3] = Balance.ARENA_ENTER_Y;
 
         // ---- 3d 追击走位三档（玩家固定在 (0,220)）：全程追人，不再保距/绕行 ----
-        w3.x[k2] = 0f;   w3.y[k2] = -250f;    // 距离 470 → 280 直线追击
+        w3.x[k2] = 0f;   w3.y[k2] = -250f;    // 距离 470 → 250 直线追击
         float farStep = oneStep(w3, k2, run3);
-        w3.x[k2] = 0f;   w3.y[k2] = -50f;     // 距离 270 → 250 追击
+        w3.x[k2] = 0f;   w3.y[k2] = -50f;     // 距离 270 → 205 追击
         float midStep = oneStep(w3, k2, run3);
-        w3.x[k2] = 0f;   w3.y[k2] = 0f;       // 距离 220 → 200 贴身追击（距离应缩短）
+        w3.x[k2] = 0f;   w3.y[k2] = 0f;       // 距离 220 → 170 贴身追击（距离应缩短）
         float nearDist0 = dist(w3.x[wid3], w3.y[wid3], w3.x[k2], w3.y[k2]);
         float nearStep = oneStep(w3, k2, run3);
         float nearDy = w3.y[k2];
         float nearDist1 = dist(w3.x[wid3], w3.y[wid3], w3.x[k2], w3.y[k2]);
-        w3.x[k2] = 0f;   w3.y[k2] = 120f;     // 距离 100 → 仍按 200 追击（贴脸不后退）
+        w3.x[k2] = 0f;   w3.y[k2] = 120f;     // 距离 100 → 仍按 170 追击（贴脸不后退）
         float closeDist0 = dist(w3.x[wid3], w3.y[wid3], w3.x[k2], w3.y[k2]);
         float closeStep = oneStep(w3, k2, run3);
         float closeDist1 = dist(w3.x[wid3], w3.y[wid3], w3.x[k2], w3.y[k2]);
@@ -1142,7 +1142,7 @@ public final class HeadlessSmoke {
             }
             if (teleExploded) {
                 if (deltaP <= -29f) {
-                    teleExplodeHit++;   // -30 命中；同帧贴身 -30 叠加也会到 -60，同样算爆发落地
+                    teleExplodeHit++;   // -30 命中（前摇窗口内接触伤害已豁免，不会叠出 -60）
                 }
                 if (Math.abs(deltaP + Balance.KING3_TELE_DAMAGE) < 1.5f) {
                     teleExplodeExact++;
@@ -1291,6 +1291,32 @@ public final class HeadlessSmoke {
             }
         }
 
+        // ---- 3g2 前摇窗口贴身豁免（用户规则：释放技能时取消碰撞伤害）----
+        // 30 秒观测后静养：等下一次自然前摇（红光窗口）出现，清场（小怪 / 弹幕 / 区域）后
+        // 把王座压在玩家身上、接触 cd 清零——若未豁免，本帧必然咬出 -30；豁免则应纹丝不动。
+        for (int g = 0; g < 400 && w3.kingTeleT() <= 0f; g++) {
+            w3.hp[wid3] = w3.maxHp[wid3];
+            w3.step(Balance.FIXED_STEP, stay3);
+        }
+        boolean castFlagOn = w3.kingCasting();
+        clearNonBoss(w3);
+        for (int e = 0; e < w3.highWater(); e++) {
+            if (w3.alive[e] && (w3.kind[e] == World.KIND_PROJECTILE || w3.kind[e] == World.KIND_ZONE)) {
+                w3.despawn(e);   // 弹幕 / 地刺警示圈：隔离后本帧只剩接触通道可能伤到玩家
+            }
+        }
+        w3.x[k3] = w3.x[wid3];
+        w3.y[k3] = w3.y[wid3];
+        w3.cd[k3] = 0f;
+        w3.hp[wid3] = w3.maxHp[wid3];
+        w3.iframe[wid3] = 0f;
+        float castContactBefore = w3.hp[wid3];
+        w3.step(Balance.FIXED_STEP, stay3);
+        float castContactDelta = w3.hp[wid3] - castContactBefore;
+        boolean castHeld = w3.kingTeleT() > 0f;   // 步进一帧后仍应在前摇窗口内
+        w3.x[k3] = Balance.ARENA_KING_X;   // 归位王座，后续分裂测试按原位起跑
+        w3.y[k3] = Balance.ARENA_KING_Y;
+
         // ---- 3h 第二管血分裂：血池跌破首管（60000）→ 王座裂出分身（共享血池 + 三阶段传送） ----
         // 观测期血池始终 ≥114000（重铺线），不会提前触发；这里定向压到单管线边缘再补一发：
         // 常态 -100 / 前摇 -800 都会跌破 60000，下一帧 updateKing 里触发分裂。
@@ -1377,12 +1403,12 @@ public final class HeadlessSmoke {
         boolean noFallenAgain3 = !w3.kingFallen2();
         boolean phase0After = w3.kingPhase() == 0;
 
-        System.out.println("=== 王宫二阶段 · 转场 / 追击走位 / 3 连发魔弹验证 ===");
+        System.out.println("=== 王宫二阶段 · 转场 / 追击走位 / 5 连发魔弹验证 ===");
         System.out.printf("击破一阶段：决裂信号=%s 国王退场=%s 未结算=%s 倒地锚点=%s%n",
                 fallenSig, kingGone, notVictoryYet, downAnchor);
         System.out.printf("王座重生：位置(%.0f,%.0f) 血 %.0f 玩家回位=%s 开场裂隙魔物 %d；玩家 0.5 秒右移 %.1f px（期望 90）%n",
                 king2X, king2Y, hp2Val, playerBack, openerEnemies, moved);
-        System.out.printf("追击走位：远档 %.2f px/帧（期望 4.67）中档 %.2f（4.17）近档 %.2f（3.33，dy=%.2f）贴脸仍追击 %.2f px%n",
+        System.out.printf("追击走位：远档 %.2f px/帧（期望 4.17）中档 %.2f（3.42）近档 %.2f（2.83，dy=%.2f）贴脸仍追击 %.2f px%n",
                 farStep, midStep, nearStep, nearDy, closeDist0 - closeDist1);
         System.out.printf("贴身碰撞：国王压身一帧掉血 %.1f（期望 -40）%n", contactDelta);
         System.out.printf("魔弹：%d 轮齐射（首轮 t=%.2fs）单轮峰值 %d 颗 速度 %.0f~%.0f 追踪锁定 %d 帧；出生寿命 %.2fs，齐射最长飞行 %.2fs，命中 %d 次%n",
@@ -1399,7 +1425,8 @@ public final class HeadlessSmoke {
         System.out.println("=== 王宫三阶段 · 王座本体（减伤 / 传送 / 地刺 / 牵引 / 召唤 / 回血）验证 ===");
         System.out.printf("觉醒：阶段=%d 血 %.0f 出生位=%s 玩家回位=%s；常态 1000 → -%.0f（期望 -100）前摇 1000 → -%.0f（期望 -800）%n",
                 phaseAt3, hp3Val, spawnPos3, playerBack3, drIdleLoss, drCastLoss);
-        System.out.printf("贴身碰撞（三阶段）：王座压身一帧掉血 %.1f（期望 -30）%n", contactDelta3);
+        System.out.printf("贴身碰撞（三阶段）：王座压身一帧掉血 %.1f（期望 -30）；前摇窗口压身一帧掉血 %.1f（期望 0，释放技能免碰撞）%n",
+                contactDelta3, castContactDelta);
         System.out.printf("传送：%d 次（首次 t=%.2fs）落点超距 %d 次 间隔 %.2f~%.2fs 前摇共 %d 帧；爆发命中 %d 次（干净 -30：%d）%n",
                 teleJumps, firstTeleT, teleLandingBad, minJumpGap, maxJumpGap, telegraphFrames,
                 teleExplodeHit, teleExplodeExact);
@@ -1435,19 +1462,19 @@ public final class HeadlessSmoke {
             System.out.println("!! 失败：二阶段玩家移速不是 200-20=180");
             ok = false;
         }
-        if (Math.abs(farStep - 4.67f) > 0.12f) {
-            System.out.println("!! 失败：>400 距离档没有按 280 直线追击");
+        if (Math.abs(farStep - 4.17f) > 0.12f) {
+            System.out.println("!! 失败：>400 距离档没有按 250 直线追击");
             ok = false;
         }
-        if (Math.abs(midStep - 4.17f) > 0.12f) {
-            System.out.println("!! 失败：250~400 距离档没有按 250 追击");
+        if (Math.abs(midStep - 3.42f) > 0.12f) {
+            System.out.println("!! 失败：250~400 距离档没有按 205 追击");
             ok = false;
         }
-        if (Math.abs(nearStep - 3.33f) > 0.12f || nearDist0 - nearDist1 < 2.0f) {
-            System.out.println("!! 失败：<250 距离档没有按 200 贴身追击");
+        if (Math.abs(nearStep - 2.83f) > 0.12f || nearDist0 - nearDist1 < 2.0f) {
+            System.out.println("!! 失败：<250 距离档没有按 170 贴身追击");
             ok = false;
         }
-        if (Math.abs(closeStep - 3.33f) > 0.12f || closeDist0 - closeDist1 < 2.0f) {
+        if (Math.abs(closeStep - 2.83f) > 0.12f || closeDist0 - closeDist1 < 2.0f) {
             System.out.println("!! 失败：贴脸时没有继续追击（不应后退拉开）");
             ok = false;
         }
@@ -1518,6 +1545,10 @@ public final class HeadlessSmoke {
         }
         if (Math.abs(contactDelta3 + Balance.KING3_CONTACT_DAMAGE) > 0.5f) {
             System.out.println("!! 失败：三阶段贴身接触伤害不是 30");
+            ok = false;
+        }
+        if (!castFlagOn || !castHeld || Math.abs(castContactDelta) > 0.5f) {
+            System.out.println("!! 失败：前摇窗口内贴身仍被咬（释放技能时应取消碰撞伤害）");
             ok = false;
         }
         if (teleJumps < 8 || firstTeleT < 0f || Math.abs(firstTeleT - Balance.KING3_TELE_CD) > 0.15f) {
@@ -1598,7 +1629,7 @@ public final class HeadlessSmoke {
             ok = false;
         }
 
-        System.out.println(ok ? "OK：国王行为（一阶段站桩 / 走动 / 技能 + 二阶段重生 / 追击走位 / 贴身碰撞 / 前摇站定 / 5 连发魔弹 / AOE / 裂隙 + 三阶段减伤 / 贴身 30 / 传送爆发 / 地刺 / 牵引 / 召唤 / 回血 / 5 连发魔弹 / 每次 4 只裂隙魔物 / 第二管血分裂）全部符合预期"
+        System.out.println(ok ? "OK：国王行为（一阶段站桩 / 走动 / 技能 + 二阶段重生 / 追击走位 / 贴身碰撞 / 前摇站定 / 5 连发魔弹 / AOE / 裂隙 + 三阶段减伤 / 贴身 30（前摇免碰撞） / 传送爆发 / 地刺 / 牵引 / 召唤 / 回血 / 5 连发魔弹 / 每次 4 只裂隙魔物 / 第二管血分裂）全部符合预期"
                 : "!! 存在失败项，见上");
         if (!ok) {
             System.exit(1);

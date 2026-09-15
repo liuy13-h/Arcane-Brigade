@@ -519,16 +519,16 @@ public final class Balance {
      * 第二阶段：血 60000（用户给定）+ 常驻 20% 减伤（用户给定）。
      * 移动为「按与最近玩家的距离分档」的压迫式走位（用户给定的三档速度），
      * 全程追击玩家，不再保持距离/绕行：
-     *   > 400      → 280 直线逼近
-     *   250 ~ 400  → 250 逼近
-     *   < 250      → 200 贴身追击
+     *   > 400      → 250 直线逼近
+     *   250 ~ 400  → 205 逼近
+     *   < 250      → 170 贴身追击
      * 位移由 updateKing2 手动驱动；贴身接触伤害 40（与一阶段不同：一阶段无接触伤害）。
      */
     public static final float KING2_HP       = 60000f;
     public static final float KING2_RADIUS   = 50f;
-    public static final float KING2_SPEED_FAR  = 280f;
-    public static final float KING2_SPEED_MID  = 250f;
-    public static final float KING2_SPEED_NEAR = 200f;
+    public static final float KING2_SPEED_FAR  = 250f;
+    public static final float KING2_SPEED_MID  = 205f;
+    public static final float KING2_SPEED_NEAR = 170f;
     /** 距离分档阈值（用户给定的 400 / 250） */
     public static final float KING2_BAND_FAR  = 400f;
     public static final float KING2_BAND_MID  = 250f;
@@ -584,7 +584,8 @@ public final class Balance {
     public static final float KING3_HP_PER_BAR = 60000f;
     public static final float KING3_HP         = KING3_HP_PER_BAR * 2f;
     public static final float KING3_RADIUS     = 80f;
-    /** 贴身接触伤害 30（用户给定）：比二阶段的 40 更轻，走通用敌人接触通道 */
+    /** 贴身接触伤害 30（用户给定）：比二阶段的 40 更轻，走通用敌人接触通道；
+     *  技能前摇窗口（kingCasting / kingTwinCasting 红光期）内整段豁免——释放技能时不咬人（用户给定） */
     public static final float KING3_CONTACT_DAMAGE = 30f;
     /** 常驻减伤 90%（用户给定）：王座受到的伤害先砍掉九成 */
     public static final float KING3_DR         = 0.90f;
@@ -623,7 +624,7 @@ public final class Balance {
     /** 裂隙召唤 Boss：每 25 秒一只（用户给定），从除奶蛙外的 Boss 池随机抽档 */
     public static final float KING3_SUMMON_CD   = 25f;
     public static final float KING3_SUMMON_FX_TTL = 1.4f;
-    /** 三阶段魔弹齐射数量（用户给定 5 颗；二阶段维持 3 颗） */
+    /** 三阶段魔弹齐射数量（用户给定 5 颗；二阶段同样 5 颗） */
     public static final int   KING3_BOLT_COUNT  = 5;
     /** 三阶段裂隙魔物数量（用户给定每次 4 只；二阶段维持每道 2 只） */
     public static final int   KING3_RIFT_COUNT  = 4;
